@@ -1,0 +1,42 @@
+# local-review project config — drop this at the root of any repo.
+#
+# Cascading order (lowest precedence first):
+#   1. Built-in defaults
+#   2. ~/.local-review.yml
+#   3. ./.local-review.yml          ← this file
+#   4. CLI flags
+
+provider:
+  # Any OpenAI-compatible endpoint. Examples:
+  #   OpenAI       https://api.openai.com/v1
+  #   Anthropic    https://api.anthropic.com/v1   (chat-completions endpoint)
+  #   Together     https://api.together.xyz/v1
+  #   Groq         https://api.groq.com/openai/v1
+  #   OpenRouter   https://openrouter.ai/api/v1
+  #   Ollama       http://localhost:11434/v1       (local, no key required by Ollama)
+  base_url: https://api.openai.com/v1
+
+  model: gpt-4o-mini
+
+  # Read the API key from this env var. Default: LOCAL_REVIEW_API_KEY
+  api_key_env: LOCAL_REVIEW_API_KEY
+
+  timeout_seconds: 60
+
+review:
+  # Hide nits + info findings unless explicitly requested.
+  min_severity: warning
+
+  # Hard cap so a chatty model can't drown you in noise.
+  max_findings: 20
+
+  # Files to skip. Glob syntax: filepath.Match plus naive ** support.
+  exclude:
+    - "**/*.lock"
+    - "**/*.snap"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/node_modules/**"
+
+  # Force a specific prompt pack (otherwise auto-detected from file extensions).
+  # prompt_pack: typescript

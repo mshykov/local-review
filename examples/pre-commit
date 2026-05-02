@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+# Glance pre-commit hook.
+#
+# Install:
+#   cp examples/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# Or use husky / lefthook to run `glance staged` before each commit.
+#
+# Exit codes:
+#   0  no blocking findings — commit proceeds
+#   2  major or critical findings — commit blocked
+#   *  glance itself failed — commit proceeds (don't block on tooling)
+
+set -eu
+
+# Skip when there's nothing staged
+if git diff --cached --quiet; then
+  exit 0
+fi
+
+# Allow opt-out via env (escape hatch for emergencies)
+if [ "${GLANCE_SKIP:-}" = "1" ]; then
+  echo "glance: skipped (GLANCE_SKIP=1)"
+  exit 0
+fi
+
+if ! command -v glance >/dev/null 2>&1; then
+  # Don't block commits when glance isn't installed.
+  exit 0
+fi
+
+set +e
+glance staged
+status=$?
+set -e
+
+case "$status" in
+  0) exit 0 ;;
+  2) echo "glance: blocking findings detected. Address them or run 'GLANCE_SKIP=1 git commit ...' to override." >&2; exit 2 ;;
+  *) echo "glance: tool error ($status). Commit allowed." >&2; exit 0 ;;
+esac

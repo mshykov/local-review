@@ -1,0 +1,85 @@
+package git
+
+import "testing"
+
+const sample = `diff --git a/src/foo.ts b/src/foo.ts
+index 1234567..abcdefg 100644
+--- a/src/foo.ts
++++ b/src/foo.ts
+@@ -10,5 +10,7 @@
+ const a = 1;
+-const b = 2;
++const b = 3;
++const c = 4;
+ const d = 5;
+diff --git a/main.go b/main.go
+index 222..333 100644
+--- a/main.go
++++ b/main.go
+@@ -1,3 +1,4 @@
+ package main
++import "fmt"
+ func main() {}
+`
+
+func TestParseUnifiedDiff(t *testing.T) {
+	diffs := parseUnifiedDiff(sample)
+	if len(diffs) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(diffs))
+	}
+	if diffs[0].Path != "src/foo.ts" {
+		t.Errorf("file 0 path = %q", diffs[0].Path)
+	}
+	if len(diffs[0].Hunks) != 1 {
+		t.Errorf("file 0 hunks = %d, want 1", len(diffs[0].Hunks))
+	}
+	if diffs[0].Hunks[0].NewFrom != 10 {
+		t.Errorf("file 0 hunk NewFrom = %d, want 10", diffs[0].Hunks[0].NewFrom)
+	}
+	if diffs[1].Path != "main.go" {
+		t.Errorf("file 1 path = %q", diffs[1].Path)
+	}
+}
+
+func TestParseNewFrom(t *testing.T) {
+	cases := map[string]int{
+		"@@ -1,2 +37,5 @@":  37,
+		"@@ -0,0 +1 @@":     1,
+		"@@ -10,5 +10,7 @@": 10,
+		"garbage":           0,
+	}
+	for header, want := range cases {
+		if got := parseNewFrom(header); got != want {
+			t.Errorf("parseNewFrom(%q) = %d, want %d", header, got, want)
+		}
+	}
+}
+
+func TestArgsFor(t *testing.T) {
+	tests := []struct {
+		mode Mode
+		ref  string
+		want []string
+	}{
+		{ModeStaged, "", []string{"diff", "--cached", "-U10"}},
+		{ModeCommit, "abc123", []string{"show", "-U10", "--format=", "abc123"}},
+		{ModeCommit, "", []string{"show", "-U10", "--format=", "HEAD"}},
+		{ModeBranch, "main", []string{"diff", "-U10", "main...HEAD"}},
+		{ModeBranch, "", []string{"diff", "-U10", "main...HEAD"}},
+	}
+	for _, tc := range tests {
+		got, err := argsFor(tc.mode, tc.ref)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != len(tc.want) {
+			t.Errorf("argsFor(%d, %q) = %v, want %v", tc.mode, tc.ref, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("argsFor(%d, %q)[%d] = %q, want %q", tc.mode, tc.ref, i, got[i], tc.want[i])
+			}
+		}
+	}
+}

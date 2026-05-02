@@ -1,0 +1,20 @@
+# Built binaries
+/local-review
+/dist/
+/bin/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local config / secrets
+.local-review.local.yml
+*.env
+.env
+.env.local
+
+# Go
+/coverage.out
+/coverage.html
