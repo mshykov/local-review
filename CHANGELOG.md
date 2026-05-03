@@ -45,17 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - GitHub Copilot support (interactive-only CLI, incompatible with automation)
 
-## [0.0.1] - 2024-XX-XX
-
-### Added
-- Initial release with single-LLM mode
-- Support for OpenAI-compatible API endpoints
-- Prompt packs for Go, TypeScript, Python
-- Git integration (staged, commit, branch modes)
-- Configuration cascade (defaults → user → repo → CLI flags)
-- Language auto-detection
-- Severity filtering and max findings cap
-
 ---
 
 ## Version Labeling Convention
