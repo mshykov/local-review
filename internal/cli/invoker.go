@@ -24,8 +24,6 @@ func NewInvoker(llm LLM) Invoker {
 		return &GeminiInvoker{path: llm.Path}
 	case "codex":
 		return &CodexInvoker{path: llm.Path}
-	case "gh":
-		return &CopilotInvoker{path: llm.Path}
 	default:
 		return nil
 	}
@@ -139,49 +137,3 @@ func (c *ClaudeInvoker) RunPrompt(ctx context.Context, prompt string) (string, e
 	return string(output), nil
 }
 
-// CopilotInvoker runs GitHub Copilot via the gh CLI.
-// LIMITATION: `gh copilot suggest` is interactive-only and requires TTY.
-// - The `-t shell` flag requests shell command suggestions (not code review)
-// - The command prompts for y/n confirmation and doesn't read from stdin
-// - Will hang or error in non-interactive/headless contexts
-// Disabled by default (config.Defaults). To enable, investigate:
-// - `gh copilot explain` (if it supports stdin/non-interactive mode)
-// - GitHub Copilot API (if available)
-// - Alternative non-interactive invocation patterns
-type CopilotInvoker struct {
-	path string
-}
-
-func (c *CopilotInvoker) Review(ctx context.Context, diff string) (string, error) {
-	// GitHub Copilot CLI has a token limit, so we truncate very large diffs
-	const maxDiffRunes = 8000
-	truncatedDiff := diff
-	runes := []rune(diff)
-	if len(runes) > maxDiffRunes {
-		truncatedDiff = string(runes[:maxDiffRunes]) + "\n... (diff truncated for Copilot)"
-	}
-
-	prompt := fmt.Sprintf("Review this git diff for bugs, security issues, and best practices. "+
-		"Provide specific findings with file names and line numbers:\n\n%s", truncatedDiff)
-
-	// Use stdin to avoid exposing diff in process arguments
-	cmd := exec.CommandContext(ctx, c.path, "copilot", "suggest", "-t", "shell")
-	cmd.Stdin = strings.NewReader(prompt)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("copilot review failed: %w", err)
-	}
-
-	return string(output), nil
-}
-
-func (c *CopilotInvoker) RunPrompt(ctx context.Context, prompt string) (string, error) {
-	// Use stdin to avoid ARG_MAX limits with large prompts
-	cmd := exec.CommandContext(ctx, c.path, "copilot", "suggest", "-t", "shell")
-	cmd.Stdin = strings.NewReader(prompt)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("copilot failed: %w", err)
-	}
-	return string(output), nil
-}

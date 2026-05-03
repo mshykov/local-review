@@ -24,9 +24,6 @@ import (
 	"github.com/mshykov/local-review/internal/review"
 )
 
-// version is set at build time via `-ldflags "-X main.version=..."`.
-var version = "dev"
-
 // flags shared across all review subcommands
 type sharedFlags struct {
 	model       string
@@ -113,41 +110,6 @@ func branchCmd(sf *sharedFlags) *cobra.Command {
 				base = args[0]
 			}
 			return runReview(cmd.Context(), sf, git.ModeBranch, base)
-		},
-	}
-}
-
-func versionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print version and exit",
-		Args:  cobra.NoArgs,
-		Run: func(*cobra.Command, []string) {
-			fmt.Println(version)
-		},
-	}
-}
-
-func configCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "config",
-		Short: "Print the resolved configuration",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadConfig()
-			if err != nil {
-				return err
-			}
-			// Mask the API key — config dump should be shareable
-			if cfg.Provider.APIKey != "" {
-				cfg.Provider.APIKey = "***"
-			}
-			return output.WriteJSON(os.Stdout, review.Report{
-				Meta: review.ReportMeta{
-					Provider: cfg.Provider.BaseURL,
-					Model:    cfg.Provider.Model,
-				},
-			})
 		},
 	}
 }

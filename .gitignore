@@ -20,3 +20,4 @@
 /coverage.html
 *.bak*
 .local-review/reviews/
+do-not-merge/

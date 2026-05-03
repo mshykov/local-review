@@ -45,12 +45,12 @@ local-review branch main
 
 By default, local-review shows `warning`+ findings and exits non-zero when `major`/`critical` are present (so it can gate a pre-commit hook).
 
-## v0.1: Multi-LLM Reviews (Coming Soon)
+## v0.1: Multi-LLM Reviews
 
-**Run parallel reviews with 4 AI models simultaneously:**
+**Run parallel reviews with multiple AI models simultaneously:**
 
 ```sh
-# Review with Claude, Gemini, Codex, and GitHub Copilot
+# Review with Claude + Gemini (both free!)
 local-review multi staged
 
 # Check which LLMs are installed
@@ -60,26 +60,36 @@ local-review doctor
 local-review multi staged --merge-with claude
 ```
 
+### Supported LLMs
+
+| LLM | Free Option | Installation | Status |
+|-----|-------------|--------------|--------|
+| **Claude** | ✅ Free tier via [claude.ai](https://claude.ai) | `npm install -g @anthropic/claude-cli` | Default enabled |
+| **Gemini** | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli@0.40.0` | Default enabled |
+| **Codex** | ⚠️ Requires OpenAI Plus ($20/mo) | `npm install -g @openai/codex@0.128.0` | Disabled by default |
+
 **How it works:**
-1. Detects installed LLM CLIs (claude, gemini, codex, gh copilot)
+1. Detects installed LLM CLIs (claude, gemini, codex)
 2. Runs reviews in parallel using free CLI tools (or API fallback)
 3. Saves each review to `.local-review/reviews/<branch>/<commit>_<llm>.md`
 4. Merges findings intelligently (deduplicates, consolidates, notes consensus)
 5. Outputs final report: `<commit>_merged.md`
 
-**Setup:**
+**Quick Setup:**
 ```sh
-# Install LLM CLIs via npm
-npm install -g @google/gemini-cli@0.40.0
-npm install -g @openai/codex@0.128.0
+# Install free LLM CLIs
 npm install -g @anthropic/claude-cli
+npm install -g @google/gemini-cli@0.40.0
 
-# Install GitHub CLI for Copilot
-brew install gh
-gh auth login
+# Authenticate
+claude login                    # Follow prompts
+export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey
 
 # Verify installations
 local-review doctor
+
+# Run multi-LLM review
+local-review multi staged
 ```
 
 **Configuration:**
@@ -93,21 +103,18 @@ llms:
   gemini:
     enabled: true
     mode: cli
+    api_key_env: GEMINI_API_KEY  # required for Gemini
 
   codex:
-    enabled: true
-    mode: cli
-
-  copilot:
-    enabled: true
+    enabled: false         # paid only, enable if you have OpenAI Plus
     mode: cli
 
 merge:
-  preferred_llm: auto      # or: claude, gemini, codex, copilot
+  preferred_llm: auto      # or: claude, gemini, codex
   deduplicate: true
 ```
 
-See [docs/multi-llm-architecture.md](docs/multi-llm-architecture.md) for full details.
+See [`examples/.local-review-multi.yml`](examples/.local-review-multi.yml) for full multi-LLM config example.
 
 ## Configure
 
@@ -155,11 +162,20 @@ Bypass for emergencies: `LOCAL_REVIEW_SKIP=1 git commit ...`.
 ## CLI
 
 ```
+# v0 Single-LLM mode
 local-review staged                  # review git diff --cached (pre-commit)
 local-review commit [<rev>]          # review one commit (default: HEAD)
 local-review branch [<base>]         # review branch vs base (default: main)
-local-review config                  # print resolved config
-local-review version
+
+# v0.1 Multi-LLM mode
+local-review multi staged            # parallel review with all enabled LLMs
+local-review multi commit [<rev>]    # multi-LLM review of one commit
+local-review multi branch [<base>]   # multi-LLM review of branch
+
+# Utilities
+local-review doctor                  # check LLM installations
+local-review config                  # print resolved config (API keys masked)
+local-review version                 # print version
 ```
 
 Common flags:

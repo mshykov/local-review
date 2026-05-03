@@ -26,11 +26,6 @@ func TestDetect(t *testing.T) {
 			wantName: "codex",
 		},
 		{
-			name:     "gh CLI detection",
-			cliName:  "gh",
-			wantName: "gh",
-		},
-		{
 			name:     "non-existent CLI",
 			cliName:  "nonexistent-cli-12345",
 			wantName: "nonexistent-cli-12345",
@@ -56,9 +51,9 @@ func TestDetect(t *testing.T) {
 func TestDetectAll(t *testing.T) {
 	llms := DetectAll()
 
-	// Should return exactly 4 LLMs (claude, gemini, codex, gh)
-	if len(llms) != 4 {
-		t.Errorf("DetectAll() returned %d LLMs, want 4", len(llms))
+	// Should return exactly 3 LLMs (claude, gemini, codex)
+	if len(llms) != 3 {
+		t.Errorf("DetectAll() returned %d LLMs, want 3", len(llms))
 	}
 
 	// Check that all expected names are present
@@ -66,7 +61,6 @@ func TestDetectAll(t *testing.T) {
 		"claude": false,
 		"gemini": false,
 		"codex":  false,
-		"gh":     false,
 	}
 
 	for _, llm := range llms {

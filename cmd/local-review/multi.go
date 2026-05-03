@@ -370,7 +370,7 @@ func selectMergeLLM(results []multi.ReviewResult, availableLLMs []cli.LLM, prefe
 	}
 
 	// Auto mode: try in priority order
-	priorityOrder := []string{"claude", "codex", "gemini", "copilot"}
+	priorityOrder := []string{"claude", "codex", "gemini"}
 	for _, name := range priorityOrder {
 		if llm, ok := successfulMap[name]; ok {
 			return &llm
