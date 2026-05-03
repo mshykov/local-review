@@ -85,4 +85,4 @@ Return a single JSON object with this exact shape:
 }
 ```
 
-`file` and `line` must come from the diff. `severity` must be one of: `critical`, `major`, `warning`, `info`. `tag` is optional (use one of: `correctness`, `security`, `perf`, `maintainability`, `style`). If there are no findings, return `{"findings": []}`.
+`file` and `line` must come from the diff. `severity` must be one of: `critical`, `major`, `warning`, `info`, `nit`. `tag` is optional (use one of: `correctness`, `security`, `perf`, `maintainability`, `testing`, `style`). If there are no findings, return `{"findings": []}`.

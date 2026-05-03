@@ -46,7 +46,7 @@ Apply the default review rules. Plus: language-specific patterns to look for.
 - **`pipe` without backpressure awareness** — can cause memory issues.
 - **`process.env` reads scattered** — should be centralized and validated at startup.
 - **Synchronous fs in request paths** — `fs.readFileSync` blocks the event loop.
-- **Missing `process.on('unhandledRejection')`** — uncaught promise rejections.
+- **Unhandled promise rejections** — prevent them at the source with `await`/`.catch()`; a `process.on('unhandledRejection')` handler is useful only for centralized logging/telemetry, not as a substitute for fixing the root cause.
 - **Callbacks without error-first convention** — `(err, data) => {}` pattern expected.
 
 ### Performance
@@ -77,9 +77,9 @@ Apply the default review rules. Plus: language-specific patterns to look for.
 - **Server vs client boundaries** — `'use client'` appearing where it shouldn't.
 - **Hydration mismatches** — date/time formatting differs between server and client.
 - **Suspense boundaries swallowing errors** — need error boundaries too.
-- **Missing `metadata` exports** — SEO metadata should be exported from pages.
+- **Missing `metadata` exports** — in Next.js App Router pages where SEO matters, export a `metadata` object or `generateMetadata` function.
 - **Data fetching in client components** — should use server components when possible.
-- **Image optimization** — using `<img>` instead of `<Image>` from `next/image`.
+- **Image optimization** — prefer `<Image>` from `next/image` for remote or large images where optimization (resizing, format conversion) is desired; plain `<img>` is fine for small inline icons.
 - **Route handlers not using Web API** — should return `Response` objects.
 
 ### Performance

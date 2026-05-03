@@ -56,7 +56,7 @@ This document defines **best-in-class code review standards** for local-review, 
 
 **Data protection**:
 - No secrets (API keys, passwords, tokens) in source code
-- PII/EUII must be encrypted at rest and in transit
+- PII/PHI must be encrypted at rest and in transit
 - Sensitive data must be scrubbed from logs
 - Validate and sanitize ALL user inputs
 
@@ -241,7 +241,7 @@ Use these consistently in reviews:
 | **Major** | Likely bug, perf issue, or security concern | N+1 query, missing error handling, race condition | **Block merge** |
 | **Warning** | Design/maintainability problem worth addressing | Over-engineering, leaky abstraction, complex function | **Strong suggestion** |
 | **Info** | Context the author should know | Better pattern exists, potential future issue | **FYI only** |
-| **Nit** | Cosmetic/style | Naming preference, minor formatting | **Optional** |
+| **Nit** | Cosmetic/style (also emitted by local-review when `min_severity: nit` is configured) | Naming preference, minor formatting | **Optional** |
 
 ---
 

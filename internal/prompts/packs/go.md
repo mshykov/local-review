@@ -41,7 +41,7 @@ Apply the default review rules. Plus: Go-specific patterns to look for.
 
 ### HTTP & network
 - **HTTP handlers writing after error** — missing `return` after `http.Error`.
-- **Request body not closed** — `defer resp.Body.Close()` for all HTTP requests.
+- **Response body not closed** — for outbound HTTP calls, always `defer resp.Body.Close()` on the response returned by `http.Client.Do`; the server's `r.Body` in handlers is managed by the framework.
 - **Context not passed to HTTP requests** — use `req.WithContext(ctx)`.
 - **Timeouts missing** — HTTP clients should set timeouts to prevent hanging.
 

@@ -72,13 +72,13 @@ Apply the default review rules. Plus: Python-specific patterns to look for.
 - **Chained assignment** — `df[mask][col] = ...` doesn't work; use `.loc[]`.
 - **`inplace=True` misused** — returns `None`; don't reassign result.
 - **Iterating rows with `.iterrows()`** — slow; use vectorized operations.
-- **Not copying DataFrames** — `df2 = df1` is a view, not a copy; use `.copy()`.
+- **Not copying DataFrames** — `df2 = df1` is just another reference (no copy); mutations to either variable affect the same object; use `.copy()` when you need an independent DataFrame.
 - **Missing null checks** — operations on `NaN` propagate silently.
 - **Wrong dtype** — numeric data stored as object/string hurts performance.
 
 ## Idioms & style
 
-- **List comprehensions > loops** — more Pythonic and often faster.
+- **List comprehensions for simple transforms/filters** — prefer over loops for straightforward operations; for complex multi-step logic, a loop may be more readable.
 - **Enumerate instead of range(len())** — `for i, x in enumerate(lst)`.
 - **Dict/set comprehensions** — `{k: v for ...}` instead of manual loops.
 - **Truthiness** — `if my_list:` instead of `if len(my_list) > 0`.
