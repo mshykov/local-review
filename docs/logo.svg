@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>Geometric chestnut leaf</title>
+  <desc>Stylized chestnut leaf composed of stacked outlined trapezoid bands.</desc>
+  <g fill="#4F8A2C" stroke="#254C15" stroke-width="6" stroke-linejoin="miter" stroke-linecap="butt">
+    <polygon points="511.0,136.0 629.0,182.0 393.0,182.0"/>
+    <polygon points="403.0,182.0 619.0,182.0 701.0,243.0 321.0,243.0"/>
+    <polygon points="331.0,243.0 691.0,243.0 747.0,305.0 275.0,305.0"/>
+    <polygon points="285.0,305.0 737.0,305.0 769.0,367.0 253.0,367.0"/>
+    <polygon points="263.0,367.0 759.0,367.0 772.0,428.0 250.0,428.0"/>
+    <polygon points="260.0,428.0 762.0,428.0 757.0,490.0 265.0,490.0"/>
+    <polygon points="275.0,490.0 747.0,490.0 725.0,552.0 297.0,552.0"/>
+    <polygon points="307.0,552.0 715.0,552.0 683.0,614.0 339.0,614.0"/>
+    <polygon points="349.0,614.0 673.0,614.0 629.0,676.0 393.0,676.0"/>
+    <polygon points="403.0,676.0 619.0,676.0 571.0,738.0 451.0,738.0"/>
+    <polygon points="461.0,738.0 561.0,738.0 511.0,777.0"/>
+  </g>
+  <line x1="511" y1="136" x2="511" y2="777" stroke="#254C15" stroke-width="6"/>
+  <rect x="503" y="777" width="16" height="182" fill="#2A5818" stroke="#254C15" stroke-width="4"/>
+</svg>

@@ -1,6 +1,29 @@
-# local-review
+<p align="center">
+  <img src="docs/logo.svg" alt="local-review logo" width="200"/>
+</p>
 
-**Local, BYOK code review for any language.** Runs against a git diff, hands it to whichever LLM you point it at, prints findings. No SaaS, no telemetry, no signup.
+<h1 align="center">local-review</h1>
+
+<p align="center">
+  <strong>Local, BYOK code review for any language.</strong><br>
+  Runs against a git diff, hands it to whichever LLM you point it at, prints findings.<br>
+  No SaaS, no telemetry, no signup.
+</p>
+
+<p align="center">
+  <a href="https://github.com/mshykov/local-review/releases"><img src="https://img.shields.io/github/v/release/mshykov/local-review?style=flat-square" alt="Release"></a>
+  <a href="https://github.com/mshykov/local-review/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
+  <a href="https://github.com/mshykov/local-review/stargazers"><img src="https://img.shields.io/github/stars/mshykov/local-review?style=flat-square" alt="Stars"></a>
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#v01-multi-llm-reviews">Multi-LLM</a> •
+  <a href="https://mshykov.github.io/local-review">Website</a>
+</p>
+
+---
 
 ## Why
 

@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>local-review - Privacy-First AI Code Reviews</title>
+  <meta name="description" content="Multi-LLM code reviews without vendor lock-in. Works with Claude, Gemini, and Codex.">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="alternate icon" href="favicon.ico">
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: #fff;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+
+    header {
+      text-align: center;
+      padding: 60px 20px 40px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .logo {
+      width: 120px;
+      height: 120px;
+      margin-bottom: 20px;
+      filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1));
+    }
+
+    h1 {
+      font-size: 2.5em;
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+
+    .tagline {
+      font-size: 1.3em;
+      opacity: 0.95;
+      margin-bottom: 30px;
+    }
+
+    .cta-buttons {
+      display: flex;
+      gap: 15px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 12px 30px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-weight: 600;
+      transition: all 0.3s;
+      font-size: 1.1em;
+    }
+
+    .btn-primary {
+      background: white;
+      color: #667eea;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    .btn-secondary {
+      background: rgba(255,255,255,0.2);
+      color: white;
+      border: 2px solid white;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255,255,255,0.3);
+    }
+
+    section {
+      padding: 60px 20px;
+    }
+
+    h2 {
+      font-size: 2em;
+      margin-bottom: 30px;
+      text-align: center;
+      color: #2d3748;
+    }
+
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 30px;
+      margin-top: 40px;
+    }
+
+    .feature {
+      padding: 30px;
+      border-radius: 8px;
+      background: #f7fafc;
+      border: 1px solid #e2e8f0;
+      transition: all 0.3s;
+    }
+
+    .feature:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+      border-color: #667eea;
+    }
+
+    .feature h3 {
+      font-size: 1.4em;
+      margin-bottom: 15px;
+      color: #667eea;
+    }
+
+    .feature-icon {
+      font-size: 2.5em;
+      margin-bottom: 15px;
+    }
+
+    .quickstart {
+      background: #2d3748;
+      color: white;
+    }
+
+    .quickstart h2 {
+      color: white;
+    }
+
+    pre {
+      background: #1a202c;
+      padding: 20px;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 20px 0;
+      border: 1px solid #4a5568;
+    }
+
+    code {
+      font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+      font-size: 0.95em;
+      color: #68d391;
+    }
+
+    .install-options {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-top: 30px;
+    }
+
+    .install-card {
+      background: white;
+      padding: 25px;
+      border-radius: 8px;
+      border: 2px solid #e2e8f0;
+    }
+
+    .install-card h3 {
+      color: #2d3748;
+      margin-bottom: 15px;
+    }
+
+    .llm-support {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-top: 30px;
+    }
+
+    .llm-card {
+      padding: 20px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      text-align: center;
+    }
+
+    .llm-card.free {
+      border: 2px solid #48bb78;
+    }
+
+    .llm-card.paid {
+      border: 2px solid #ed8936;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 0.85em;
+      font-weight: 600;
+      margin-top: 10px;
+    }
+
+    .badge-free {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+
+    .badge-paid {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+
+    footer {
+      background: #2d3748;
+      color: white;
+      text-align: center;
+      padding: 30px 20px;
+      margin-top: 60px;
+    }
+
+    footer a {
+      color: #68d391;
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+
+    @media (max-width: 768px) {
+      h1 { font-size: 2em; }
+      .tagline { font-size: 1.1em; }
+      .features { grid-template-columns: 1fr; }
+      .cta-buttons { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <img src="logo.svg" alt="local-review logo" class="logo">
+      <h1>local-review</h1>
+      <p class="tagline">Privacy-first AI code reviews with multi-LLM support</p>
+      <div class="cta-buttons">
+        <a href="https://github.com/mshykov/local-review" class="btn btn-primary">View on GitHub</a>
+        <a href="https://github.com/mshykov/local-review/releases/latest" class="btn btn-secondary">Download v0.1.0</a>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <div class="container">
+      <h2>Why local-review?</h2>
+      <div class="features">
+        <div class="feature">
+          <div class="feature-icon">🔒</div>
+          <h3>Privacy First</h3>
+          <p>Your code stays local. No SaaS signup, no telemetry, no data leaving your machine.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">🤖</div>
+          <h3>Multi-LLM</h3>
+          <p>Run reviews with Claude, Gemini, or Codex in parallel. Get consolidated findings with deduplication.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">💰</div>
+          <h3>Free Options</h3>
+          <p>Works with free tiers from Claude and Gemini. No credit card required.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">⚡</div>
+          <h3>Fast Setup</h3>
+          <p>Single binary, no Docker/Node required. Works on macOS, Linux, and Windows.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">🔓</div>
+          <h3>No Lock-In</h3>
+          <p>Switch between LLM providers freely. Works with any OpenAI-compatible API.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">🎯</div>
+          <h3>Pre-Commit Hooks</h3>
+          <p>Catch issues before they're committed. Perfect for team workflows.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="quickstart">
+    <div class="container">
+      <h2>Quick Start</h2>
+      <pre><code># Install local-review
+curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
+
+# Install free LLM CLIs
+npm install -g @anthropic/claude-cli
+npm install -g @google/gemini-cli@0.40.0
+
+# Authenticate
+claude login
+export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey
+
+# Run multi-LLM review
+local-review multi staged</code></pre>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <h2>Supported LLMs</h2>
+      <div class="llm-support">
+        <div class="llm-card free">
+          <h3>Claude</h3>
+          <p>Free tier via claude.ai</p>
+          <span class="badge badge-free">✓ FREE</span>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Default enabled</p>
+        </div>
+        <div class="llm-card free">
+          <h3>Gemini</h3>
+          <p>Free API key from Google</p>
+          <span class="badge badge-free">✓ FREE</span>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Default enabled</p>
+        </div>
+        <div class="llm-card paid">
+          <h3>Codex</h3>
+          <p>OpenAI Plus subscription</p>
+          <span class="badge badge-paid">$ PAID</span>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Disabled by default</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <h2>Installation</h2>
+      <div class="install-options">
+        <div class="install-card">
+          <h3>🍺 Homebrew (macOS/Linux)</h3>
+          <pre><code>brew install mshykov/tap/local-review</code></pre>
+          <p><small>Coming soon in v0.1.1</small></p>
+        </div>
+        <div class="install-card">
+          <h3>🔧 Go Install</h3>
+          <pre><code>go install github.com/mshykov/local-review/cmd/local-review@latest</code></pre>
+        </div>
+        <div class="install-card">
+          <h3>📦 Download Binary</h3>
+          <p><a href="https://github.com/mshykov/local-review/releases/latest">Download from GitHub Releases</a></p>
+          <p><small>Available for macOS, Linux, Windows</small></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p>Built with ❤️ for developers who value privacy</p>
+      <p style="margin-top: 10px;">
+        <a href="https://github.com/mshykov/local-review">GitHub</a> •
+        <a href="https://github.com/mshykov/local-review/issues">Issues</a> •
+        <a href="https://github.com/mshykov/local-review/blob/main/LICENSE">MIT License</a>
+      </p>
+    </div>
+  </footer>
+</body>
+</html>
