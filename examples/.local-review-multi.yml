@@ -1,69 +1,66 @@
-# Example multi-LLM configuration for local-review v0.1+
+# local-review v0.1+ multi-LLM config example
 #
-# This file demonstrates how to configure parallel code reviews with multiple AI models.
-# Copy this to ~/.local-review.yml or your project's .local-review.yml.
+# Cascading order (lowest precedence first):
+#   1. Built-in defaults
+#   2. ~/.local-review.yml
+#   3. ./.local-review.yml          ← this file
+#   4. CLI flags
 
-# v0.1: Multi-LLM Configuration
-# Each LLM can run in CLI mode (free, uses installed CLI tools) or API mode (requires API key).
+# Multi-LLM configuration (v0.1+)
+# Run reviews in parallel with multiple AI models
 llms:
+  # Claude - Free tier available via claude.ai
   claude:
     enabled: true
-    mode: cli                    # 'cli' or 'api'
-    cli_path: claude             # auto-detect if empty
+    mode: cli                           # 'cli' or 'api'
+    cli_path: claude                    # auto-detected if empty
     model: claude-3-5-sonnet-20241022
-    api_key_env: ANTHROPIC_API_KEY  # fallback to API if CLI fails
+    api_key_env: ANTHROPIC_API_KEY      # used if CLI auth fails
     timeout_seconds: 120
 
+  # Gemini - Free API key from https://aistudio.google.com/apikey
   gemini:
     enabled: true
     mode: cli
     cli_path: gemini
     model: gemini-1.5-pro
-    api_key_env: GEMINI_API_KEY
+    api_key_env: GEMINI_API_KEY         # required for Gemini CLI
     timeout_seconds: 120
 
+  # Codex - Requires OpenAI Plus ($20/mo), disabled by default
   codex:
-    enabled: true
+    enabled: false
     mode: cli
     cli_path: codex
     model: gpt-4
     api_key_env: OPENAI_API_KEY
     timeout_seconds: 120
 
-  copilot:
-    enabled: true
-    mode: cli
-    cli_path: gh
-    api_key_env: GITHUB_TOKEN
-    timeout_seconds: 120
-
-# Merge Configuration
-# Controls how findings from multiple LLMs are consolidated.
+# Merge configuration
 merge:
-  preferred_llm: auto            # 'auto' or specific LLM name (claude, gemini, codex, copilot)
-                                 # auto priority: claude > codex > gemini > copilot
-  deduplicate: true              # remove duplicate findings across LLMs
-  consensus_threshold: 3         # N LLMs agreeing = "Confirmed by N LLMs"
+  preferred_llm: auto                   # 'auto' or specific LLM name (claude, gemini, codex)
+  deduplicate: true                     # remove duplicate findings
+  consensus_threshold: 2                # N LLMs agreeing = "Confirmed by N"
 
-# Storage Configuration
-# Where review outputs are saved.
+# Storage configuration
 storage:
-  base_path: .local-review/reviews  # reviews saved to <base_path>/<branch>/<commit>_*.md
+  base_path: .local-review/reviews      # where to save review files
 
-# v0 compatibility: single-LLM API mode (for `local-review staged`)
-provider:
-  base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-  api_key_env: LOCAL_REVIEW_API_KEY
-  timeout_seconds: 60
-
-# Review settings (applies to both v0 and v0.1)
+# Review settings (same as v0)
 review:
-  min_severity: warning          # nit, info, warning, major, critical
-  max_findings: 20
+  min_severity: warning                 # nit|info|warning|major|critical
+  max_findings: 20                      # hard cap per review
   exclude:
     - "**/*.lock"
     - "**/*.snap"
     - "**/dist/**"
     - "**/build/**"
     - "**/node_modules/**"
+  # prompt_pack: typescript             # force specific pack (optional)
+
+# v0 single-LLM mode (still works)
+provider:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key_env: LOCAL_REVIEW_API_KEY
+  timeout_seconds: 60

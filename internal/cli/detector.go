@@ -19,7 +19,14 @@ type LLM struct {
 // Returns a slice of LLM structs, one per supported CLI (even if not found).
 // Runs detections concurrently to avoid sequential timeouts.
 func DetectAll() []LLM {
-	llms := []string{"claude", "gemini", "codex", "gh"}
+	// Map of LLM names to their binary names (for cases where they differ)
+	llmBinaries := map[string]string{
+		"claude": "claude",
+		"gemini": "gemini",
+		"codex":  "codex",
+	}
+
+	llms := []string{"claude", "gemini", "codex"}
 	results := make([]LLM, len(llms))
 	var wg sync.WaitGroup
 
@@ -27,7 +34,8 @@ func DetectAll() []LLM {
 		wg.Add(1)
 		go func(idx int, llmName string) {
 			defer wg.Done()
-			results[idx] = Detect(llmName)
+			binaryName := llmBinaries[llmName]
+			results[idx] = detectWithBinary(llmName, binaryName)
 		}(i, name)
 	}
 
@@ -38,7 +46,13 @@ func DetectAll() []LLM {
 // Detect checks if a specific LLM CLI is installed and returns its metadata.
 // If the CLI is not found, Available will be false.
 func Detect(name string) LLM {
-	path, err := exec.LookPath(name)
+	return detectWithBinary(name, name)
+}
+
+// detectWithBinary checks if a specific LLM CLI is installed using a custom binary name.
+// This is useful when the LLM name differs from its binary name (e.g., "copilot" uses "gh").
+func detectWithBinary(name, binaryName string) LLM {
+	path, err := exec.LookPath(binaryName)
 	if err != nil {
 		// CLI not found in PATH
 		return LLM{

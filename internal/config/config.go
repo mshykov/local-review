@@ -120,19 +120,11 @@ func Defaults() Config {
 				TimeoutSec: 120,
 			},
 			"codex": {
-				Enabled:    boolPtr(false), // Disabled by default - CLI invocation pattern needs verification
+				Enabled:    boolPtr(false), // Disabled: has usage limits, requires OpenAI Plus subscription
 				Mode:       "cli",
 				CLIPath:    "codex",
 				Model:      "gpt-4",
 				APIKeyEnv:  "OPENAI_API_KEY",
-				TimeoutSec: 120,
-			},
-			"copilot": {
-				Enabled:    boolPtr(false), // Disabled by default - gh copilot CLI doesn't support non-interactive code review
-				Mode:       "cli",
-				CLIPath:    "gh",
-				Model:      "",
-				APIKeyEnv:  "GITHUB_TOKEN",
 				TimeoutSec: 120,
 			},
 		},

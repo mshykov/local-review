@@ -1,0 +1,109 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.github/**'
+      - 'examples/**'
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for tag detection
+
+      - name: Check if release needed
+        id: check
+        run: |
+          # Skip if HEAD is already tagged
+          if git describe --exact-match HEAD 2>/dev/null; then
+            echo "HEAD already tagged, skipping release"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine version bump
+        if: steps.check.outputs.skip != 'true'
+        id: bump
+        run: |
+          # Get latest tag, default to v0.0.0 if none
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "Latest tag: $latest_tag"
+
+          # Parse version
+          version="${latest_tag#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+
+          # Determine bump type from PR labels or workflow input
+          bump_type="${{ inputs.bump }}"
+          if [ -z "$bump_type" ]; then
+            # Check PR labels (if this is a merge commit)
+            # Extract PR number from merge commit message (e.g., "Merge pull request #123")
+            pr_number=$(git log -1 --pretty=%s | grep -oE '\(#[0-9]+\)' | tail -1 | tr -d '(#)' || echo "")
+            if [ -n "$pr_number" ]; then
+              labels=$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || echo "")
+              # Use exact label matching (grep -qxF for fixed-string, exact line match)
+              if echo "$labels" | grep -qxF "major"; then
+                bump_type="major"
+              elif echo "$labels" | grep -qxF "minor"; then
+                bump_type="minor"
+              else
+                bump_type="patch"
+              fi
+            else
+              # Default to patch if no PR
+              bump_type="patch"
+            fi
+          fi
+
+          # Bump version
+          case "$bump_type" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          new_version="v${major}.${minor}.${patch}"
+          echo "New version: $new_version"
+          echo "version=$new_version" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Create and push tag
+        if: steps.check.outputs.skip != 'true'
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${NEW_VERSION}" -m "Release ${NEW_VERSION}"
+          git push origin "${NEW_VERSION}"
