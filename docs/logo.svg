@@ -1,20 +1,7 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <title>Geometric chestnut leaf</title>
-  <desc>Stylized chestnut leaf composed of stacked outlined trapezoid bands.</desc>
-  <g fill="#4F8A2C" stroke="#254C15" stroke-width="6" stroke-linejoin="miter" stroke-linecap="butt">
-    <polygon points="511.0,136.0 629.0,182.0 393.0,182.0"/>
-    <polygon points="403.0,182.0 619.0,182.0 701.0,243.0 321.0,243.0"/>
-    <polygon points="331.0,243.0 691.0,243.0 747.0,305.0 275.0,305.0"/>
-    <polygon points="285.0,305.0 737.0,305.0 769.0,367.0 253.0,367.0"/>
-    <polygon points="263.0,367.0 759.0,367.0 772.0,428.0 250.0,428.0"/>
-    <polygon points="260.0,428.0 762.0,428.0 757.0,490.0 265.0,490.0"/>
-    <polygon points="275.0,490.0 747.0,490.0 725.0,552.0 297.0,552.0"/>
-    <polygon points="307.0,552.0 715.0,552.0 683.0,614.0 339.0,614.0"/>
-    <polygon points="349.0,614.0 673.0,614.0 629.0,676.0 393.0,676.0"/>
-    <polygon points="403.0,676.0 619.0,676.0 571.0,738.0 451.0,738.0"/>
-    <polygon points="461.0,738.0 561.0,738.0 511.0,777.0"/>
-  </g>
-  <line x1="511" y1="136" x2="511" y2="777" stroke="#254C15" stroke-width="6"/>
-  <rect x="503" y="777" width="16" height="182" fill="#2A5818" stroke="#254C15" stroke-width="4"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <path d="M 512,800 L 512,960" stroke="#234A12" stroke-width="16" stroke-linecap="round"/>
+  <path d="M 512,120 L 396.3,181.8 L 425.2,199.8 L 324.9,243.6 L 371.7,261.6 L 279.0,305.5 L 337.2,323.5 L 255.8,367.3 L 319.9,385.3 L 253.3,429.1 L 318.0,447.1 L 269.0,490.9 L 329.8,508.9 L 300.0,552.7 L 353.0,570.7 L 343.2,614.5 L 385.4,632.5 L 395.2,676.4 L 424.4,694.4 L 452.6,738.2 L 512,820 Z" fill="#4F8A2D"/>
+  <path d="M 512,120 L 627.7,181.8 L 598.8,199.8 L 699.1,243.6 L 652.3,261.6 L 745.0,305.5 L 686.8,323.5 L 768.2,367.3 L 704.1,385.3 L 770.7,429.1 L 706.0,447.1 L 755.0,490.9 L 694.2,508.9 L 724.0,552.7 L 671.0,570.7 L 680.8,614.5 L 638.6,632.5 L 628.8,676.4 L 599.6,694.4 L 571.4,738.2 L 512,820 Z" fill="#3D6E22"/>
+  <path d="M 512,120 L 512,820" stroke="#234A12" stroke-width="12" stroke-linecap="round"/>
+  <line x1="512" y1="246.8181818181818" x2="396.2577970559166" y2="181.8181818181818" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="246.8181818181818" x2="627.7422029440834" y2="181.8181818181818" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="308.6363636363636" x2="324.89668442316065" y2="243.63636363636363" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="308.6363636363636" x2="699.1033155768393" y2="243.63636363636363" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="370.45454545454544" x2="278.9973358852616" y2="305.45454545454544" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="370.45454545454544" x2="745.0026641147384" y2="305.45454545454544" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="432.27272727272725" x2="255.84659632355044" y2="367.27272727272725" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="432.27272727272725" x2="768.1534036764496" y2="367.27272727272725" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="494.09090909090907" x2="253.3278667797888" y2="429.09090909090907" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="494.09090909090907" x2="770.6721332202112" y2="429.09090909090907" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="555.9090909090909" x2="269.00277097316246" y2="490.9090909090909" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="555.9090909090909" x2="754.9972290268375" y2="490.9090909090909" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="617.7272727272727" x2="300.0206776791116" y2="552.7272727272727" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="617.7272727272727" x2="723.9793223208884" y2="552.7272727272727" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="679.5454545454545" x2="343.2057427541704" y2="614.5454545454545" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="679.5454545454545" x2="680.7942572458296" y2="614.5454545454545" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="741.3636363636364" x2="395.19167083836896" y2="676.3636363636364" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="741.3636363636364" x2="628.808329161631" y2="676.3636363636364" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="803.1818181818181" x2="452.5648267604556" y2="738.1818181818181" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> <line x1="512" y1="803.1818181818181" x2="571.4351732395444" y2="738.1818181818181" stroke="#234A12" stroke-width="6" stroke-linecap="round"/> 
 </svg>

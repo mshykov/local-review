@@ -159,9 +159,12 @@
 
     .install-options {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      grid-template-columns: 1fr;
       gap: 20px;
       margin-top: 30px;
+      max-width: 680px;
+      margin-left: auto;
+      margin-right: auto;
     }
 
     .install-card {
@@ -246,7 +249,7 @@
 <body>
   <header>
     <div class="container">
-      <img src="logo.svg" alt="local-review logo" class="logo">
+      <img src="logo.png" alt="local-review logo" class="logo">
       <h1>local-review</h1>
       <p class="tagline">Privacy-first AI code reviews with multi-LLM support</p>
       <div class="cta-buttons">
@@ -331,9 +334,9 @@ local-review multi staged</code></pre>
         </div>
         <div class="llm-card paid">
           <h3>Codex</h3>
-          <p>OpenAI Plus subscription</p>
-          <span class="badge badge-paid">$ PAID</span>
-          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Disabled by default</p>
+          <p>Requires an OpenAI Plus subscription</p>
+          <span class="badge badge-paid">OpenAI Plus required</span>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Disabled by default — billed by OpenAI, not local-review</p>
         </div>
       </div>
     </div>
