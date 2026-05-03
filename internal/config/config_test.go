@@ -106,8 +106,8 @@ func TestDefaults_V01(t *testing.T) {
 	d := Defaults()
 
 	// Check that LLMs are configured
-	if len(d.LLMs) != 4 {
-		t.Errorf("expected 4 LLMs, got %d", len(d.LLMs))
+	if len(d.LLMs) != 3 {
+		t.Errorf("expected 3 LLMs, got %d", len(d.LLMs))
 	}
 
 	// Check specific LLMs
@@ -119,9 +119,6 @@ func TestDefaults_V01(t *testing.T) {
 	}
 	if _, ok := d.LLMs["codex"]; !ok {
 		t.Error("codex LLM not in defaults")
-	}
-	if _, ok := d.LLMs["copilot"]; !ok {
-		t.Error("copilot LLM not in defaults")
 	}
 
 	// Check merge config

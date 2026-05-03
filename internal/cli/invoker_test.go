@@ -31,12 +31,6 @@ func TestNewInvoker(t *testing.T) {
 			wantType: "*cli.ClaudeInvoker",
 		},
 		{
-			name:     "copilot invoker (gh)",
-			llm:      LLM{Name: "gh", Path: "/usr/bin/gh"},
-			wantNil:  false,
-			wantType: "*cli.CopilotInvoker",
-		},
-		{
 			name:    "unknown invoker",
 			llm:     LLM{Name: "unknown", Path: "/usr/bin/unknown"},
 			wantNil: true,
@@ -65,7 +59,6 @@ func TestInvokerInterface(t *testing.T) {
 	var _ Invoker = (*CodexInvoker)(nil)
 	var _ Invoker = (*GeminiInvoker)(nil)
 	var _ Invoker = (*ClaudeInvoker)(nil)
-	var _ Invoker = (*CopilotInvoker)(nil)
 }
 
 func TestCodexInvoker_Review(t *testing.T) {
@@ -107,42 +100,6 @@ func TestClaudeInvoker_Review(t *testing.T) {
 	_, err := invoker.Review(ctx, diff)
 
 	// Should error because the path doesn't exist
-	if err == nil {
-		t.Error("Expected error with non-existent path, got nil")
-	}
-}
-
-func TestCopilotInvoker_Review(t *testing.T) {
-	invoker := &CopilotInvoker{path: "/nonexistent/gh"}
-
-	ctx := context.Background()
-	diff := "sample diff"
-
-	_, err := invoker.Review(ctx, diff)
-
-	// Should error because the path doesn't exist
-	if err == nil {
-		t.Error("Expected error with non-existent path, got nil")
-	}
-}
-
-func TestCopilotInvoker_DiffTruncation(t *testing.T) {
-	// Test that very large diffs are truncated
-	invoker := &CopilotInvoker{path: "/nonexistent/gh"}
-
-	// Create a diff larger than maxDiffLen (8000)
-	largeDiff := ""
-	for i := 0; i < 10000; i++ {
-		largeDiff += "a"
-	}
-
-	ctx := context.Background()
-
-	// We can't actually test the truncation without a real CLI,
-	// but we can verify the code doesn't panic
-	_, err := invoker.Review(ctx, largeDiff)
-
-	// Should error (no CLI), but shouldn't panic
 	if err == nil {
 		t.Error("Expected error with non-existent path, got nil")
 	}
