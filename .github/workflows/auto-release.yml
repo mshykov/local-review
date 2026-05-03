@@ -58,8 +58,9 @@ jobs:
           bump_type="${{ inputs.bump }}"
           if [ -z "$bump_type" ]; then
             # Check PR labels (if this is a merge commit)
-            # Extract PR number from merge commit message (e.g., "Merge pull request #123")
-            pr_number=$(git log -1 --pretty=%s | grep -oE '\(#[0-9]+\)' | tail -1 | tr -d '(#)' || echo "")
+            # Extract PR number from merge commit message.
+            # Handles both "Merge pull request #123 from …" and "Some title (#123)" formats.
+            pr_number=$(git log -1 --pretty=%s | grep -oE '(Merge pull request #[0-9]+|\(#[0-9]+\))' | grep -oE '[0-9]+' | head -1 || echo "")
             if [ -n "$pr_number" ]; then
               labels=$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || echo "")
               # Use exact label matching (grep -qxF for fixed-string, exact line match)

@@ -8,7 +8,7 @@ import (
 
 // LLM represents a detected CLI tool with its metadata.
 type LLM struct {
-	Name       string // "claude", "gemini", "codex", "copilot"
+	Name       string // "claude", "gemini", "codex"
 	Path       string // full path to the binary (e.g., "/usr/local/bin/claude")
 	Version    string // version string (e.g., "2.1.0")
 	Available  bool   // true if CLI is found in PATH
@@ -50,7 +50,7 @@ func Detect(name string) LLM {
 }
 
 // detectWithBinary checks if a specific LLM CLI is installed using a custom binary name.
-// This is useful when the LLM name differs from its binary name (e.g., "copilot" uses "gh").
+// This is useful when the LLM name differs from its binary name (e.g., "myLLM" uses "myLLM-cli").
 func detectWithBinary(name, binaryName string) LLM {
 	path, err := exec.LookPath(binaryName)
 	if err != nil {
