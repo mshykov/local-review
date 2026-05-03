@@ -1,0 +1,69 @@
+# Example multi-LLM configuration for local-review v0.1+
+#
+# This file demonstrates how to configure parallel code reviews with multiple AI models.
+# Copy this to ~/.local-review.yml or your project's .local-review.yml.
+
+# v0.1: Multi-LLM Configuration
+# Each LLM can run in CLI mode (free, uses installed CLI tools) or API mode (requires API key).
+llms:
+  claude:
+    enabled: true
+    mode: cli                    # 'cli' or 'api'
+    cli_path: claude             # auto-detect if empty
+    model: claude-3-5-sonnet-20241022
+    api_key_env: ANTHROPIC_API_KEY  # fallback to API if CLI fails
+    timeout_seconds: 120
+
+  gemini:
+    enabled: true
+    mode: cli
+    cli_path: gemini
+    model: gemini-1.5-pro
+    api_key_env: GEMINI_API_KEY
+    timeout_seconds: 120
+
+  codex:
+    enabled: true
+    mode: cli
+    cli_path: codex
+    model: gpt-4
+    api_key_env: OPENAI_API_KEY
+    timeout_seconds: 120
+
+  copilot:
+    enabled: true
+    mode: cli
+    cli_path: gh
+    api_key_env: GITHUB_TOKEN
+    timeout_seconds: 120
+
+# Merge Configuration
+# Controls how findings from multiple LLMs are consolidated.
+merge:
+  preferred_llm: auto            # 'auto' or specific LLM name (claude, gemini, codex, copilot)
+                                 # auto priority: claude > codex > gemini > copilot
+  deduplicate: true              # remove duplicate findings across LLMs
+  consensus_threshold: 3         # N LLMs agreeing = "Confirmed by N LLMs"
+
+# Storage Configuration
+# Where review outputs are saved.
+storage:
+  base_path: .local-review/reviews  # reviews saved to <base_path>/<branch>/<commit>_*.md
+
+# v0 compatibility: single-LLM API mode (for `local-review staged`)
+provider:
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  api_key_env: LOCAL_REVIEW_API_KEY
+  timeout_seconds: 60
+
+# Review settings (applies to both v0 and v0.1)
+review:
+  min_severity: warning          # nit, info, warning, major, critical
+  max_findings: 20
+  exclude:
+    - "**/*.lock"
+    - "**/*.snap"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/node_modules/**"

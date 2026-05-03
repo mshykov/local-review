@@ -18,3 +18,5 @@
 # Go
 /coverage.out
 /coverage.html
+*.bak*
+.local-review/reviews/

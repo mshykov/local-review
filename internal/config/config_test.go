@@ -99,3 +99,198 @@ func TestResolveAPIKeyCustomEnv(t *testing.T) {
 		t.Errorf("api_key = %q, want sk-from-openai", cfg.Provider.APIKey)
 	}
 }
+
+// v0.1 tests
+
+func TestDefaults_V01(t *testing.T) {
+	d := Defaults()
+
+	// Check that LLMs are configured
+	if len(d.LLMs) != 4 {
+		t.Errorf("expected 4 LLMs, got %d", len(d.LLMs))
+	}
+
+	// Check specific LLMs
+	if _, ok := d.LLMs["claude"]; !ok {
+		t.Error("claude LLM not in defaults")
+	}
+	if _, ok := d.LLMs["gemini"]; !ok {
+		t.Error("gemini LLM not in defaults")
+	}
+	if _, ok := d.LLMs["codex"]; !ok {
+		t.Error("codex LLM not in defaults")
+	}
+	if _, ok := d.LLMs["copilot"]; !ok {
+		t.Error("copilot LLM not in defaults")
+	}
+
+	// Check merge config
+	if d.Merge.PreferredLLM != "auto" {
+		t.Errorf("merge.preferred_llm = %q, want auto", d.Merge.PreferredLLM)
+	}
+	if d.Merge.Deduplicate == nil || !*d.Merge.Deduplicate {
+		t.Error("merge.deduplicate should be true by default")
+	}
+
+	// Check storage config
+	if d.Storage.BasePath != ".local-review/reviews" {
+		t.Errorf("storage.base_path = %q", d.Storage.BasePath)
+	}
+}
+
+func TestMergeReplaces_V01(t *testing.T) {
+	dst := Defaults()
+	src := Config{
+		LLMs: map[string]LLMConfig{
+			"claude": {
+				Enabled: boolPtr(false), // disable claude
+				Mode:    "api",
+			},
+			"custom": {
+				Enabled:    boolPtr(true),
+				Mode:       "cli",
+				CLIPath:    "custom-llm",
+				TimeoutSec: 60,
+			},
+		},
+		Merge: MergeConfig{
+			PreferredLLM: "gemini",
+		},
+		Storage: StorageConfig{
+			BasePath: "/tmp/reviews",
+		},
+	}
+
+	merge(&dst, src)
+
+	// Check that claude was updated
+	if dst.LLMs["claude"].Enabled != nil && *dst.LLMs["claude"].Enabled {
+		t.Error("claude should be disabled after merge")
+	}
+	if dst.LLMs["claude"].Mode != "api" {
+		t.Errorf("claude mode = %q, want api", dst.LLMs["claude"].Mode)
+	}
+
+	// Check that custom LLM was added
+	if _, ok := dst.LLMs["custom"]; !ok {
+		t.Error("custom LLM should be added")
+	}
+
+	// Check merge config
+	if dst.Merge.PreferredLLM != "gemini" {
+		t.Errorf("merge.preferred_llm = %q", dst.Merge.PreferredLLM)
+	}
+
+	// Check storage config
+	if dst.Storage.BasePath != "/tmp/reviews" {
+		t.Errorf("storage.base_path = %q", dst.Storage.BasePath)
+	}
+}
+
+func TestResolveAPIKeys_V01(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-claude-123")
+	t.Setenv("OPENAI_API_KEY", "sk-openai-456")
+
+	cfg := Defaults()
+	resolveAPIKeys(&cfg)
+
+	// Check that API keys were resolved
+	if cfg.LLMs["claude"].APIKey != "sk-claude-123" {
+		t.Errorf("claude api_key = %q, want sk-claude-123", cfg.LLMs["claude"].APIKey)
+	}
+	if cfg.LLMs["codex"].APIKey != "sk-openai-456" {
+		t.Errorf("codex api_key = %q, want sk-openai-456", cfg.LLMs["codex"].APIKey)
+	}
+}
+
+func TestLoadUsesRepoYAML_V01(t *testing.T) {
+	dir := t.TempDir()
+	repoCfg := filepath.Join(dir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+llms:
+  claude:
+    enabled: false
+  gemini:
+    mode: api
+    model: gemini-1.5-flash
+merge:
+  preferred_llm: gemini
+  deduplicate: false
+storage:
+  base_path: /custom/path
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Check that LLMs were merged
+	if cfg.LLMs["claude"].Enabled != nil && *cfg.LLMs["claude"].Enabled {
+		t.Error("claude should be disabled")
+	}
+	if cfg.LLMs["gemini"].Mode != "api" {
+		t.Errorf("gemini mode = %q, want api", cfg.LLMs["gemini"].Mode)
+	}
+	if cfg.LLMs["gemini"].Model != "gemini-1.5-flash" {
+		t.Errorf("gemini model = %q", cfg.LLMs["gemini"].Model)
+	}
+
+	// Check merge config
+	if cfg.Merge.PreferredLLM != "gemini" {
+		t.Errorf("merge.preferred_llm = %q", cfg.Merge.PreferredLLM)
+	}
+	if cfg.Merge.Deduplicate != nil && *cfg.Merge.Deduplicate {
+		t.Error("merge.deduplicate should be false")
+	}
+
+	// Check storage config
+	if cfg.Storage.BasePath != "/custom/path" {
+		t.Errorf("storage.base_path = %q", cfg.Storage.BasePath)
+	}
+}
+
+func TestValidate_Success(t *testing.T) {
+	cfg := Defaults()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() failed: %v", err)
+	}
+}
+
+func TestValidate_NoLLMsEnabled(t *testing.T) {
+	cfg := Defaults()
+	// Disable all LLMs
+	for name, llm := range cfg.LLMs {
+		llm.Enabled = boolPtr(false)
+		cfg.LLMs[name] = llm
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected error when no LLMs enabled")
+	}
+}
+
+func TestValidate_InvalidPreferredLLM(t *testing.T) {
+	cfg := Defaults()
+	cfg.Merge.PreferredLLM = "nonexistent"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected error for invalid preferred_llm")
+	}
+}
+
+func TestValidate_InvalidMode(t *testing.T) {
+	cfg := Defaults()
+	claude := cfg.LLMs["claude"]
+	claude.Mode = "invalid"
+	cfg.LLMs["claude"] = claude
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("expected error for invalid mode")
+	}
+}

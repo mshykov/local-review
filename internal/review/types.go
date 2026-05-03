@@ -70,7 +70,7 @@ func (f Finding) Loc() string {
 
 // Report is the full output of one review run.
 type Report struct {
-	Findings []Finding `json:"findings"`
+	Findings []Finding  `json:"findings"`
 	Meta     ReportMeta `json:"meta"`
 }
 

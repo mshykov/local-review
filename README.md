@@ -45,6 +45,70 @@ local-review branch main
 
 By default, local-review shows `warning`+ findings and exits non-zero when `major`/`critical` are present (so it can gate a pre-commit hook).
 
+## v0.1: Multi-LLM Reviews (Coming Soon)
+
+**Run parallel reviews with 4 AI models simultaneously:**
+
+```sh
+# Review with Claude, Gemini, Codex, and GitHub Copilot
+local-review multi staged
+
+# Check which LLMs are installed
+local-review doctor
+
+# Use a specific LLM for merging findings
+local-review multi staged --merge-with claude
+```
+
+**How it works:**
+1. Detects installed LLM CLIs (claude, gemini, codex, gh copilot)
+2. Runs reviews in parallel using free CLI tools (or API fallback)
+3. Saves each review to `.local-review/reviews/<branch>/<commit>_<llm>.md`
+4. Merges findings intelligently (deduplicates, consolidates, notes consensus)
+5. Outputs final report: `<commit>_merged.md`
+
+**Setup:**
+```sh
+# Install LLM CLIs via npm
+npm install -g @google/gemini-cli@0.40.0
+npm install -g @openai/codex@0.128.0
+npm install -g @anthropic/claude-cli
+
+# Install GitHub CLI for Copilot
+brew install gh
+gh auth login
+
+# Verify installations
+local-review doctor
+```
+
+**Configuration:**
+```yaml
+# .local-review.yml
+llms:
+  claude:
+    enabled: true
+    mode: cli              # use CLI (free), fallback to API if configured
+
+  gemini:
+    enabled: true
+    mode: cli
+
+  codex:
+    enabled: true
+    mode: cli
+
+  copilot:
+    enabled: true
+    mode: cli
+
+merge:
+  preferred_llm: auto      # or: claude, gemini, codex, copilot
+  deduplicate: true
+```
+
+See [docs/multi-llm-architecture.md](docs/multi-llm-architecture.md) for full details.
+
 ## Configure
 
 local-review loads YAML from a cascade — built-in defaults → `~/.local-review.yml` → `./.local-review.yml` → CLI flags.

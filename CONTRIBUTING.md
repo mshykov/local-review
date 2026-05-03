@@ -6,17 +6,25 @@ Thanks for considering a contribution. local-review is small on purpose — plea
 
 ```
 cmd/local-review/        CLI entry point (cobra). Thin wrapper.
+  main.go          v0 commands: staged, commit, branch, config, version
+  multi.go         v0.1: multi-LLM review command
+  doctor.go        v0.1: check LLM installations
+  merge.go         v0.1: re-merge existing reviews
+
 internal/
-  config/          YAML cascade loader
+  config/          YAML cascade loader (v0.1: extended with llms, merge, storage)
   git/             Diff extraction (shells out to `git`)
   lang/            File-extension → language identifier
   llm/             OpenAI-compat HTTP client (no vendor SDKs)
+  cli/             v0.1: LLM CLI detection, installation, invocation
+  multi/           v0.1: Multi-LLM orchestration, merging, storage
   prompts/         Embedded prompt packs (markdown files in packs/)
   review/          Orchestration: diff → LLM → filtered findings
   output/          Terminal + JSON formatters
+
 .github/workflows/ CI + release pipelines
 examples/          Sample .local-review.yml + pre-commit hook
-docs/              Internals docs (prompt-pack authoring, etc.)
+docs/              Internals docs (prompt-pack authoring, multi-LLM architecture)
 install.sh         One-line installer
 ```
 
@@ -27,10 +35,38 @@ git clone https://github.com/mshykov/local-review
 cd local-review
 go test ./...
 go build -o local-review ./cmd/local-review
+
+# Test v0 single-LLM mode
 ./local-review staged
+
+# Test v0.1 multi-LLM mode (requires LLM CLIs installed)
+./local-review multi staged
+./local-review doctor
 ```
 
-Required: Go 1.23+. No other tooling.
+Required:
+- Go 1.23+
+- **v0.1+**: Node.js 20+ and npm (for LLM CLI testing)
+
+### v0.1 Development Setup
+
+Install LLM CLIs for testing multi-LLM features:
+
+```sh
+# Install Node.js via Homebrew (macOS)
+brew install node
+
+# Install LLM CLIs
+npm install -g @google/gemini-cli@0.40.0
+npm install -g @openai/codex@0.128.0
+npm install -g @anthropic/claude-cli
+
+# Install GitHub CLI for Copilot
+brew install gh
+gh auth login
+```
+
+Note: You don't need all 4 LLMs installed to develop. The code gracefully handles missing CLIs.
 
 ## Adding a prompt pack
 

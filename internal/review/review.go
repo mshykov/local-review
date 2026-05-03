@@ -200,9 +200,9 @@ func matchesAny(path string, patterns []string) bool {
 //
 // Semantics:
 //
-//	*  matches any chars except '/'
-//	** matches any chars (including '/')
-//	?  matches one char except '/'
+//   - matches any chars except '/'
+//     ** matches any chars (including '/')
+//     ?  matches one char except '/'
 func matchGlob(path, pattern string) bool {
 	re, err := regexp.Compile(globToRegex(pattern))
 	if err != nil {

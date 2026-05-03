@@ -44,10 +44,10 @@ type Message struct {
 
 // Request body for /v1/chat/completions.
 type request struct {
-	Model          string         `json:"model"`
-	Messages       []Message      `json:"messages"`
-	ResponseFormat *responseFmt   `json:"response_format,omitempty"`
-	Temperature    float32        `json:"temperature,omitempty"`
+	Model          string       `json:"model"`
+	Messages       []Message    `json:"messages"`
+	ResponseFormat *responseFmt `json:"response_format,omitempty"`
+	Temperature    float32      `json:"temperature,omitempty"`
 }
 
 type responseFmt struct {

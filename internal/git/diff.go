@@ -8,9 +8,11 @@ package git
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Mode says which slice of history we want to review.
@@ -40,8 +42,9 @@ type Hunk struct {
 // Extract runs git and returns one Diff per changed file.
 //
 // args:
-//   mode: which slice of history
-//   ref:  for ModeCommit, the revspec; for ModeBranch, the *base* ref to diff against
+//
+//	mode: which slice of history
+//	ref:  for ModeCommit, the revspec; for ModeBranch, the *base* ref to diff against
 func Extract(mode Mode, ref string) ([]Diff, error) {
 	args, err := argsFor(mode, ref)
 	if err != nil {
@@ -157,4 +160,81 @@ func parseNewFrom(header string) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+// CurrentCommit returns the current HEAD commit hash (short form).
+// Returns "HEAD" if git command fails or times out.
+func CurrentCommit() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return "HEAD"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// CurrentBranch returns the current branch name.
+// Returns "unknown" if git command fails or times out (e.g., detached HEAD).
+func CurrentBranch() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// SanitizeBranchName replaces characters that are unsafe for filesystem paths.
+// Replaces / with - to handle branch names like "feature/auth-fix".
+func SanitizeBranchName(branch string) string {
+	// Prevent path traversal
+	s := strings.ReplaceAll(branch, "..", "--")
+
+	// Replace filesystem-unsafe characters (Windows + Unix)
+	unsafe := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|", " ", "\x00"}
+	for _, char := range unsafe {
+		s = strings.ReplaceAll(s, char, "-")
+	}
+
+	// Remove control characters
+	s = strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return '-'
+		}
+		return r
+	}, s)
+
+	return s
+}
+
+// SanitizeCommit removes any characters that aren't valid in git commit hashes.
+// Only allows [a-fA-F0-9-] to prevent path traversal via commit parameters.
+func SanitizeCommit(commit string) string {
+	var result strings.Builder
+	for _, r := range commit {
+		if (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') || (r >= '0' && r <= '9') || r == '-' {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
+}
+
+// ResolveRef resolves a git ref (branch name, tag, short hash) to a full commit hash.
+// Returns the first 7 characters of the commit hash, or empty string if resolution fails or times out.
+func ResolveRef(ref string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", ref)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }

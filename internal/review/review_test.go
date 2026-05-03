@@ -5,9 +5,9 @@ import "testing"
 func TestParseFindings(t *testing.T) {
 	cases := map[string]int{
 		`{"findings":[]}`: 0,
-		`{"findings":[{"file":"a.go","line":1,"severity":"major","title":"x","body":"y"}]}`: 1,
+		`{"findings":[{"file":"a.go","line":1,"severity":"major","title":"x","body":"y"}]}`:               1,
 		"```json\n" + `{"findings":[{"file":"a","severity":"warning","title":"t","body":"b"}]}` + "\n```": 1,
-		`prose before {"findings":[{"file":"a","severity":"info","title":"t","body":"b"}]} prose after`: 1,
+		`prose before {"findings":[{"file":"a","severity":"info","title":"t","body":"b"}]} prose after`:   1,
 	}
 	for input, want := range cases {
 		got, err := parseFindings(input)

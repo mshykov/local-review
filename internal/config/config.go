@@ -2,11 +2,11 @@
 //
 // Cascade (lowest precedence first):
 //
-//	1. Built-in defaults (compiled in)
-//	2. Org config (optional URL, fetched + cached)  -- v1: stub, see TODO
-//	3. ~/.local-review.yml                                 (per-user)
-//	4. .local-review.yml (project root)                    (per-repo)
-//	5. CLI flags                                     (per-invocation)
+//  1. Built-in defaults (compiled in)
+//  2. Org config (optional URL, fetched + cached)  -- v1: stub, see TODO
+//  3. ~/.local-review.yml                                 (per-user)
+//  4. .local-review.yml (project root)                    (per-repo)
+//  5. CLI flags                                     (per-invocation)
 //
 // Each layer is a partial YAML; later layers shallow-merge over earlier ones.
 package config
@@ -22,29 +22,34 @@ import (
 
 // Config is the resolved (post-cascade) configuration.
 type Config struct {
-	Provider Provider `yaml:"provider"`
+	Provider Provider `yaml:"provider"` // v0: single-LLM API mode
 	Review   Review   `yaml:"review"`
 	Org      Org      `yaml:"org"`
+
+	// v0.1: multi-LLM support
+	LLMs    map[string]LLMConfig `yaml:"llms"`
+	Merge   MergeConfig          `yaml:"merge"`
+	Storage StorageConfig        `yaml:"storage"`
 }
 
 // Provider holds LLM endpoint settings. Defaults to OpenAI; any
 // OpenAI-compatible endpoint works (Anthropic via /v1/chat/completions,
 // Together, Groq, OpenRouter, Ollama, vLLM, etc.).
 type Provider struct {
-	BaseURL string `yaml:"base_url"`         // e.g. https://api.openai.com/v1
-	Model   string `yaml:"model"`            // e.g. gpt-4o, claude-3-5-sonnet
-	APIKey  string `yaml:"api_key"`          // prefer env: LOCAL_REVIEW_API_KEY
-	APIKeyEnv string `yaml:"api_key_env"`    // env var name to read; defaults to LOCAL_REVIEW_API_KEY
-	TimeoutSec int  `yaml:"timeout_seconds"` // per-call timeout, default 60
+	BaseURL    string `yaml:"base_url"`        // e.g. https://api.openai.com/v1
+	Model      string `yaml:"model"`           // e.g. gpt-4o, claude-3-5-sonnet
+	APIKey     string `yaml:"api_key"`         // DEPRECATED: use environment variable instead
+	APIKeyEnv  string `yaml:"api_key_env"`     // env var name to read; defaults to LOCAL_REVIEW_API_KEY
+	TimeoutSec int    `yaml:"timeout_seconds"` // per-call timeout, default 60
 }
 
 // Review holds tuning knobs for what gets surfaced.
 type Review struct {
-	MinSeverity   string   `yaml:"min_severity"`    // "nit"|"info"|"warning"|"major"|"critical"
-	MaxFindings   int      `yaml:"max_findings"`    // hard cap to avoid noise
-	IncludeGlobs  []string `yaml:"include"`         // file globs to consider
-	ExcludeGlobs  []string `yaml:"exclude"`         // file globs to drop
-	PromptPack    string   `yaml:"prompt_pack"`     // override auto-detection
+	MinSeverity  string   `yaml:"min_severity"` // "nit"|"info"|"warning"|"major"|"critical"
+	MaxFindings  int      `yaml:"max_findings"` // hard cap to avoid noise
+	IncludeGlobs []string `yaml:"include"`      // file globs to consider
+	ExcludeGlobs []string `yaml:"exclude"`      // file globs to drop
+	PromptPack   string   `yaml:"prompt_pack"`  // override auto-detection
 }
 
 // Org is reserved for org-wide config delivery (v1: stub).
@@ -52,9 +57,38 @@ type Org struct {
 	ConfigURL string `yaml:"config_url"`
 }
 
+// LLMConfig holds configuration for a single LLM (v0.1+).
+type LLMConfig struct {
+	Enabled    *bool  `yaml:"enabled"`
+	Mode       string `yaml:"mode"`            // "cli" or "api"
+	CLIPath    string `yaml:"cli_path"`        // path to CLI binary (auto-detect if empty)
+	Model      string `yaml:"model"`           // model name (used in API mode)
+	APIKeyEnv  string `yaml:"api_key_env"`     // env var name for API key
+	APIKey     string `yaml:"api_key"`         // DEPRECATED: use environment variable instead
+	TimeoutSec int    `yaml:"timeout_seconds"` // per-call timeout
+}
+
+// MergeConfig controls how multi-LLM reviews are merged (v0.1+).
+type MergeConfig struct {
+	PreferredLLM       string `yaml:"preferred_llm"`       // "auto" or specific LLM name
+	Deduplicate        *bool  `yaml:"deduplicate"`         // remove duplicate findings
+	ConsensusThreshold int    `yaml:"consensus_threshold"` // N LLMs agreeing = "Confirmed by N"
+}
+
+// StorageConfig controls where reviews are saved (v0.1+).
+type StorageConfig struct {
+	BasePath string `yaml:"base_path"` // base directory for reviews
+}
+
+// boolPtr returns a pointer to a bool value (helper for defaults).
+func boolPtr(b bool) *bool {
+	return &b
+}
+
 // Defaults returns the built-in starting point.
 func Defaults() Config {
 	return Config{
+		// v0: single-LLM API mode defaults
 		Provider: Provider{
 			BaseURL:    "https://api.openai.com/v1",
 			Model:      "gpt-4o-mini",
@@ -65,6 +99,50 @@ func Defaults() Config {
 			MinSeverity:  "warning",
 			MaxFindings:  20,
 			ExcludeGlobs: []string{"**/*.lock", "**/*.snap", "**/dist/**", "**/build/**"},
+		},
+
+		// v0.1: multi-LLM defaults
+		LLMs: map[string]LLMConfig{
+			"claude": {
+				Enabled:    boolPtr(true),
+				Mode:       "cli",
+				CLIPath:    "claude",
+				Model:      "claude-3-5-sonnet-20241022",
+				APIKeyEnv:  "ANTHROPIC_API_KEY",
+				TimeoutSec: 120,
+			},
+			"gemini": {
+				Enabled:    boolPtr(true),
+				Mode:       "cli",
+				CLIPath:    "gemini",
+				Model:      "gemini-1.5-pro",
+				APIKeyEnv:  "GEMINI_API_KEY",
+				TimeoutSec: 120,
+			},
+			"codex": {
+				Enabled:    boolPtr(false), // Disabled by default - CLI invocation pattern needs verification
+				Mode:       "cli",
+				CLIPath:    "codex",
+				Model:      "gpt-4",
+				APIKeyEnv:  "OPENAI_API_KEY",
+				TimeoutSec: 120,
+			},
+			"copilot": {
+				Enabled:    boolPtr(false), // Disabled by default - gh copilot CLI doesn't support non-interactive code review
+				Mode:       "cli",
+				CLIPath:    "gh",
+				Model:      "",
+				APIKeyEnv:  "GITHUB_TOKEN",
+				TimeoutSec: 120,
+			},
+		},
+		Merge: MergeConfig{
+			PreferredLLM:       "auto",
+			Deduplicate:        boolPtr(true),
+			ConsensusThreshold: 3,
+		},
+		Storage: StorageConfig{
+			BasePath: ".local-review/reviews",
 		},
 	}
 }
@@ -90,8 +168,12 @@ func Load(repoConfigPath string) (Config, error) {
 		}
 	}
 
-	// Env-driven API key — checked here so we fail fast if missing
+	// Warn about deprecated api_key in YAML (security risk)
+	warnDeprecatedAPIKeys(&cfg)
+
+	// Env-driven API keys — resolve for v0 and v0.1
 	resolveAPIKey(&cfg)
+	resolveAPIKeys(&cfg)
 
 	return cfg, nil
 }
@@ -135,6 +217,7 @@ func mergeFrom(dst *Config, path string) error {
 // Slices are replaced wholesale (not appended) so users can override
 // defaults like ExcludeGlobs cleanly.
 func merge(dst *Config, src Config) {
+	// v0: Provider settings
 	if src.Provider.BaseURL != "" {
 		dst.Provider.BaseURL = src.Provider.BaseURL
 	}
@@ -150,6 +233,8 @@ func merge(dst *Config, src Config) {
 	if src.Provider.TimeoutSec != 0 {
 		dst.Provider.TimeoutSec = src.Provider.TimeoutSec
 	}
+
+	// Review settings
 	if src.Review.MinSeverity != "" {
 		dst.Review.MinSeverity = src.Review.MinSeverity
 	}
@@ -165,13 +250,71 @@ func merge(dst *Config, src Config) {
 	if src.Review.PromptPack != "" {
 		dst.Review.PromptPack = src.Review.PromptPack
 	}
+
+	// Org settings
 	if src.Org.ConfigURL != "" {
 		dst.Org.ConfigURL = src.Org.ConfigURL
+	}
+
+	// v0.1: LLMs settings (per-LLM merge)
+	if len(src.LLMs) > 0 {
+		if dst.LLMs == nil {
+			dst.LLMs = make(map[string]LLMConfig)
+		}
+		for name, llmCfg := range src.LLMs {
+			// If LLM exists in dst, merge fields
+			if existing, ok := dst.LLMs[name]; ok {
+				if llmCfg.Mode != "" {
+					existing.Mode = llmCfg.Mode
+				}
+				if llmCfg.CLIPath != "" {
+					existing.CLIPath = llmCfg.CLIPath
+				}
+				if llmCfg.Model != "" {
+					existing.Model = llmCfg.Model
+				}
+				if llmCfg.APIKeyEnv != "" {
+					existing.APIKeyEnv = llmCfg.APIKeyEnv
+				}
+				if llmCfg.APIKey != "" {
+					existing.APIKey = llmCfg.APIKey
+				}
+				if llmCfg.TimeoutSec != 0 {
+					existing.TimeoutSec = llmCfg.TimeoutSec
+				}
+				// Enabled is a *bool, only override if explicitly set in src
+				if llmCfg.Enabled != nil {
+					existing.Enabled = llmCfg.Enabled
+				}
+
+				dst.LLMs[name] = existing
+			} else {
+				// New LLM, add it
+				dst.LLMs[name] = llmCfg
+			}
+		}
+	}
+
+	// v0.1: Merge settings
+	if src.Merge.PreferredLLM != "" {
+		dst.Merge.PreferredLLM = src.Merge.PreferredLLM
+	}
+	// Deduplicate is a *bool, only override if explicitly set in src
+	if src.Merge.Deduplicate != nil {
+		dst.Merge.Deduplicate = src.Merge.Deduplicate
+	}
+	if src.Merge.ConsensusThreshold != 0 {
+		dst.Merge.ConsensusThreshold = src.Merge.ConsensusThreshold
+	}
+
+	// v0.1: Storage settings
+	if src.Storage.BasePath != "" {
+		dst.Storage.BasePath = src.Storage.BasePath
 	}
 }
 
 // resolveAPIKey fills cfg.Provider.APIKey from the named env var when
-// it isn't already set in YAML.
+// it isn't already set in YAML (v0 compatibility).
 func resolveAPIKey(cfg *Config) {
 	if cfg.Provider.APIKey != "" {
 		return
@@ -181,4 +324,87 @@ func resolveAPIKey(cfg *Config) {
 		envName = "LOCAL_REVIEW_API_KEY"
 	}
 	cfg.Provider.APIKey = os.Getenv(envName)
+}
+
+// resolveAPIKeys fills API keys for all LLMs from their configured env vars (v0.1).
+func resolveAPIKeys(cfg *Config) {
+	for name, llmCfg := range cfg.LLMs {
+		// Skip if API key already set
+		if llmCfg.APIKey != "" {
+			continue
+		}
+
+		// Skip if no env var configured
+		if llmCfg.APIKeyEnv == "" {
+			continue
+		}
+
+		// Resolve from environment
+		llmCfg.APIKey = os.Getenv(llmCfg.APIKeyEnv)
+		cfg.LLMs[name] = llmCfg
+	}
+}
+
+// warnDeprecatedAPIKeys warns if API keys are set in YAML config files (security risk).
+func warnDeprecatedAPIKeys(cfg *Config) {
+	// Check Provider.APIKey
+	if cfg.Provider.APIKey != "" {
+		fmt.Fprintf(os.Stderr, "WARNING: api_key in YAML config is deprecated and insecure.\n")
+		fmt.Fprintf(os.Stderr, "         Use environment variable %s instead.\n", cfg.Provider.APIKeyEnv)
+	}
+
+	// Check LLM APIKeys
+	for name, llmCfg := range cfg.LLMs {
+		if llmCfg.APIKey != "" {
+			fmt.Fprintf(os.Stderr, "WARNING: api_key for %s in YAML config is deprecated and insecure.\n", name)
+			fmt.Fprintf(os.Stderr, "         Use environment variable %s instead.\n", llmCfg.APIKeyEnv)
+		}
+	}
+}
+
+// Validate checks the configuration for common errors.
+// Returns an error if the config is invalid.
+// Note: This should be called explicitly by commands that need validation (e.g., multi),
+// not automatically in Load(), to avoid breaking v0-only users.
+func (c *Config) Validate() error {
+	// v0.1: Check that at least one LLM is enabled
+	// Treat nil as enabled (default), only count explicit disables
+	hasEnabled := false
+	hasExplicitlyDisabled := 0
+
+	for _, llm := range c.LLMs {
+		// nil means enabled by default
+		if llm.Enabled == nil || *llm.Enabled {
+			hasEnabled = true
+		} else {
+			// Explicitly disabled
+			hasExplicitlyDisabled++
+		}
+	}
+
+	// Only error if user explicitly disabled all LLMs (not if LLMs map is empty)
+	if len(c.LLMs) > 0 && !hasEnabled && hasExplicitlyDisabled == len(c.LLMs) {
+		return fmt.Errorf("all LLMs are explicitly disabled; at least one must be enabled for multi-LLM mode")
+	}
+
+	// Validate merge config
+	if c.Merge.PreferredLLM != "" && c.Merge.PreferredLLM != "auto" {
+		// Check that preferred LLM exists and is enabled
+		llm, ok := c.LLMs[c.Merge.PreferredLLM]
+		if !ok {
+			return fmt.Errorf("merge.preferred_llm '%s' not found in llms configuration", c.Merge.PreferredLLM)
+		}
+		if llm.Enabled != nil && !*llm.Enabled {
+			return fmt.Errorf("merge.preferred_llm '%s' is disabled (must be enabled to use for merging)", c.Merge.PreferredLLM)
+		}
+	}
+
+	// Validate LLM modes
+	for name, llm := range c.LLMs {
+		if llm.Enabled != nil && *llm.Enabled && llm.Mode != "" && llm.Mode != "cli" && llm.Mode != "api" {
+			return fmt.Errorf("llm '%s' has invalid mode '%s' (must be 'cli' or 'api')", name, llm.Mode)
+		}
+	}
+
+	return nil
 }

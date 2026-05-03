@@ -83,3 +83,44 @@ func TestArgsFor(t *testing.T) {
 		}
 	}
 }
+
+func TestCurrentCommit(t *testing.T) {
+	// This test runs in a git repo, so it should return a commit hash
+	commit := CurrentCommit()
+	if commit == "" {
+		t.Error("CurrentCommit() returned empty string")
+	}
+	// Commit hash should be reasonable length (short form is typically 7-8 chars)
+	if len(commit) < 7 || len(commit) > 40 {
+		t.Errorf("CurrentCommit() = %q, unexpected length", commit)
+	}
+}
+
+func TestCurrentBranch(t *testing.T) {
+	// This test runs in a git repo, so it should return a branch name
+	branch := CurrentBranch()
+	if branch == "" {
+		t.Error("CurrentBranch() returned empty string")
+	}
+}
+
+func TestSanitizeBranchName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"main", "main"},
+		{"feature/auth-fix", "feature-auth-fix"},
+		{"bugfix/issue-123", "bugfix-issue-123"},
+		{"release/v1.0.0", "release-v1.0.0"},
+		{"feat/multi/level/branch", "feat-multi-level-branch"},
+		{"windows\\path", "windows-path"},
+	}
+
+	for _, tt := range tests {
+		got := SanitizeBranchName(tt.input)
+		if got != tt.want {
+			t.Errorf("SanitizeBranchName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
