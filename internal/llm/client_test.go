@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -67,7 +68,11 @@ func newMockServer(t *testing.T, handler http.HandlerFunc) *mockServer {
 	t.Helper()
 	m := &mockServer{}
 	m.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		r.Body.Close()
+		if err != nil {
+			t.Errorf("failed to read request body: %v", err)
+		}
 		m.lastBody = body
 		m.lastRequest = r
 		handler(w, r)
@@ -254,16 +259,26 @@ func TestComplete_RespectsContextCancellation(t *testing.T) {
 	}
 }
 
+// errRoundTripper is a stub transport that always returns a fixed error,
+// giving tests a deterministic network failure without depending on any
+// particular port being unbound.
+type errRoundTripper struct{ err error }
+
+func (e *errRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, e.err
+}
+
 func TestComplete_NetworkErrorIncludesURL(t *testing.T) {
-	// Point at port 1 (tcpmux per IANA, but unbound on dev/CI hosts in
-	// practice). Connect should fail fast.
-	c := New("http://127.0.0.1:1", "sk-x", "gpt-4", 1)
+	c := New("http://127.0.0.1:9999", "sk-x", "gpt-4", 5)
+	// Inject a stub transport so the failure is deterministic and does not
+	// depend on whether port 9999 happens to be unbound in the test environment.
+	c.HTTP.Transport = &errRoundTripper{err: errors.New("connection refused")}
 
 	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
 		t.Fatal("expected network error, got nil")
 	}
-	if !strings.Contains(err.Error(), "127.0.0.1:1") {
+	if !strings.Contains(err.Error(), "127.0.0.1:9999") {
 		t.Errorf("error should include base URL for debugging, got: %v", err)
 	}
 }
