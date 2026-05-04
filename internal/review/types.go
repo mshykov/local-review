@@ -2,7 +2,10 @@
 // with the right prompt pack, and returns structured findings.
 package review
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Severity tier. Drives the default filter (>= warning shown by default).
 type Severity int
@@ -49,6 +52,23 @@ func ParseSeverity(s string) Severity {
 	default:
 		return SeverityWarning
 	}
+}
+
+// MarshalJSON emits Severity as its string form (e.g. "major") so JSON
+// output is human-readable and stable across additions of new tiers.
+func (s Severity) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.String())
+}
+
+// UnmarshalJSON accepts the string form produced by MarshalJSON and
+// round-trips through ParseSeverity.
+func (s *Severity) UnmarshalJSON(data []byte) error {
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	*s = ParseSeverity(str)
+	return nil
 }
 
 // Finding is one issue raised against the diff.

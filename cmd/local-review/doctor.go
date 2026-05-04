@@ -86,7 +86,7 @@ func getDisplayName(name string) string {
 func printInstallInstructions(name string) {
 	switch name {
 	case "claude":
-		fmt.Println("  Install: npm install -g @anthropic/claude-cli")
+		fmt.Println("  Install: npm install -g @anthropic-ai/claude-code")
 		fmt.Println("  Auth:    claude login")
 	case "gemini":
 		fmt.Println("  Install: npm install -g @google/gemini-cli")

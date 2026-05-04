@@ -91,6 +91,8 @@ func argsFor(mode Mode, ref string) ([]string, error) {
 // We don't need a fully-featured patch library — just enough to feed
 // content + line numbers to the LLM.
 func parseUnifiedDiff(s string) []Diff {
+	// Normalize CRLF so trailing \r doesn't end up in paths/hunks.
+	s = strings.ReplaceAll(s, "\r\n", "\n")
 	var diffs []Diff
 	var cur *Diff
 	var hunk *Hunk

@@ -27,9 +27,9 @@ Key constraints:
 - Per-provider configuration allows mixing (e.g., Claude via CLI, GPT via API)
 
 **Supported LLM CLIs**
-1. **Claude CLI** — `npm install -g @anthropic/claude-cli` (auth: `claude login`)
-2. **Gemini CLI** — `npm install -g @google/gemini-cli@0.40.0` (requires Node.js 20+; pinned version documents what was tested during development)
-3. **OpenAI Codex CLI** — `npm install -g @openai/codex@0.128.0` (requires ChatGPT Plus subscription; pinned version documents what was tested)
+1. **Claude CLI** — `npm install -g @anthropic-ai/claude-code` (auth: `claude login`)
+2. **Gemini CLI** — `npm install -g @google/gemini-cli` (requires Node.js 20+)
+3. **OpenAI Codex CLI** — `npm install -g @openai/codex` (requires ChatGPT Plus subscription)
 
 **CLI Invocation Patterns**
 - Codex: `codex review --commit <sha>`
@@ -107,7 +107,7 @@ local-review staged
 
 # Utilities
 local-review doctor              # check LLM installations, auth status
-local-review merge abc123        # re-merge existing reviews
+local-review multi abc123        # re-merge existing reviews
 ```
 
 ## Development Commands
@@ -145,9 +145,9 @@ go build -o local-review ./cmd/local-review
 brew install node
 
 # Install LLM CLIs for testing
-npm install -g @google/gemini-cli@0.40.0
-npm install -g @openai/codex@0.128.0
-npm install -g @anthropic/claude-cli
+npm install -g @google/gemini-cli
+npm install -g @openai/codex
+npm install -g @anthropic-ai/claude-code
 ```
 
 ### Configuration Testing
@@ -162,7 +162,7 @@ npm install -g @anthropic/claude-cli
 - **v0**: API key set: `export LOCAL_REVIEW_API_KEY=sk-...` (for testing with real providers)
 - **v0.1**: Node.js 20+ and npm (for LLM CLI installations)
 
-## v0.1 Architecture (In Development)
+## v0.1 Architecture
 
 ### New Packages for Multi-LLM Support
 
@@ -186,7 +186,6 @@ npm install -g @anthropic/claude-cli
 **cmd/local-review/** — New commands
 - `multi.go` — Multi-LLM review command
 - `doctor.go` — Check LLM installations and auth status
-- `merge.go` — Re-run merge on existing reviews
 
 ### Multi-LLM Review Flow
 

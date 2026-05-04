@@ -1,6 +1,9 @@
 package git
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const sample = `diff --git a/src/foo.ts b/src/foo.ts
 index 1234567..abcdefg 100644
@@ -38,6 +41,30 @@ func TestParseUnifiedDiff(t *testing.T) {
 	}
 	if diffs[1].Path != "main.go" {
 		t.Errorf("file 1 path = %q", diffs[1].Path)
+	}
+}
+
+func TestParseUnifiedDiff_CRLF(t *testing.T) {
+	// Same diff but with CRLF line endings — paths must come back without \r.
+	crlf := "diff --git a/foo.txt b/foo.txt\r\n" +
+		"index 1..2 100644\r\n" +
+		"--- a/foo.txt\r\n" +
+		"+++ b/foo.txt\r\n" +
+		"@@ -1,1 +1,2 @@\r\n" +
+		" hello\r\n" +
+		"+world\r\n"
+	diffs := parseUnifiedDiff(crlf)
+	if len(diffs) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(diffs))
+	}
+	if diffs[0].Path != "foo.txt" {
+		t.Errorf("path = %q, want %q", diffs[0].Path, "foo.txt")
+	}
+	if len(diffs[0].Hunks) != 1 {
+		t.Fatalf("expected 1 hunk, got %d", len(diffs[0].Hunks))
+	}
+	if strings.Contains(diffs[0].Hunks[0].Content, "\r") {
+		t.Errorf("hunk content contains \\r: %q", diffs[0].Hunks[0].Content)
 	}
 }
 

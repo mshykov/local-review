@@ -68,6 +68,6 @@ func detectWithBinary(name, binaryName string) LLM {
 		Name:      name,
 		Path:      path,
 		Version:   version,
-		Available: true,
+		Available: version != "unknown",
 	}
 }

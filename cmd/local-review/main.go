@@ -143,9 +143,12 @@ func runReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref string) 
 	}
 
 	if sf.jsonOut {
-		return output.WriteJSON(os.Stdout, rep)
+		if err := output.WriteJSON(os.Stdout, rep); err != nil {
+			return err
+		}
+	} else {
+		output.WriteText(os.Stdout, rep)
 	}
-	output.WriteText(os.Stdout, rep)
 
 	// Exit non-zero when blocking-severity findings exist, so pre-commit
 	// hooks fail the commit. "major" and "critical" block by default.
