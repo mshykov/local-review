@@ -3,7 +3,9 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -52,8 +54,9 @@ func TestComplete_NoAPIKeyReturnsError(t *testing.T) {
 	}
 }
 
-// Captures the last request received by the mock server so tests can
-// inspect headers/body.
+// mockServer captures the last request received by the test server so
+// tests can inspect headers/body. Single-request use only — the
+// last* fields aren't synchronized for concurrent reads.
 type mockServer struct {
 	server      *httptest.Server
 	lastRequest *http.Request
@@ -73,11 +76,12 @@ func newMockServer(t *testing.T, handler http.HandlerFunc) *mockServer {
 	return m
 }
 
-// Standard happy-path response handler.
+// Standard happy-path response handler. Encodes content via %q so
+// callers can pass arbitrary strings (quotes, backslashes, newlines).
 func okResponse(content string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"` + content + `"}}]}`))
+		_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":%q}}]}`, content)
 	}
 }
 
@@ -117,8 +121,10 @@ func TestComplete_SendsExpectedRequestShape(t *testing.T) {
 	if body["model"] != "gpt-4o-mini" {
 		t.Errorf("model: %v", body["model"])
 	}
-	if temp, ok := body["temperature"].(float64); !ok || temp != 0.2 {
-		t.Errorf("temperature: want 0.2 for review consistency, got %v", body["temperature"])
+	// float32 → JSON → float64 round-trip can drift in low bits; compare
+	// with tolerance instead of exact equality.
+	if temp, ok := body["temperature"].(float64); !ok || math.Abs(temp-0.2) > 1e-6 {
+		t.Errorf("temperature: want ~0.2 for review consistency, got %v", body["temperature"])
 	}
 	if _, present := body["response_format"]; present {
 		t.Error("response_format should be omitted when jsonMode=false")
@@ -241,13 +247,16 @@ func TestComplete_RespectsContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected context cancellation error")
 	}
-	if elapsed > 1*time.Second {
-		t.Errorf("Complete didn't honor ctx cancellation; took %v", elapsed)
+	// Tight enough to catch real cancellation regressions, loose enough
+	// to not flake on slow CI runners.
+	if elapsed > 300*time.Millisecond {
+		t.Errorf("Complete didn't honor ctx cancellation promptly; took %v", elapsed)
 	}
 }
 
 func TestComplete_NetworkErrorIncludesURL(t *testing.T) {
-	// Point at a definitely-closed port (port 1 is reserved/unused).
+	// Point at port 1 (tcpmux per IANA, but unbound on dev/CI hosts in
+	// practice). Connect should fail fast.
 	c := New("http://127.0.0.1:1", "sk-x", "gpt-4", 1)
 
 	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
