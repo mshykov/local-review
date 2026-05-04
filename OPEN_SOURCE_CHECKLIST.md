@@ -138,13 +138,10 @@ Go to **Settings** → **Actions** → **General**:
 **Structure**:
 ```
 docs/
-  architecture.md           # High-level design
-  multi-llm-architecture.md # v0.1 design doc (you already have this)
-  prompt-packs.md           # How to write prompt packs (you have this)
-  configuration.md          # Deep dive on .local-review.yml
-  api-reference.md          # If you add API mode
-  troubleshooting.md        # Common issues
-  development.md            # Dev environment setup (beyond CONTRIBUTING.md)
+  prompt-packs.md           # How to write/override prompt packs ✅ exists
+  configuration.md          # Deep dive on .local-review.yml (to add)
+  troubleshooting.md        # Common issues (to add)
+  development.md            # Dev environment setup (to add)
 ```
 
 **What goes in README.md**:
