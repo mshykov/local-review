@@ -78,7 +78,7 @@ Apply the default review rules. Plus: Rust-specific patterns to look for.
 ### Testing
 - **`#[test]` without `#[cfg(test)]`-gated helpers** — test-only code shipped in the binary.
 - **`unwrap()` in tests** — fine for setup, but use `expect("...")` to make failures readable.
-- **Async tests without `#[tokio::test]`** — runs but panics; or runs synchronously and skips the future.
+- **Async tests without an async test attribute** — `#[test] async fn …` is a compile error on stable Rust; require `#[tokio::test]`, `#[async_std::test]`, or the runtime-specific equivalent.
 - **Doctest examples that don't run** — `/// ```ignore` is a smell; either fix the example or document why it can't compile.
 - **Flaky tests with `thread::sleep`** — replace with explicit synchronization (channel, `Notify`).
 

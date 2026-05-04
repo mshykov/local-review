@@ -35,7 +35,10 @@ func TestAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) < 2 {
-		t.Errorf("expected at least default + one language pack, got %d: %v", len(ids), ids)
+	// Floor matches the current pack count (default + typescript + go +
+	// python + rust). Bump this when adding a pack so a regression that
+	// silently drops one is caught.
+	if len(ids) < 5 {
+		t.Errorf("expected ≥5 packs, got %d: %v", len(ids), ids)
 	}
 }
