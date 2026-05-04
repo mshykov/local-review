@@ -27,8 +27,14 @@ on:
         description: 'Explicit version tag (e.g. v0.1.5). Skips label detection.'
         required: true
 
+# Prevent concurrent releases from racing on the same semver computation.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   prepare:
@@ -46,18 +52,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MANUAL_VERSION: ${{ inputs.version }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
         run: |
           if [ -n "$MANUAL_VERSION" ]; then
+            # Validate version format before proceeding.
+            if ! echo "$MANUAL_VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "ERROR: version must match ^v[0-9]+\.[0-9]+\.[0-9]+$ (got: $MANUAL_VERSION)"
+              exit 1
+            fi
             echo "Manual dispatch: $MANUAL_VERSION"
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Find PR number from merge commit subject. Handles "(#123)" and
-          # "Merge pull request #123 from …" formats.
-          pr_number=$(git log -1 --pretty=%s | grep -oE '(Merge pull request #[0-9]+|\(#[0-9]+\))' | grep -oE '[0-9]+' | head -1 || echo "")
-          if [ -z "$pr_number" ]; then
-            echo "No PR number in merge commit — skipping release"
+          # Look up the PR via the GitHub API using the commit SHA. This works
+          # for all merge strategies (squash, merge commit, rebase) — unlike
+          # parsing the commit subject which only works for merge commits.
+          pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
+            --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
+            echo "No PR found for commit ${COMMIT_SHA} — skipping release"
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -77,6 +92,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MANUAL_VERSION: ${{ inputs.version }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
         run: |
           if [ -n "$MANUAL_VERSION" ]; then
             echo "version=$MANUAL_VERSION" >> "$GITHUB_OUTPUT"
@@ -87,7 +104,8 @@ jobs:
           version="${latest_tag#v}"
           IFS='.' read -r major minor patch <<< "$version"
 
-          pr_number=$(git log -1 --pretty=%s | grep -oE '(Merge pull request #[0-9]+|\(#[0-9]+\))' | grep -oE '[0-9]+' | head -1)
+          pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
+            --jq '.[0].number' 2>/dev/null || echo "")
           labels=$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || echo "")
 
           if echo "$labels" | grep -qxF "major"; then
@@ -175,8 +193,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$VERSION" -m "Release $VERSION"
-          git push origin "$VERSION"
+          # Idempotent: skip if the tag already exists on the remote.
+          if git ls-remote --tags origin "$VERSION" | grep -q "$VERSION"; then
+            echo "Tag $VERSION already exists — reusing"
+          else
+            git tag -a "$VERSION" -m "Release $VERSION"
+            git push origin "$VERSION"
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -237,6 +260,27 @@ jobs:
           # Sanity: version must have been updated
           if ! grep -q "version \"${version}\"" Formula/local-review.rb; then
             echo "ERROR: Formula version was not updated correctly!"
+            cat Formula/local-review.rb
+            exit 1
+          fi
+
+          # Guard: ensure all SHAs were computed before verifying the formula.
+          for sha_var in "$sha_darwin_amd64" "$sha_darwin_arm64" "$sha_linux_amd64" "$sha_linux_arm64"; do
+            if [ -z "$sha_var" ]; then
+              echo "ERROR: One or more SHA values are empty — aborting formula update!"
+              exit 1
+            fi
+          done
+
+          # Sanity: every computed SHA must appear in the updated formula.
+          all_ok=true
+          for sha_val in "$sha_darwin_amd64" "$sha_darwin_arm64" "$sha_linux_amd64" "$sha_linux_arm64"; do
+            if ! grep -qF "$sha_val" Formula/local-review.rb; then
+              echo "ERROR: SHA $sha_val is missing from Formula/local-review.rb after update!"
+              all_ok=false
+            fi
+          done
+          if [ "$all_ok" = "false" ]; then
             cat Formula/local-review.rb
             exit 1
           fi
