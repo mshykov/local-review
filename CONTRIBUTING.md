@@ -5,26 +5,29 @@ Thanks for considering a contribution. local-review is small on purpose — plea
 ## Layout
 
 ```
-cmd/local-review/        CLI entry point (cobra). Thin wrapper.
-  main.go          v0 commands: staged, commit, branch, config, version
-  multi.go         v0.1: multi-LLM review command
-  doctor.go        v0.1: check LLM installations
-  merge.go         v0.1: re-merge existing reviews
+cmd/local-review/  CLI entry point (cobra). Thin wrapper around internal/.
+  main.go          Root command + shared flag plumbing
+  staged|commit|branch  Defined inline in main.go
+  multi.go         Parallel multi-LLM review (`local-review multi …`)
+  doctor.go        Check LLM CLI installations + auth
+  init.go          Interactive .local-review.yml scaffolding wizard
+  config.go        Print resolved config (API keys masked)
+  version.go       Print version (set via -ldflags at build time)
 
 internal/
-  config/          YAML cascade loader (v0.1: extended with llms, merge, storage)
+  config/          YAML cascade loader (defaults → ~/.yml → ./.yml → flags)
   git/             Diff extraction (shells out to `git`)
   lang/            File-extension → language identifier
   llm/             OpenAI-compat HTTP client (no vendor SDKs)
-  cli/             v0.1: LLM CLI detection, installation, invocation
-  multi/           v0.1: Multi-LLM orchestration, merging, storage
-  prompts/         Embedded prompt packs (markdown files in packs/)
+  cli/             LLM CLI detection + invocation (claude, gemini, codex)
+  multi/           Multi-LLM orchestration, merging, storage
+  prompts/         Embedded prompt packs (`go:embed packs/*.md`)
   review/          Orchestration: diff → LLM → filtered findings
   output/          Terminal + JSON formatters
 
-.github/workflows/ CI + release pipelines
-examples/          Sample .local-review.yml + pre-commit hook
-docs/              Internals docs (prompt-pack authoring, multi-LLM architecture)
+.github/workflows/ CI + the consolidated release pipeline (release.yml)
+examples/          Sample configs (one per provider) + pre-commit hook
+docs/              Public docs (served via GitHub Pages)
 install.sh         One-line installer
 ```
 
@@ -36,19 +39,19 @@ cd local-review
 go test ./...
 go build -o local-review ./cmd/local-review
 
-# Test v0 single-LLM mode
+# Single-LLM mode (uses provider API)
 ./local-review staged
 
-# Test v0.1 multi-LLM mode (requires LLM CLIs installed)
+# Multi-LLM mode (uses installed LLM CLIs in parallel)
 ./local-review multi staged
 ./local-review doctor
 ```
 
 Required:
 - Go 1.23+
-- **v0.1+**: Node.js 20+ and npm (for LLM CLI testing)
+- Node.js 20+ and npm — only if you want to test the multi-LLM mode locally
 
-### v0.1 Development Setup
+### Multi-LLM development setup
 
 Install LLM CLIs for testing multi-LLM features:
 
