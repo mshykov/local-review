@@ -211,7 +211,10 @@ func TestInit_RefusesToOverwriteExisting(t *testing.T) {
 func TestInit_ForceOverwritesExisting(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, ".local-review.yml")
-	if err := os.WriteFile(target, []byte("# pre-existing\n"), 0o600); err != nil {
+	// Seed the existing file with broader perms so we actually exercise
+	// the post-write Chmod path (os.WriteFile alone doesn't tighten
+	// perms on overwrite).
+	if err := os.WriteFile(target, []byte("# pre-existing\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -232,6 +235,16 @@ func TestInit_ForceOverwritesExisting(t *testing.T) {
 	}
 	if !strings.Contains(string(got), `base_url: "https://api.openai.com/v1"`) {
 		t.Errorf("--force write produced unexpected content:\n%s", string(got))
+	}
+	// Regression: --force overwriting an existing file must lock the
+	// mode back to 0600. os.WriteFile alone won't do this — we Chmod
+	// explicitly in runInit.
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("file mode after --force overwrite: got %o, want 600", info.Mode().Perm())
 	}
 }
 
@@ -295,8 +308,10 @@ func TestResolveTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf(`resolveTarget("global"): %v`, err)
 	}
-	if !strings.HasSuffix(got, "/.local-review.yml") {
-		t.Errorf(`resolveTarget("global") = %q, want suffix "/.local-review.yml"`, got)
+	// Use filepath.Base so the assertion is portable: filepath.Join
+	// returns OS-specific separators (\\ on Windows, / on Unix).
+	if filepath.Base(got) != ".local-review.yml" {
+		t.Errorf(`resolveTarget("global") = %q, want basename ".local-review.yml"`, got)
 	}
 }
 

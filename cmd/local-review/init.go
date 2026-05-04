@@ -190,6 +190,12 @@ func runInit(out io.Writer, in io.Reader, target string, force bool) error {
 	if err := os.WriteFile(target, []byte(yml), 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", target, err)
 	}
+	// os.WriteFile only applies the mode on *create*; an existing
+	// .local-review.yml with broader perms keeps them. Lock to 0600
+	// explicitly so --force overwrites match the new-file behavior.
+	if err := os.Chmod(target, 0o600); err != nil {
+		return fmt.Errorf("chmod %s: %w", target, err)
+	}
 
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "✓ Wrote %s\n", target)
@@ -367,8 +373,13 @@ func renderConfig(baseURL, model, apiKeyEnv, minSeverity string, maxFindings int
 	fmt.Fprintln(&b, "review:")
 	fmt.Fprintf(&b, "  min_severity: %s\n", yamlScalar(minSeverity))
 	fmt.Fprintf(&b, "  max_findings: %d\n", maxFindings)
+	// Config slices are replaced wholesale by the cascade merge (see
+	// internal/config/config.go), so the wizard must reproduce the
+	// built-in defaults *plus* any additions. Built-in defaults today
+	// are: **/*.lock, **/*.snap, **/dist/**, **/build/**.
 	fmt.Fprintln(&b, "  exclude:")
 	fmt.Fprintln(&b, `    - "**/*.lock"`)
+	fmt.Fprintln(&b, `    - "**/*.snap"`)
 	fmt.Fprintln(&b, `    - "**/dist/**"`)
 	fmt.Fprintln(&b, `    - "**/build/**"`)
 	fmt.Fprintln(&b, `    - "**/node_modules/**"`)
