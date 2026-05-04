@@ -120,7 +120,7 @@ func Defaults() Config {
 				TimeoutSec: 120,
 			},
 			"codex": {
-				Enabled:    boolPtr(false), // Disabled: has usage limits, requires OpenAI Plus subscription
+				Enabled:    boolPtr(false), // Disabled: has usage limits, requires ChatGPT Plus subscription
 				Mode:       "cli",
 				CLIPath:    "codex",
 				Model:      "gpt-4",

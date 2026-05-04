@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-LLM Support**: Run code reviews in parallel with multiple AI models
   - Claude CLI integration (free tier available)
   - Gemini CLI integration (free API key required)
-  - Codex CLI integration (OpenAI Plus required, disabled by default)
+  - Codex CLI integration (ChatGPT Plus required, disabled by default)
 - **Multi-LLM Commands**:
   - `local-review multi staged` - Review staged changes with all enabled LLMs
   - `local-review multi commit [ref]` - Review a specific commit

@@ -1,13 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -24,7 +20,6 @@ It detects:
   - Claude CLI (claude)
   - Gemini CLI (gemini)
   - OpenAI Codex CLI (codex)
-  - GitHub CLI (gh) for Copilot
 
 For each CLI, it shows version and installation status.
 If any are missing, it provides installation instructions.`,
@@ -83,8 +78,6 @@ func getDisplayName(name string) string {
 		return "Gemini CLI"
 	case "codex":
 		return "Codex CLI"
-	case "gh":
-		return "Copilot CLI"
 	default:
 		return name
 	}
@@ -96,13 +89,11 @@ func printInstallInstructions(name string) {
 		fmt.Println("  Install: npm install -g @anthropic/claude-cli")
 		fmt.Println("  Auth:    claude login")
 	case "gemini":
-		fmt.Println("  Install: npm install -g @google/gemini-cli@0.40.0")
+		fmt.Println("  Install: npm install -g @google/gemini-cli")
 		fmt.Println("  Requires: Node.js 20+")
 	case "codex":
-		fmt.Println("  Install: npm install -g @openai/codex@0.128.0")
-	case "gh":
-		fmt.Println("  Install: brew install gh")
-		fmt.Println("  Auth:    gh auth login")
+		fmt.Println("  Install: npm install -g @openai/codex")
+		fmt.Println("  Note: requires a ChatGPT Plus subscription")
 	}
 }
 
@@ -132,35 +123,13 @@ func printAPIFallbackStatus() {
 		{"Claude", "ANTHROPIC_API_KEY"},
 		{"Gemini", "GEMINI_API_KEY"},
 		{"Codex", "OPENAI_API_KEY"},
-		{"Copilot", "GITHUB_TOKEN"},
 	}
 
 	for _, key := range apiKeys {
-		llm, envVar := key.Name, key.EnvVar
-
-		// Special case for Copilot - check gh auth status with timeout
-		if llm == "Copilot" {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			cmd := exec.CommandContext(ctx, "gh", "auth", "status")
-			cmd.Stdout = io.Discard // Suppress gh output
-			cmd.Stderr = io.Discard // Suppress gh output
-			err := cmd.Run()
-			cancel() // Explicitly cancel to avoid leak in loop
-
-			if err == nil {
-				fmt.Printf("✓ %-15s (gh auth configured)\n", llm)
-			} else if os.Getenv(envVar) != "" {
-				fmt.Printf("✓ %-15s (%s set)\n", llm, envVar)
-			} else {
-				fmt.Printf("✗ %-15s (not authenticated - run 'gh auth login')\n", llm)
-			}
-			continue
-		}
-
-		if os.Getenv(envVar) != "" {
-			fmt.Printf("✓ %-15s (%s set)\n", llm, envVar)
+		if os.Getenv(key.EnvVar) != "" {
+			fmt.Printf("✓ %-15s (%s set)\n", key.Name, key.EnvVar)
 		} else {
-			fmt.Printf("✗ %-15s (no API key)\n", llm)
+			fmt.Printf("✗ %-15s (no API key)\n", key.Name)
 		}
 	}
 
