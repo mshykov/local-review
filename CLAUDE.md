@@ -331,7 +331,7 @@ Glob filtering (include/exclude) uses a custom `**` glob matcher (review.go:matc
 - **No vendor SDKs** — internal/llm/ stays SDK-free to keep binary size down
 - **Standard Go** — gofmt -s + go vet
 - **Comment intent, not mechanics** — explain *why*, never *what*
-- **Tests required** — new logic needs a unit test (internal/llm/ is a known gap)
+- **Tests required** — new logic needs a unit test
 - **One-line doc comments** — exported functions/types only
 
 ## Pre-push Workflow (dogfooding)
