@@ -108,6 +108,13 @@ jobs:
             --jq '.[0].number' 2>/dev/null || echo "")
           labels=$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || echo "")
 
+          # Bump labels follow strict semver — see docs/RELEASE_PROCESS.md
+          # "Label cheat sheet" for when each is appropriate. Quick reminder:
+          #   major  = breaking changes (CLI flags removed, config schema rewrite)
+          #   minor  = new user-visible feature (new pack, new command, new flag)
+          #   patch  = bug fix, doc update, internal refactor, dep bump
+          # When in doubt, prefer patch — minor inflates expectations and
+          # burns version numbers fast in 0.x.
           if echo "$labels" | grep -qxF "major"; then
             major=$((major + 1)); minor=0; patch=0
           elif echo "$labels" | grep -qxF "minor"; then
