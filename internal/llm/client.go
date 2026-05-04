@@ -19,20 +19,26 @@ import (
 type Client struct {
 	BaseURL string
 	APIKey  string
-	Model   string
-	HTTP    *http.Client
+	// APIKeyEnv is the name of the env var the key was sourced from.
+	// Surfaced in the empty-key error so users see the right knob to set
+	// (their config may point at OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.,
+	// not the legacy LOCAL_REVIEW_API_KEY default).
+	APIKeyEnv string
+	Model     string
+	HTTP      *http.Client
 }
 
 // New returns a Client with a sensible default timeout.
-func New(baseURL, apiKey, model string, timeoutSec int) *Client {
+func New(baseURL, apiKey, apiKeyEnv, model string, timeoutSec int) *Client {
 	if timeoutSec <= 0 {
 		timeoutSec = 60
 	}
 	return &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
-		APIKey:  apiKey,
-		Model:   model,
-		HTTP:    &http.Client{Timeout: time.Duration(timeoutSec) * time.Second},
+		BaseURL:   strings.TrimRight(baseURL, "/"),
+		APIKey:    apiKey,
+		APIKeyEnv: apiKeyEnv,
+		Model:     model,
+		HTTP:      &http.Client{Timeout: time.Duration(timeoutSec) * time.Second},
 	}
 }
 
@@ -71,7 +77,11 @@ type response struct {
 // should still steer the model to JSON.
 func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (string, error) {
 	if c.APIKey == "" {
-		return "", fmt.Errorf("no API key configured (set LOCAL_REVIEW_API_KEY or provider.api_key)")
+		envName := c.APIKeyEnv
+		if envName == "" {
+			envName = "LOCAL_REVIEW_API_KEY"
+		}
+		return "", fmt.Errorf("no API key: $%s is empty\n         run `local-review init` to set up a provider, or `export %s=...`\n         or use `local-review multi <cmd>` if you have LLM CLIs installed (see `local-review doctor`)", envName, envName)
 	}
 
 	req := request{

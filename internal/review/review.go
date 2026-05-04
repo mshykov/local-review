@@ -24,7 +24,7 @@ type Reviewer struct {
 func New(cfg config.Config) *Reviewer {
 	return &Reviewer{
 		cfg:    cfg,
-		client: llm.New(cfg.Provider.BaseURL, cfg.Provider.APIKey, cfg.Provider.Model, cfg.Provider.TimeoutSec),
+		client: llm.New(cfg.Provider.BaseURL, cfg.Provider.APIKey, cfg.Provider.APIKeyEnv, cfg.Provider.Model, cfg.Provider.TimeoutSec),
 	}
 }
 

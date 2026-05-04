@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-05-05
+
+### Fixed
+- **Misleading "no API key" error.** Single-LLM commands (`local-review staged|commit|branch`) used to error with `set LOCAL_REVIEW_API_KEY or provider.api_key` regardless of what the user's actual config expected. Setting `OPENAI_API_KEY` (or whatever your `provider.api_key_env` names) and getting the same error anyway was a real first-run trap. The error now names the env var the resolved config is actually reading from, suggests `local-review init` to scaffold a config, and points at `local-review multi <cmd>` as an alternative for users who only have CLI auth (e.g., `claude login`) and no provider API key.
+
 ## [0.4.3] - 2026-05-04
 
 ### Fixed
