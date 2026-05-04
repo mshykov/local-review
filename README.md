@@ -53,8 +53,12 @@ go install github.com/mshykov/local-review/cmd/local-review@latest
 ## Quick start
 
 ```sh
-# Set an API key for whichever provider you choose.
-export LOCAL_REVIEW_API_KEY=sk-...
+# Interactive setup — picks a provider, writes .local-review.yml.
+local-review init
+
+# Set the API key for whichever provider you picked
+# (init tells you which env var to use).
+export OPENAI_API_KEY=sk-...
 
 # Review staged changes (this is the pre-commit hook flavour).
 local-review staged
@@ -198,6 +202,7 @@ local-review multi commit [<rev>]    # multi-LLM review of one commit
 local-review multi branch [<base>]   # multi-LLM review of branch
 
 # Utilities
+local-review init                    # interactive setup (writes .local-review.yml)
 local-review doctor                  # check LLM installations
 local-review config                  # print resolved config (API keys masked)
 local-review version                 # print version
