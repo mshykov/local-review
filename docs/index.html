@@ -14,8 +14,10 @@
   <meta name="twitter:title" content="local-review — Privacy-First Multi-LLM Code Reviews">
   <meta name="twitter:description" content="Run AI code reviews locally with Claude, Gemini, and Codex in parallel. Privacy-first, no telemetry, no SaaS. Free options available.">
   <meta name="twitter:image" content="https://mshykov.github.io/local-review/social-preview.png">
-  <link rel="icon" type="image/svg+xml" href="favicon.svg">
-  <link rel="alternate icon" href="favicon.ico">
+  <link rel="canonical" href="https://mshykov.github.io/local-review/">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg?v=2">
+  <link rel="alternate icon" href="favicon.ico?v=2">
+
   <style>
     * {
       box-sizing: border-box;
@@ -182,12 +184,31 @@
 
     pre {
       background: #1a202c;
-      padding: 20px 52px 20px 20px;
+      padding: 16px 44px 18px 16px;
       border-radius: 8px;
       overflow-x: auto;
       margin: 20px 0;
       border: 1px solid #4a5568;
       max-width: 100%;
+      /* Always-visible thin scrollbar so users know they can scroll */
+      scrollbar-width: thin;                  /* Firefox */
+      scrollbar-color: #718096 transparent;   /* Firefox */
+    }
+
+    pre::-webkit-scrollbar {
+      height: 8px;
+      -webkit-appearance: none;
+    }
+    pre::-webkit-scrollbar-track {
+      background: rgba(255,255,255,0.05);
+      border-radius: 4px;
+    }
+    pre::-webkit-scrollbar-thumb {
+      background: #718096;
+      border-radius: 4px;
+    }
+    pre::-webkit-scrollbar-thumb:hover {
+      background: #a0aec0;
     }
 
     code {
@@ -196,15 +217,16 @@
       color: #68d391;
     }
 
+    /* Compact GitHub-style copy button — same size on mobile and desktop */
     .copy-btn {
       position: absolute;
-      top: 10px;
-      right: 10px;
-      background: rgba(255,255,255,0.08);
+      top: 8px;
+      right: 8px;
+      background: transparent;
       border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 6px;
-      width: 34px;
-      height: 34px;
+      border-radius: 4px;
+      width: 28px;
+      height: 28px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -215,13 +237,14 @@
     }
 
     .copy-btn:hover {
-      background: rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.12);
       color: #e2e8f0;
+      border-color: rgba(255,255,255,0.3);
     }
 
     .copy-btn svg {
-      width: 16px;
-      height: 16px;
+      width: 14px;
+      height: 14px;
       stroke: currentColor;
       fill: none;
       stroke-width: 1.5;
@@ -234,11 +257,6 @@
     .copy-btn[data-copied] .icon-copy  { display: none; }
     .copy-btn[data-copied] .icon-check { display: block; }
     .copy-btn[data-copied] { color: #68d391; border-color: #68d391; }
-
-    @media (max-width: 768px) {
-      .copy-btn { width: 44px; height: 44px; top: 6px; right: 6px; border-radius: 6px; }
-      .copy-btn svg { width: 18px; height: 18px; }
-    }
 
     .install-options {
       display: grid;
@@ -403,7 +421,7 @@
       .install-options { max-width: 100%; margin-left: 0; margin-right: 0; }
       .install-card { padding: 16px; overflow: hidden; }
       .install-card h3 { font-size: 1em; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-      pre { font-size: 0.82em; padding: 12px 44px 12px 12px; }
+      pre { font-size: 0.82em; padding: 14px 40px 14px 14px; }
     }
   </style>
 </head>
@@ -616,14 +634,20 @@ export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey</c
       <p style="margin-top: 8px; opacity: 0.5; font-size: 0.82em;">v0.1.1 &mdash; May 2026</p>
     </div>
   </footer>
+  <div id="copy-live" role="status" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap"></div>
   <script>
     const copyTimers = new WeakMap();
+    const copyLive = document.getElementById('copy-live');
 
     function showCopied(btn) {
       if (copyTimers.has(btn)) clearTimeout(copyTimers.get(btn));
       btn.setAttribute('data-copied', '');
+      btn.setAttribute('aria-label', 'Copied!');
+      copyLive.textContent = 'Copied to clipboard';
       copyTimers.set(btn, setTimeout(() => {
         btn.removeAttribute('data-copied');
+        btn.setAttribute('aria-label', 'Copy to clipboard');
+        copyLive.textContent = '';
         copyTimers.delete(btn);
       }, 2000));
     }

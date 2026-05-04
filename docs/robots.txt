@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://mshykov.github.io/local-review/sitemap.xml

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <rect width="1024" height="1024" rx="220" fill="#f0faf0"/>
-  <title>Geometric chestnut leaf</title>
-  <desc>Stylized chestnut leaf composed of stacked outlined trapezoid bands.</desc>
-  <g fill="#4F8A2C" stroke="#254C15" stroke-width="6" stroke-linejoin="miter" stroke-linecap="butt">
+  <title>local-review</title>
+  <desc>Stylized chestnut leaf — local-review favicon.</desc>
+  <rect width="1024" height="1024" rx="220" fill="#1b4332"/>
+  <g fill="#ffffff" stroke="#0d2a1f" stroke-width="6" stroke-linejoin="miter" stroke-linecap="butt">
     <polygon points="511.0,136.0 629.0,182.0 393.0,182.0"/>
     <polygon points="403.0,182.0 619.0,182.0 701.0,243.0 321.0,243.0"/>
     <polygon points="331.0,243.0 691.0,243.0 747.0,305.0 275.0,305.0"/>
@@ -16,6 +16,6 @@
     <polygon points="403.0,676.0 619.0,676.0 571.0,738.0 451.0,738.0"/>
     <polygon points="461.0,738.0 561.0,738.0 511.0,777.0"/>
   </g>
-  <line x1="511" y1="136" x2="511" y2="777" stroke="#254C15" stroke-width="6"/>
-  <rect x="503" y="777" width="16" height="182" fill="#2A5818" stroke="#254C15" stroke-width="4"/>
+  <line x1="511" y1="136" x2="511" y2="777" stroke="#0d2a1f" stroke-width="8"/>
+  <rect x="503" y="777" width="16" height="160" fill="#52b788" stroke="#0d2a1f" stroke-width="4"/>
 </svg>
