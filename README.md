@@ -19,7 +19,7 @@
 <p align="center">
   <a href="#install">Install</a> •
   <a href="#quick-start">Quick Start</a> •
-  <a href="#v01-multi-llm-reviews">Multi-LLM</a> •
+  <a href="#multi-llm-reviews">Multi-LLM</a> •
   <a href="https://mshykov.github.io/local-review">Website</a>
 </p>
 
@@ -72,7 +72,7 @@ local-review branch main
 
 By default, local-review shows `warning`+ findings and exits non-zero when `major`/`critical` are present (so it can gate a pre-commit hook).
 
-## v0.1: Multi-LLM Reviews
+## Multi-LLM Reviews
 
 **Run parallel reviews with multiple AI models simultaneously:**
 
@@ -167,15 +167,17 @@ local-review speaks the OpenAI chat-completions API — every major provider sup
 
 | Provider | `base_url` | Notes |
 |---|---|---|
-| OpenAI | `https://api.openai.com/v1` | Default |
-| Anthropic | `https://api.anthropic.com/v1` | Use chat-completions, not messages |
-| Mistral | `https://api.mistral.ai/v1` | EU-hosted; Codestral is code-tuned. See [`examples/.local-review.mistral.yml`](examples/.local-review.mistral.yml) |
-| DeepSeek | `https://api.deepseek.com/v1` | Cheapest option; DeepSeek-R1 reasons well. See [`examples/.local-review.deepseek.yml`](examples/.local-review.deepseek.yml) |
-| Groq | `https://api.groq.com/openai/v1` | Fast |
-| Together | `https://api.together.xyz/v1` | Llama, Mixtral, etc. |
-| OpenRouter | `https://openrouter.ai/api/v1` | One key, all models |
+| OpenAI | `https://api.openai.com/v1` | Default. `gpt-4o-mini` is cheap; `gpt-4o` for harder reviews. |
+| Anthropic | `https://api.anthropic.com/v1` | Anthropic's [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk). Use exact model names (e.g. `claude-sonnet-4-5`). |
+| Mistral | `https://api.mistral.ai/v1` | EU-hosted; Codestral is code-tuned. See [`examples/.local-review.mistral.yml`](examples/.local-review.mistral.yml). |
+| DeepSeek | `https://api.deepseek.com/v1` | Cheapest cloud option. See [`examples/.local-review.deepseek.yml`](examples/.local-review.deepseek.yml). |
+| Groq | `https://api.groq.com/openai/v1` | Fast inference; Llama, Qwen, etc. |
+| Together | `https://api.together.xyz/v1` | Llama, Mixtral, Qwen — many open-weights options. |
+| OpenRouter | `https://openrouter.ai/api/v1` | One key, all models. |
 | Ollama | `http://localhost:11434/v1` | **Fully offline.** No data leaves your machine. |
-| vLLM | `http://your-host/v1` | Self-hosted |
+| vLLM | `http://your-host/v1` | Self-hosted. |
+
+The fastest way to set any of these up is `local-review init`, which writes a working `.local-review.yml` from a preset.
 
 ## Pre-commit hook
 
@@ -191,12 +193,12 @@ Bypass for emergencies: `LOCAL_REVIEW_SKIP=1 git commit ...`.
 ## CLI
 
 ```
-# v0 Single-LLM mode
+# Single-LLM mode (uses provider API)
 local-review staged                  # review git diff --cached (pre-commit)
 local-review commit [<rev>]          # review one commit (default: HEAD)
 local-review branch [<base>]         # review branch vs base (default: main)
 
-# v0.1 Multi-LLM mode
+# Multi-LLM mode (runs installed LLM CLIs in parallel, merges findings)
 local-review multi staged            # parallel review with all enabled LLMs
 local-review multi commit [<rev>]    # multi-LLM review of one commit
 local-review multi branch [<base>]   # multi-LLM review of branch
