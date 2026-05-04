@@ -8,11 +8,16 @@ import (
 
 // LLM represents a detected CLI tool with its metadata.
 type LLM struct {
-	Name       string // "claude", "gemini", "codex"
-	Path       string // full path to the binary (e.g., "/usr/local/bin/claude")
-	Version    string // version string (e.g., "2.1.0")
-	Available  bool   // true if CLI is found in PATH
-	TimeoutSec int    // timeout in seconds for this LLM (from config)
+	Name    string // "claude", "gemini", "codex"
+	Path    string // full path to the binary (e.g., "/usr/local/bin/claude")
+	Version string // version string (e.g., "2.1.0"), or "unknown" if version probe failed
+	// Available is true only when both the binary is in PATH AND the
+	// `--version` probe returned a parseable string. A binary that
+	// resolves but whose version probe fails (broken symlink, corrupted
+	// install, missing runtime) is reported Available=false so callers
+	// don't try to invoke an unusable tool.
+	Available  bool
+	TimeoutSec int // timeout in seconds for this LLM (from config)
 }
 
 // DetectAll checks for all supported LLM CLIs and returns their status.
@@ -44,7 +49,8 @@ func DetectAll() []LLM {
 }
 
 // Detect checks if a specific LLM CLI is installed and returns its metadata.
-// If the CLI is not found, Available will be false.
+// Available is true only if the binary is found AND its version probe
+// succeeded; see the LLM.Available field doc for the precise contract.
 func Detect(name string) LLM {
 	return detectWithBinary(name, name)
 }

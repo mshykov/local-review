@@ -106,9 +106,13 @@ local-review multi staged --merge-with claude
 local-review staged
 
 # Utilities
+local-review init                # interactive setup wizard (writes .local-review.yml)
 local-review doctor              # check LLM installations, auth status
-local-review multi abc123        # re-merge existing reviews
+local-review config              # print resolved config (API keys masked)
+local-review version             # print version
 ```
+
+There is no standalone "re-merge" command — the merge step runs as part of `local-review multi <subcommand>`. To re-run the merge against an existing commit, re-run `local-review multi commit <ref>`.
 
 ## Development Commands
 

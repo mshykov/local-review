@@ -60,14 +60,32 @@ func (s Severity) MarshalJSON() ([]byte, error) {
 	return json.Marshal(s.String())
 }
 
-// UnmarshalJSON accepts the string form produced by MarshalJSON and
-// round-trips through ParseSeverity.
+// UnmarshalJSON accepts both the string form ("major") produced by
+// MarshalJSON and the legacy numeric form (3) that earlier --json
+// output emitted before MarshalJSON existed. The numeric form is
+// supported for backward compatibility with persisted output and
+// resilience against an LLM that emits a number by mistake.
 func (s *Severity) UnmarshalJSON(data []byte) error {
+	// Try string first (the MarshalJSON-produced form, the common case).
 	var str string
-	if err := json.Unmarshal(data, &str); err != nil {
-		return err
+	if err := json.Unmarshal(data, &str); err == nil {
+		*s = ParseSeverity(str)
+		return nil
 	}
-	*s = ParseSeverity(str)
+	// Fall back to numeric. Out-of-range values clamp to the nearest
+	// defined tier so unknown integers don't crash decoders.
+	var n int
+	if err := json.Unmarshal(data, &n); err != nil {
+		return fmt.Errorf("severity must be a string or number, got %s", string(data))
+	}
+	switch {
+	case n < int(SeverityNit):
+		*s = SeverityNit
+	case n > int(SeverityCritical):
+		*s = SeverityCritical
+	default:
+		*s = Severity(n)
+	}
 	return nil
 }
 

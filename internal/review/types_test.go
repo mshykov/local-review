@@ -43,6 +43,62 @@ func TestSeverityUnmarshalUnknown(t *testing.T) {
 	}
 }
 
+func TestSeverityUnmarshalNumericLegacy(t *testing.T) {
+	// Backward compat: pre-MarshalJSON --json output and any consumer
+	// re-emitting numeric severity must still decode cleanly.
+	cases := []struct {
+		in   string
+		want Severity
+	}{
+		{"0", SeverityNit},
+		{"1", SeverityInfo},
+		{"2", SeverityWarning},
+		{"3", SeverityMajor},
+		{"4", SeverityCritical},
+	}
+	for _, tc := range cases {
+		var got Severity
+		if err := json.Unmarshal([]byte(tc.in), &got); err != nil {
+			t.Errorf("unmarshal %s: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("unmarshal %s = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSeverityUnmarshalNumericOutOfRangeClamps(t *testing.T) {
+	// Out-of-range integers clamp to nearest tier rather than producing
+	// garbage values that would later break severity comparisons.
+	tests := []struct {
+		in   string
+		want Severity
+	}{
+		{"-5", SeverityNit},
+		{"99", SeverityCritical},
+	}
+	for _, tc := range tests {
+		var got Severity
+		if err := json.Unmarshal([]byte(tc.in), &got); err != nil {
+			t.Errorf("unmarshal %s: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("unmarshal %s = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestSeverityUnmarshalRejectsGarbage(t *testing.T) {
+	// Anything that's neither a string nor a number should fail loudly.
+	var got Severity
+	err := json.Unmarshal([]byte(`{"oh": "no"}`), &got)
+	if err == nil {
+		t.Errorf("expected error for object input, got %v", got)
+	}
+}
+
 func TestFindingJSONUsesSeverityString(t *testing.T) {
 	f := Finding{File: "a.go", Severity: SeverityMajor, Title: "t", Body: "b"}
 	data, err := json.Marshal(f)
