@@ -67,10 +67,10 @@ var providerPresets = []providerPreset{
 	{
 		label:       "Anthropic (Claude)",
 		baseURL:     "https://api.anthropic.com/v1",
-		defaultMdl:  "claude-sonnet-4-5",
+		defaultMdl:  "claude-sonnet-4-6",
 		apiKeyEnv:   "ANTHROPIC_API_KEY",
 		requiresKey: true,
-		note:        "Uses Anthropic's OpenAI-compatible chat-completions endpoint. Model name must be exact (e.g. claude-sonnet-4-5, claude-opus-4-5) — a wrong name returns 404.",
+		note:        "Uses Anthropic's OpenAI-compatible chat-completions endpoint. Model name must be exact (e.g. claude-sonnet-4-6, claude-opus-4-7) — a wrong name returns 404.",
 	},
 	{
 		label:       "Mistral (EU-hosted)",

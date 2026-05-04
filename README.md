@@ -168,7 +168,7 @@ local-review speaks the OpenAI chat-completions API — every major provider sup
 | Provider | `base_url` | Notes |
 |---|---|---|
 | OpenAI | `https://api.openai.com/v1` | Default. `gpt-4o-mini` is cheap; `gpt-4o` for harder reviews. |
-| Anthropic | `https://api.anthropic.com/v1` | Anthropic's [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk). Use exact model names (e.g. `claude-sonnet-4-5`). |
+| Anthropic | `https://api.anthropic.com/v1` | Anthropic's [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk). Use exact model names (e.g. `claude-sonnet-4-6`, `claude-opus-4-7`). |
 | Mistral | `https://api.mistral.ai/v1` | EU-hosted; Codestral is code-tuned. See [`examples/.local-review.mistral.yml`](examples/.local-review.mistral.yml). |
 | DeepSeek | `https://api.deepseek.com/v1` | Cheapest cloud option. See [`examples/.local-review.deepseek.yml`](examples/.local-review.deepseek.yml). |
 | Groq | `https://api.groq.com/openai/v1` | Fast inference; Llama, Qwen, etc. |
