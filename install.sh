@@ -64,9 +64,32 @@ echo
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *)
-    echo "Note: ${INSTALL_DIR} is not on your PATH."
-    echo "Add to your shell rc:"
-    echo "    export PATH=\"\$PATH:${INSTALL_DIR}\""
+    shell_rc=""
+    case "${SHELL:-}" in
+      */zsh)  shell_rc="$HOME/.zshrc" ;;
+      */bash)
+        # macOS bash uses ~/.bash_profile by convention; Linux uses ~/.bashrc
+        if [ "$(uname -s)" = "Darwin" ]; then
+          shell_rc="$HOME/.bash_profile"
+        else
+          shell_rc="$HOME/.bashrc"
+        fi
+        ;;
+      */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
+    esac
+
+    echo "⚠️  ${INSTALL_DIR} is not on your PATH — local-review won't be found until you fix that."
+    echo
+    echo "Run this one-liner to fix it now:"
+    echo
+    if [ "${shell_rc##*/}" = "config.fish" ]; then
+      echo "    fish_add_path \"${INSTALL_DIR}\""
+    elif [ -n "$shell_rc" ]; then
+      echo "    echo 'export PATH=\"\$PATH:${INSTALL_DIR}\"' >> \"${shell_rc}\" && source \"${shell_rc}\""
+    else
+      echo "    export PATH=\"\$PATH:${INSTALL_DIR}\"   # then add this line to your shell rc"
+    fi
+    echo
     ;;
 esac
 
