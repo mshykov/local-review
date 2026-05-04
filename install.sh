@@ -83,9 +83,9 @@ case ":$PATH:" in
     echo "Run this one-liner to fix it now:"
     echo
     if [ "${shell_rc##*/}" = "config.fish" ]; then
-      echo "    fish_add_path ${INSTALL_DIR}"
+      echo "    fish_add_path \"${INSTALL_DIR}\""
     elif [ -n "$shell_rc" ]; then
-      echo "    echo 'export PATH=\"\$PATH:${INSTALL_DIR}\"' >> ${shell_rc} && source ${shell_rc}"
+      echo "    echo 'export PATH=\"\$PATH:${INSTALL_DIR}\"' >> \"${shell_rc}\" && source \"${shell_rc}\""
     else
       echo "    export PATH=\"\$PATH:${INSTALL_DIR}\"   # then add this line to your shell rc"
     fi
