@@ -50,8 +50,9 @@ func TestInit_OpenAIDefaultPath(t *testing.T) {
 }
 
 func TestInit_OllamaSkipsAPIKeyEnv(t *testing.T) {
-	// Choice 5 = Ollama. Then accept defaults, confirm write.
-	input := "5\n\n\n\ny\n"
+	// Choice 4 = Ollama (preset list: OpenAI, Mistral, DeepSeek, Ollama, Other).
+	// Then accept defaults, confirm write.
+	input := "4\n\n\n\ny\n"
 	stdout, content, _, err := runInitTo(t, input, false)
 	if err != nil {
 		t.Fatalf("init failed: %v\nstdout:\n%s", err, stdout)
@@ -68,8 +69,8 @@ func TestInit_OllamaSkipsAPIKeyEnv(t *testing.T) {
 }
 
 func TestInit_CustomProviderRequiresBaseURL(t *testing.T) {
-	// Choice 6 = Other; then leave base URL blank.
-	input := "6\n\n"
+	// Choice 5 = Other; then leave base URL blank.
+	input := "5\n\n"
 	_, _, _, err := runInitTo(t, input, false)
 	if err == nil || !strings.Contains(err.Error(), "base URL is required") {
 		t.Errorf("expected base-URL-required error, got: %v", err)
@@ -163,6 +164,33 @@ func TestInit_ForceOverwritesExisting(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "base_url: https://api.openai.com/v1") {
 		t.Errorf("--force write produced unexpected content:\n%s", string(got))
+	}
+}
+
+func TestInit_ForceWithoutExistingFileWritesNormally(t *testing.T) {
+	// --force should be a no-op when there's nothing to overwrite.
+	dir := t.TempDir()
+	target := filepath.Join(dir, ".local-review.yml")
+	input := "1\n\n\n\n\ny\n"
+	out := &bytes.Buffer{}
+	in := strings.NewReader(input)
+	if err := runInit(out, in, target, true); err != nil {
+		t.Fatalf("init with --force on non-existent file failed: %v\n%s", err, out.String())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || !strings.Contains(string(got), "base_url: https://api.openai.com/v1") {
+		t.Errorf("expected fresh OpenAI config, got err=%v\ncontent=%s", err, got)
+	}
+}
+
+func TestInit_RefusesIfTargetIsDirectory(t *testing.T) {
+	// If the target path resolves to an existing directory, the wizard
+	// should fail loudly rather than try to write through it.
+	dir := t.TempDir()
+	if err := runInit(&bytes.Buffer{}, strings.NewReader(""), dir, false); err == nil {
+		t.Errorf("expected refusal when target is a directory, got nil")
+	} else if !strings.Contains(err.Error(), "is a directory") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

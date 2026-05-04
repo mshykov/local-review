@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -25,8 +26,8 @@ func initCmd() *cobra.Command {
 .local-review.yml file. Pick a provider, give it your API key env var name,
 and you're reviewing.
 
-By default the config goes in the current directory; pass --global to
-write ~/.local-review.yml instead.`,
+By default the config goes in the current directory; pass
+--location=global to write ~/.local-review.yml instead.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target, err := resolveTarget(location)
@@ -62,14 +63,6 @@ var providerPresets = []providerPreset{
 		apiKeyEnv:   "OPENAI_API_KEY",
 		requiresKey: true,
 		note:        "Cheap default: gpt-4o-mini. Bump to gpt-4o for harder reviews.",
-	},
-	{
-		label:       "Anthropic (Claude)",
-		baseURL:     "https://api.anthropic.com/v1",
-		defaultMdl:  "claude-3-5-sonnet-20241022",
-		apiKeyEnv:   "ANTHROPIC_API_KEY",
-		requiresKey: true,
-		note:        "Uses Anthropic's chat-completions-compatible endpoint, not /v1/messages.",
 	},
 	{
 		label:       "Mistral (EU-hosted)",
@@ -108,15 +101,20 @@ var providerPresets = []providerPreset{
 func runInit(out io.Writer, in io.Reader, target string, force bool) error {
 	r := bufio.NewReader(in)
 
-	if _, err := os.Stat(target); err == nil && !force {
-		fmt.Fprintf(out, "%s already exists.\n", target)
-		yn, err := promptString(out, r, "Overwrite?", "n")
-		if err != nil {
-			return err
+	if info, err := os.Stat(target); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("%s is a directory; refusing to overwrite", target)
 		}
-		if !isYes(yn) {
-			fmt.Fprintln(out, "Aborted; no changes made.")
-			return nil
+		if !force {
+			fmt.Fprintf(out, "%s already exists.\n", target)
+			yn, err := promptString(out, r, "Overwrite?", "n")
+			if err != nil {
+				return err
+			}
+			if !isYes(yn) {
+				fmt.Fprintln(out, "Aborted; no changes made.")
+				return nil
+			}
 		}
 	}
 
@@ -155,7 +153,7 @@ func runInit(out io.Writer, in io.Reader, target string, force bool) error {
 		}
 	}
 
-	minSeverity, err := promptChoice(out, r, "Minimum severity to show", []string{"info", "warning", "major", "critical"}, 1)
+	minSeverity, err := promptChoice(out, r, "Minimum severity to show", []string{"nit", "info", "warning", "major", "critical"}, 2)
 	if err != nil {
 		return err
 	}
@@ -208,7 +206,7 @@ func resolveTarget(location string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolve home dir: %w", err)
 		}
-		return home + "/.local-review.yml", nil
+		return filepath.Join(home, ".local-review.yml"), nil
 	default:
 		return "", fmt.Errorf(`--location must be "local" or "global", got %q`, location)
 	}
