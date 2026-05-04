@@ -29,7 +29,7 @@ Key constraints:
 **Supported LLM CLIs**
 1. **Claude CLI** — `npm install -g @anthropic-ai/claude-code` (auth: `claude login`)
 2. **Gemini CLI** — `npm install -g @google/gemini-cli` (requires Node.js 20+)
-3. **OpenAI Codex CLI** — `npm install -g @openai/codex` (requires ChatGPT Plus subscription)
+3. **OpenAI Codex CLI** — `npm install -g @openai/codex` (auth via `codex login` with ChatGPT Plus, or `OPENAI_API_KEY` env var pay-per-token — usually cheaper for occasional use)
 
 **CLI Invocation Patterns**
 - Codex: `codex review --commit <sha>`
