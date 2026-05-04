@@ -17,7 +17,7 @@
   <link rel="canonical" href="https://mshykov.github.io/local-review/">
   <link rel="icon" type="image/svg+xml" href="favicon.svg?v=2">
   <link rel="alternate icon" href="favicon.ico?v=2">
-  <link rel="sitemap" type="application/xml" href="sitemap.xml">
+
   <style>
     * {
       box-sizing: border-box;
@@ -635,14 +635,20 @@ export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey</c
       <p style="margin-top: 8px; opacity: 0.5; font-size: 0.82em;">v0.1.0 &mdash; May 2026</p>
     </div>
   </footer>
+  <div id="copy-live" role="status" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap"></div>
   <script>
     const copyTimers = new WeakMap();
+    const copyLive = document.getElementById('copy-live');
 
     function showCopied(btn) {
       if (copyTimers.has(btn)) clearTimeout(copyTimers.get(btn));
       btn.setAttribute('data-copied', '');
+      btn.setAttribute('aria-label', 'Copied!');
+      copyLive.textContent = 'Copied to clipboard';
       copyTimers.set(btn, setTimeout(() => {
         btn.removeAttribute('data-copied');
+        btn.setAttribute('aria-label', 'Copy to clipboard');
+        copyLive.textContent = '';
         copyTimers.delete(btn);
       }, 2000));
     }
