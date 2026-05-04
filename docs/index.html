@@ -545,54 +545,39 @@
         <div class="qs-step">
           <div class="qs-step-num">1</div>
           <div class="qs-step-body">
-            <p>Install local-review</p>
+            <p>Install</p>
             <div class="code-wrapper">
               <button type="button" class="copy-btn" aria-label="Copy to clipboard">
                 <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
               </button>
-              <pre><code>curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh</code></pre>
+              <pre><code>brew install mshykov/tap/local-review</code></pre>
             </div>
           </div>
         </div>
         <div class="qs-step">
           <div class="qs-step-num">2</div>
           <div class="qs-step-body">
-            <p>Install free LLM CLIs</p>
+            <p>Set up — picks a provider, writes <code style="color:#a0aec0;font-size:0.92em;">.local-review.yml</code></p>
             <div class="code-wrapper">
               <button type="button" class="copy-btn" aria-label="Copy to clipboard">
                 <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
               </button>
-              <pre><code>npm install -g @anthropic/claude-cli
-npm install -g @google/gemini-cli</code></pre>
+              <pre><code>local-review init</code></pre>
             </div>
           </div>
         </div>
         <div class="qs-step">
           <div class="qs-step-num">3</div>
           <div class="qs-step-body">
-            <p>Authenticate</p>
+            <p>Review staged changes (<code style="color:#a0aec0;font-size:0.92em;">init</code> tells you which env var to export first)</p>
             <div class="code-wrapper">
               <button type="button" class="copy-btn" aria-label="Copy to clipboard">
                 <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                 <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
               </button>
-              <pre><code>claude login
-export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey</code></pre>
-            </div>
-          </div>
-        </div>
-        <div class="qs-step">
-          <div class="qs-step-num">4</div>
-          <div class="qs-step-body">
-            <p>Run your first review</p>
-            <div class="code-wrapper">
-              <button type="button" class="copy-btn" aria-label="Copy to clipboard">
-                <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
-              </button>
-              <pre><code>local-review multi staged</code></pre>
+              <pre><code>local-review staged</code></pre>
             </div>
           </div>
         </div>
@@ -606,7 +591,7 @@ export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey</c
       <div class="llm-support">
         <div class="llm-card free">
           <h3>Claude</h3>
-          <p>Free tier via claude.ai</p>
+          <p>Free tier via the Claude CLI</p>
           <span class="badge badge-free">✓ FREE</span>
           <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Default enabled</p>
         </div>
