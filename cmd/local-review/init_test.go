@@ -55,10 +55,27 @@ func TestInit_OpenAIDefaultPath(t *testing.T) {
 	}
 }
 
+func TestInit_AnthropicPreset(t *testing.T) {
+	// Choice 2 = Anthropic. Then accept defaults, confirm write.
+	input := "2\n\n\n\n\ny\n"
+	stdout, content, _, err := runInitTo(t, input, false)
+	if err != nil {
+		t.Fatalf("init failed: %v\nstdout:\n%s", err, stdout)
+	}
+	for _, want := range []string{
+		`base_url: "https://api.anthropic.com/v1"`,
+		`api_key_env: "ANTHROPIC_API_KEY"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Anthropic config missing %q\nfull config:\n%s", want, content)
+		}
+	}
+}
+
 func TestInit_OllamaSkipsAPIKeyEnv(t *testing.T) {
-	// Choice 4 = Ollama (preset list: OpenAI, Mistral, DeepSeek, Ollama, Other).
+	// Choice 5 = Ollama (preset list: OpenAI, Anthropic, Mistral, DeepSeek, Ollama, Other).
 	// Then accept defaults, confirm write.
-	input := "4\n\n\n\ny\n"
+	input := "5\n\n\n\ny\n"
 	stdout, content, _, err := runInitTo(t, input, false)
 	if err != nil {
 		t.Fatalf("init failed: %v\nstdout:\n%s", err, stdout)
@@ -75,9 +92,9 @@ func TestInit_OllamaSkipsAPIKeyEnv(t *testing.T) {
 }
 
 func TestInit_CustomProviderRePromptsForBaseURL(t *testing.T) {
-	// Choice 5 = Other; first base URL blank (re-prompt), then valid URL.
+	// Choice 6 = Other; first base URL blank (re-prompt), then valid URL.
 	// Then accept default model, env var, severity, max-findings, confirm.
-	input := "5\n\nhttps://my-llm.example.com/v1\n\n\n\n\ny\n"
+	input := "6\n\nhttps://my-llm.example.com/v1\n\n\n\n\ny\n"
 	stdout, content, _, err := runInitTo(t, input, false)
 	if err != nil {
 		t.Fatalf("expected re-prompt to recover, got: %v\nstdout:\n%s", err, stdout)
@@ -91,8 +108,8 @@ func TestInit_CustomProviderRePromptsForBaseURL(t *testing.T) {
 }
 
 func TestInit_CustomProviderGivesUpOnRepeatedBlankBaseURL(t *testing.T) {
-	// Five blank answers in a row should give up gracefully.
-	input := "5\n" + strings.Repeat("\n", 6)
+	// Choice 6 = Other. Five blank answers in a row should give up gracefully.
+	input := "6\n" + strings.Repeat("\n", 6)
 	_, _, _, err := runInitTo(t, input, false)
 	if err == nil || !strings.Contains(err.Error(), "too many empty answers") {
 		t.Errorf("expected give-up error after max empty answers, got: %v", err)

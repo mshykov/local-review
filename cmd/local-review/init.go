@@ -65,6 +65,14 @@ var providerPresets = []providerPreset{
 		note:        "Cheap default: gpt-4o-mini. Bump to gpt-4o for harder reviews.",
 	},
 	{
+		label:       "Anthropic (Claude)",
+		baseURL:     "https://api.anthropic.com/v1",
+		defaultMdl:  "claude-sonnet-4-5",
+		apiKeyEnv:   "ANTHROPIC_API_KEY",
+		requiresKey: true,
+		note:        "Uses Anthropic's OpenAI-compatible chat-completions endpoint. Model name must be exact (e.g. claude-sonnet-4-5, claude-opus-4-5) — a wrong name returns 404.",
+	},
+	{
 		label:       "Mistral (EU-hosted)",
 		baseURL:     "https://api.mistral.ai/v1",
 		defaultMdl:  "codestral-latest",
