@@ -23,7 +23,7 @@ func multiCmd(sf *sharedFlags) *cobra.Command {
 		Long: `Multi runs code reviews in parallel using multiple AI models.
 
 This command:
-1. Detects installed LLM CLIs (claude, gemini, codex, gh copilot)
+1. Detects installed LLM CLIs (claude, gemini, codex)
 2. Runs reviews in parallel using enabled LLMs
 3. Saves each review to .local-review/reviews/<branch>/<commit>_<llm>.md
 4. (Future) Merges findings into a consolidated report
@@ -344,7 +344,7 @@ func buildMetadata(commit, branch string, results []multi.ReviewResult, startTim
 }
 
 // selectMergeLLM selects which LLM to use for merging reviews.
-// Priority: preferred config > auto (claude > codex > gemini > copilot) > first successful
+// Priority: preferred config > auto (claude > codex > gemini) > first successful
 func selectMergeLLM(results []multi.ReviewResult, availableLLMs []cli.LLM, preferred string) *cli.LLM {
 	// Build map of successful LLMs
 	successfulMap := make(map[string]cli.LLM)

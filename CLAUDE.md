@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 local-review is a local, BYOK (Bring Your Own Key) AI code reviewer. It's a single Go binary that:
 - Runs against git diffs (staged changes, commits, or branches)
-- **v0.1+**: Supports multi-LLM parallel reviews (Claude, GPT/Codex, Gemini, Copilot)
+- **v0.1+**: Supports multi-LLM parallel reviews (Claude, Gemini, Codex)
 - **v0**: Single-LLM via OpenAI-compatible API endpoints
 - Saves reviews to local storage and merges findings intelligently
 - Ships with language-aware prompt packs for TypeScript, Go, Python, and more
@@ -22,21 +22,19 @@ Key constraints:
 ### Design Decisions (Clarified 2026-05-02)
 
 **Dual Mode: CLI-first with API Fallback**
-- Primary: Use free LLM CLIs (claude, gemini, codex, gh copilot)
+- Primary: Use free LLM CLIs (claude, gemini, codex)
 - Fallback: Use API endpoints if CLI unavailable/fails
 - Per-provider configuration allows mixing (e.g., Claude via CLI, GPT via API)
 
 **Supported LLM CLIs**
 1. **Claude CLI** — `npm install -g @anthropic/claude-cli` (auth: `claude login`)
-2. **Gemini CLI** — `npm install -g @google/gemini-cli@0.40.0` (requires Node.js 20+)
-3. **OpenAI Codex CLI** — `npm install -g @openai/codex@0.128.0`
-4. **GitHub Copilot** — `gh copilot` (requires `gh` CLI + auth)
+2. **Gemini CLI** — `npm install -g @google/gemini-cli@0.40.0` (requires Node.js 20+; pinned version documents what was tested during development)
+3. **OpenAI Codex CLI** — `npm install -g @openai/codex@0.128.0` (requires ChatGPT Plus subscription; pinned version documents what was tested)
 
 **CLI Invocation Patterns**
 - Codex: `codex review --commit <sha>`
-- Gemini: `git diff | gemini -p "Review these changes"`
-- Claude: TBD (investigate exact pattern)
-- Copilot: `gh copilot suggest -t shell "review this diff"`
+- Gemini: stdin diff piped to `gemini -p "<prompt>"`
+- Claude: stdin diff piped to `claude` with the review prompt
 
 **Storage Structure**
 Reviews saved to `.local-review/reviews/<sanitized-branch>/<commit>_<llm>_<version>.md`:
@@ -46,7 +44,6 @@ Reviews saved to `.local-review/reviews/<sanitized-branch>/<commit>_<llm>_<versi
     feature-auth-fix/              # branch name sanitized (/ → -)
       abc123_claude_3.5.md
       abc123_gemini_0.40.md
-      abc123_copilot_1.0.md
       abc123_codex_0.128.md
       abc123_merged.md             # LLM-powered merge
       abc123_metadata.json         # run details: timestamps, exit codes
@@ -57,7 +54,7 @@ Reviews saved to `.local-review/reviews/<sanitized-branch>/<commit>_<llm>_<versi
 - Merge LLM selection (in priority order):
   1. User's `--merge-with <llm>` flag
   2. User's config `merge.preferred_llm: claude`
-  3. Automatic best-available: Claude > GPT > Gemini > Copilot
+  3. Automatic best-available: Claude > Codex > Gemini
 - Default: automatic mode
 
 **Error Handling**
@@ -83,13 +80,8 @@ llms:
     cli_path: gemini
     model: gemini-1.5-pro
 
-  copilot:
-    enabled: true
-    mode: cli
-    cli_path: gh
-
   codex:
-    enabled: true
+    enabled: false               # paid; opt in if you have ChatGPT Plus
     mode: cli
     cli_path: codex
     model: gpt-4
@@ -156,10 +148,6 @@ brew install node
 npm install -g @google/gemini-cli@0.40.0
 npm install -g @openai/codex@0.128.0
 npm install -g @anthropic/claude-cli
-
-# Install GitHub CLI (for Copilot)
-brew install gh
-gh auth login
 ```
 
 ### Configuration Testing
@@ -179,7 +167,7 @@ gh auth login
 ### New Packages for Multi-LLM Support
 
 **internal/cli/** — LLM CLI wrapper and detection
-- `detector.go` — Check which LLM CLIs are installed (claude, gemini, codex, gh)
+- `detector.go` — Check which LLM CLIs are installed (claude, gemini, codex)
 - `installer.go` — Guide users to install missing CLIs via npm/brew
 - `invoker.go` — Execute CLI commands with proper patterns per LLM
 - `version.go` — Extract CLI version numbers for metadata
@@ -215,7 +203,7 @@ gh auth login
 6. **Select Merge LLM**:
    - Check `--merge-with` flag
    - Check `merge.preferred_llm` config
-   - Default: first successful LLM (Claude > GPT > Gemini > Copilot)
+   - Default: first successful LLM (Claude > Codex > Gemini)
 7. **Merge Reviews**:
    - Send all `<llm>.md` files to merge LLM
    - Prompt: "Deduplicate findings, consolidate into one report"
@@ -230,7 +218,6 @@ gh auth login
     feature-auth-fix/
       abc123_claude_3.5.md          # Individual reviews
       abc123_gemini_0.40.md
-      abc123_copilot_1.0.md
       abc123_codex_0.128.md
       abc123_merged.md              # Consolidated review
       abc123_metadata.json          # Run metadata
