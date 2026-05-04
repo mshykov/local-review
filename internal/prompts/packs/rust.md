@@ -58,7 +58,7 @@ Apply the default review rules. Plus: Rust-specific patterns to look for.
 
 ### Match & pattern matching
 - **`_ =>` arms hiding new variants** — adding an enum variant won't trigger a compile error at the match site; prefer explicit patterns when the enum is owned by the project.
-- **`match x { Some(_) => ..., None => panic!() }`** — that's `.unwrap()` with extra steps; prefer the latter or `.expect("reason")`.
+- **`match x { Some(_) => ..., None => panic!() }`** — verbose panic-on-None; prefer handling the `None` case explicitly (return an error, use a default, or `?`). If a panic is truly acceptable and the invariant is documented, use `.expect("reason")` for clarity — but do not introduce `.unwrap()` here, as that is flagged as a production code issue.
 - **`if let` binding then never used** — `if let Some(v) = expr { … }` where `v` isn't read inside the block; either consume `v` or drop it (`if let Some(_)`/`if expr.is_some()`).
 
 ### API design
@@ -76,7 +76,7 @@ Apply the default review rules. Plus: Rust-specific patterns to look for.
 - **`cargo-deny` / `cargo-audit` flags ignored** — yanked or vulnerable deps.
 
 ### Testing
-- **`#[test]` without `#[cfg(test)]`-gated helpers** — test-only code shipped in the binary.
+- **Test helper code outside `#[cfg(test)]`** — `#[test]` items themselves are excluded from non-test builds, but helper functions, structs, and `use` statements defined *outside* `#[cfg(test)]` are compiled into production code. This can trigger `unused_*` warnings (or be a ship-blocker if `#![deny(warnings)]` is set). All test-only helpers, `use` imports, and utility code should live inside `#[cfg(test)] mod tests { … }`.
 - **`unwrap()` in tests** — fine for setup, but use `expect("...")` to make failures readable.
 - **Async tests without an async test attribute** — `#[test] async fn …` is a compile error on stable Rust; require `#[tokio::test]`, `#[async_std::test]`, or the runtime-specific equivalent.
 - **Doctest examples that don't run** — `/// ```ignore` is a smell; either fix the example or document why it can't compile.
