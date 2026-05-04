@@ -65,6 +65,7 @@ Configure provider/model in ~/.local-review.yml or ./.local-review.yml. See READ
 	root.AddCommand(versionCmd())
 	root.AddCommand(configCmd())
 	root.AddCommand(doctorCmd())
+	root.AddCommand(initCmd())
 	root.AddCommand(multiCmd(&sf))
 
 	if err := root.Execute(); err != nil {
