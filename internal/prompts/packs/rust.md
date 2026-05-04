@@ -89,7 +89,7 @@ Apply the default review rules. Plus: Rust-specific patterns to look for.
 - **`as` casts for numeric narrowing** — silent truncation; prefer `try_into()` and handle the error.
 - **`.into()` chains hiding type confusion** — when the target type isn't obvious from the line, name it.
 - **`Default::default()`** — `T::default()` is clearer.
-- **Trait imports forgotten** — methods invisible without `use SomeTrait;` (especially `IteratorExt`, `FutureExt`, etc.).
+- **Trait imports forgotten** — extension methods invisible without `use SomeTrait;` (e.g. `itertools::Itertools`, `futures::StreamExt`, `tokio::io::AsyncReadExt`).
 
 ## Output
 
