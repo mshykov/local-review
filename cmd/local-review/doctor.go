@@ -28,7 +28,7 @@ func doctorCmd() *cobra.Command {
 
 It detects:
   - Claude CLI (claude) — auth via 'claude login' or ANTHROPIC_API_KEY
-  - Gemini CLI (gemini) — auth via 'gemini /auth' (Google OAuth) or GEMINI_API_KEY
+  - Gemini CLI (gemini) — auth via GEMINI_API_KEY (preferred) or 'gemini /auth' (Google OAuth)
   - OpenAI Codex CLI (codex) — auth via 'codex login' (ChatGPT Plus) or OPENAI_API_KEY
 
 For each CLI, doctor prints one of:
@@ -47,9 +47,15 @@ Exit code is always 0; this is a diagnostic command, not a gate.`,
 // runDoctor prints a diagnostic table of each LLM CLI's state. Output
 // is structured so a user reading it knows exactly what's needed for
 // each CLI: install it, log in, set an env var, or nothing.
+//
+// All writes go through an errWriter so the first I/O error (broken
+// pipe, disk full, etc.) is preserved and returned at the end —
+// otherwise `local-review doctor > /dev/full` would silently exit 0.
 func runDoctor(out io.Writer) error {
-	fmt.Fprintln(out, "Checking LLM installations and authentication...")
-	fmt.Fprintln(out)
+	w := &errWriter{w: out}
+
+	fmt.Fprintln(w, "Checking LLM installations and authentication...")
+	fmt.Fprintln(w)
 
 	llms := cli.DetectAll()
 
@@ -59,12 +65,32 @@ func runDoctor(out io.Writer) error {
 		if status == statusReady {
 			readyCount++
 		}
-		printLLMRow(out, llm, status, auth)
+		printLLMRow(w, llm, status, auth)
 	}
 
-	fmt.Fprintln(out)
-	fmt.Fprintf(out, "%d/%d LLMs ready for multi-review.\n", readyCount, len(llms))
-	return nil
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%d/%d LLMs ready for multi-review.\n", readyCount, len(llms))
+	return w.err
+}
+
+// errWriter is an io.Writer that captures the first error from the
+// underlying writer and short-circuits subsequent writes. Lets the
+// caller string together many fmt.Fprintln calls and then check one
+// error at the end.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (ew *errWriter) Write(p []byte) (int, error) {
+	if ew.err != nil {
+		return 0, ew.err
+	}
+	n, err := ew.w.Write(p)
+	if err != nil {
+		ew.err = err
+	}
+	return n, err
 }
 
 // llmStatus is the consolidated state of an LLM CLI as we want to
@@ -143,8 +169,8 @@ func printInstallInstructions(out io.Writer, name string) {
 		fmt.Fprintln(out, "    then:      claude login   (free tier — uses your claude.ai account)")
 	case "gemini":
 		fmt.Fprintln(out, "    install:   npm install -g @google/gemini-cli  (requires Node.js 20+)")
-		fmt.Fprintln(out, "    then:      gemini /auth   (Google OAuth, free tier)")
-		fmt.Fprintln(out, "    or:        export GEMINI_API_KEY=...   (free at https://aistudio.google.com/apikey)")
+		fmt.Fprintln(out, "    then:      export GEMINI_API_KEY=...   (free at https://aistudio.google.com/apikey)")
+		fmt.Fprintln(out, "    or:        gemini /auth   (Google OAuth, free tier)")
 	case "codex":
 		fmt.Fprintln(out, "    install:   npm install -g @openai/codex")
 		fmt.Fprintln(out, "    then:      codex login   (ChatGPT Plus subscription, $20/mo)")

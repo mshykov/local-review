@@ -121,10 +121,10 @@ local-review multi staged
 
 **Authentication — what each LLM needs:**
 
-| LLM | Default (preferred) | API-key alternative |
+| LLM | Default (preferred) | Alternative |
 |---|---|---|
 | **Claude** | `claude login` — Anthropic OAuth, works with the free tier on a claude.ai account | `export ANTHROPIC_API_KEY=...` (paid API access) |
-| **Gemini** | `export GEMINI_API_KEY=...` — free key from [Google AI Studio](https://aistudio.google.com/apikey) | (Gemini CLI also supports `gemini /auth` for Google OAuth) |
+| **Gemini** | `export GEMINI_API_KEY=...` — free key from [Google AI Studio](https://aistudio.google.com/apikey) | `gemini /auth` for Google OAuth |
 | **Codex** | `codex login` — uses your ChatGPT Plus subscription ($20/mo) | `export OPENAI_API_KEY=...` — pay-per-token; usually **cheaper** for occasional review use |
 
 Run `local-review doctor` to see which CLIs you have installed and authenticated. The output tells you exactly what to fix for each row that isn't ✓ ready.
