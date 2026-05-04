@@ -1,0 +1,42 @@
+# local-review config — Mistral provider example.
+#
+# Drop this at the root of any repo (rename it to `.local-review.yml`,
+# or symlink). Mistral La Plateforme exposes an OpenAI-compatible
+# chat-completions endpoint, so it works without any local-review
+# code changes.
+#
+# Setup:
+#   1. Create an API key at https://console.mistral.ai/api-keys/
+#   2. export MISTRAL_API_KEY=...
+#   3. local-review staged
+#
+# Why Mistral for code review:
+#   - Strong on code: Codestral and Mistral Large are both code-aware
+#     and well-priced. Codestral is purpose-built for coding tasks.
+#   - EU-hosted (France) — meaningful if your data residency rules
+#     prefer EU jurisdiction over US providers.
+#   - Free tier on La Plateforme is generous enough for small teams
+#     to evaluate before committing.
+#
+# Open-weights alternative:
+#   Mistral also publishes open-weight models (Mistral 7B, Mixtral
+#   8x7B, Codestral Mamba). If you'd rather not send code over the
+#   wire, run them locally via Ollama or vLLM and point local-review
+#   at that endpoint instead.
+
+provider:
+  base_url: https://api.mistral.ai/v1
+  model: codestral-latest           # purpose-built for code; swap for mistral-large-latest if you want a generalist
+
+  api_key_env: MISTRAL_API_KEY
+
+  timeout_seconds: 60
+
+review:
+  min_severity: warning
+  max_findings: 20
+  exclude:
+    - "**/*.lock"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/node_modules/**"

@@ -1,0 +1,46 @@
+# local-review config — DeepSeek provider example.
+#
+# Drop this at the root of any repo (rename it to `.local-review.yml`,
+# or symlink). DeepSeek's API speaks the OpenAI chat-completions
+# dialect, so it works without any local-review code changes.
+#
+# Setup:
+#   1. Create an API key at https://platform.deepseek.com/api_keys
+#   2. export DEEPSEEK_API_KEY=sk-...   (or whatever env var name you pick)
+#   3. local-review staged
+#
+# Why DeepSeek for code review:
+#   - Very competitive pricing (deepseek-chat is ~$0.27/1M input tokens
+#     as of mid-2026; deepseek-reasoner ~$0.55/1M).
+#   - deepseek-reasoner (DeepSeek-R1 family) is a strong code-reasoning
+#     model — good for security/correctness review where it's worth
+#     paying a bit more for deeper analysis.
+#   - deepseek-chat (DeepSeek-V3) is fine and very cheap for
+#     style/idiom review.
+#
+# Heads-up on data:
+#   DeepSeek is a Chinese company. Their public API processes your
+#   diff on their servers. If your code is sensitive (closed-source,
+#   regulated industry, customer data in fixtures), prefer a self-
+#   hosted DeepSeek model via Ollama or vLLM instead. local-review
+#   doesn't care which OpenAI-compat endpoint it talks to.
+
+provider:
+  base_url: https://api.deepseek.com/v1
+  model: deepseek-chat              # cheap & fast; swap for deepseek-reasoner for harder reviews
+
+  # local-review reads the key from this env var.
+  api_key_env: DEEPSEEK_API_KEY
+
+  # DeepSeek's reasoner model can be slow on long diffs — bump
+  # timeout if you hit "deadline exceeded" errors.
+  timeout_seconds: 120
+
+review:
+  min_severity: warning
+  max_findings: 20
+  exclude:
+    - "**/*.lock"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/node_modules/**"

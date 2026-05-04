@@ -165,6 +165,8 @@ local-review speaks the OpenAI chat-completions API — every major provider sup
 |---|---|---|
 | OpenAI | `https://api.openai.com/v1` | Default |
 | Anthropic | `https://api.anthropic.com/v1` | Use chat-completions, not messages |
+| Mistral | `https://api.mistral.ai/v1` | EU-hosted; Codestral is code-tuned. See [`examples/.local-review.mistral.yml`](examples/.local-review.mistral.yml) |
+| DeepSeek | `https://api.deepseek.com/v1` | Cheapest option; DeepSeek-R1 reasons well. See [`examples/.local-review.deepseek.yml`](examples/.local-review.deepseek.yml) |
 | Groq | `https://api.groq.com/openai/v1` | Fast |
 | Together | `https://api.together.xyz/v1` | Llama, Mixtral, etc. |
 | OpenRouter | `https://openrouter.ai/api/v1` | One key, all models |
