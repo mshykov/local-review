@@ -347,6 +347,22 @@ Glob filtering (include/exclude) uses a custom `**` glob matcher (review.go:matc
 - **Tests required** — new logic needs a unit test (internal/llm/ is a known gap)
 - **One-line doc comments** — exported functions/types only
 
+## Pre-push Workflow (dogfooding)
+
+**Before pushing any branch to GitHub, run a self-review with the project's own tool.**
+
+```sh
+# For a feature branch (reviews full diff vs main)
+./local-review multi branch main
+
+# Or, if multi-LLM is too slow, single-LLM:
+./local-review branch main
+```
+
+Address any `major` or `critical` findings before pushing. This is non-negotiable: we eat our own dog food. If `local-review` produces a noisy, low-value review on this codebase, that's a bug — file an issue or fix the prompt pack.
+
+Skip the self-review only for: pure docs changes (`*.md`, `docs/`), website-only changes (`docs/index.html`), or trivial config tweaks where the tool would have nothing to say.
+
 ## CI and Releases
 
 - `.github/workflows/ci.yml` runs `go vet` + `go test -race` + build on every push
