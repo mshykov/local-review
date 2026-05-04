@@ -22,6 +22,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Notes
 - Auth detection uses heuristics where there's no API to query (Claude stores tokens in the OS keychain; we look for `~/.claude/sessions/` activity as proxy for "logged in"). False negatives are possible. False positives shouldn't happen — we never claim auth without concrete evidence (a sessions file, an env var, or an explicit `auth_mode` in `~/.codex/auth.json`).
 
+## [0.4.1] - 2026-05-04
+
+### Fixed
+- `--json` mode now honors the blocking-finding exit gate (was incorrectly exiting 0 on major/critical findings).
+- JSON output now emits `severity` as a string (e.g. `"major"`) instead of an integer, matching the documented contract.
+- `parseUnifiedDiff` now strips trailing carriage returns when given CRLF-formatted input, fixing `\r`-suffixed paths in saved patches.
+- `doctor` now reports `Available=false` for CLI providers when version detection fails (previously a stale PATH symlink showed as "ready"), and distinguishes broken installs (path shown) from missing installs.
+- `doctor` install hint for Claude CLI now uses the correct npm package name (`@anthropic-ai/claude-code`).
+- `examples/pre-commit` now references `local-review` and `LOCAL_REVIEW_SKIP` (previously a leftover from the project's earlier name).
+- `gofmt` formatting issue in `internal/cli/invoker.go`.
+
+### Changed
+- Documentation: corrected stale Claude CLI npm package name across README, CONTRIBUTING, CLAUDE.md, and example configs.
+- Documentation: updated SECURITY.md supported-versions table.
+- Documentation: removed stale gemini/codex CLI version pins from CLAUDE.md and CONTRIBUTING.md (pins were already removed from the codebase's own install hints in commit 7c739f7).
+- Documentation: corrected `CLAUDE.md` references to `merge.go` (the file is `multi.go`).
+
+### CI
+- Added `.github/dependabot.yml` for github-actions and gomod ecosystems.
+- Pinned all GitHub Actions in CI/release workflows to commit SHAs (defense against floating-tag tampering).
+- Bumped GitHub Actions to current major versions: `actions/checkout` v4 → v6.0.2, `actions/setup-go` v5 → v6.4.0, `actions/upload-artifact` v4 → v7.0.1, plus 2 others (PR #28).
+- Bumped `github.com/spf13/cobra` from 1.8.1 to 1.10.2 (PR #29).
+
 ## [0.4.0] - 2026-05-04
 
 ### Added

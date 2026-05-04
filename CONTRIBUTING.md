@@ -60,8 +60,8 @@ Install LLM CLIs for testing multi-LLM features:
 brew install node
 
 # Install LLM CLIs
-npm install -g @google/gemini-cli@0.40.0
-npm install -g @openai/codex@0.128.0
+npm install -g @google/gemini-cli
+npm install -g @openai/codex
 npm install -g @anthropic-ai/claude-code
 ```
 
