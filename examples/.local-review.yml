@@ -10,6 +10,8 @@ provider:
   # Any OpenAI-compatible endpoint. Examples:
   #   OpenAI       https://api.openai.com/v1
   #   Anthropic    https://api.anthropic.com/v1   (chat-completions endpoint)
+  #   Mistral      https://api.mistral.ai/v1      (EU-hosted; see examples/.local-review.mistral.yml)
+  #   DeepSeek     https://api.deepseek.com/v1    (cheapest; see examples/.local-review.deepseek.yml)
   #   Together     https://api.together.xyz/v1
   #   Groq         https://api.groq.com/openai/v1
   #   OpenRouter   https://openrouter.ai/api/v1
