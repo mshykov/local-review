@@ -89,7 +89,7 @@ local-review multi staged --merge-with claude
 |-----|-------------|--------------|--------|
 | **Claude** | ✅ Free tier via [claude.ai](https://claude.ai) | `npm install -g @anthropic/claude-cli` | Default enabled |
 | **Gemini** | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` | Default enabled |
-| **Codex** | ⚠️ Requires OpenAI Plus ($20/mo) | `npm install -g @openai/codex` | Disabled by default |
+| **Codex** | ⚠️ Requires ChatGPT Plus ($20/mo) | `npm install -g @openai/codex` | Disabled by default |
 
 **How it works:**
 1. Detects installed LLM CLIs (claude, gemini, codex)
@@ -129,7 +129,7 @@ llms:
     api_key_env: GEMINI_API_KEY  # required for Gemini
 
   codex:
-    enabled: false         # paid only, enable if you have OpenAI Plus
+    enabled: false         # paid only, enable if you have ChatGPT Plus
     mode: cli
 
 merge:
