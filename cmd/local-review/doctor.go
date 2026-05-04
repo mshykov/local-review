@@ -6,11 +6,19 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/mshykov/local-review/internal/cli"
 )
+
+// claudeSessionFreshness caps how stale a session file can be before
+// we stop counting it as "logged in". Claude Code stores tokens in the
+// OS keychain (not a file we can read), so we use session activity as
+// a proxy. A 30-day window allows infrequent users while still
+// reflecting an explicit logout that wipes recent activity.
+const claudeSessionFreshness = 30 * 24 * time.Hour
 
 func doctorCmd() *cobra.Command {
 	return &cobra.Command{
@@ -47,11 +55,11 @@ func runDoctor(out io.Writer) error {
 
 	readyCount := 0
 	for _, llm := range llms {
-		status := classify(llm)
+		status, auth := classify(llm)
 		if status == statusReady {
 			readyCount++
 		}
-		printLLMRow(out, llm, status)
+		printLLMRow(out, llm, status, auth)
 	}
 
 	fmt.Fprintln(out)
@@ -71,32 +79,33 @@ const (
 	statusNotInstalled                    // binary not in PATH
 )
 
-func classify(llm cli.LLM) llmStatus {
+// classify returns both the bucket and the underlying authStatus so
+// the caller can render either without re-running auth checks.
+func classify(llm cli.LLM) (llmStatus, authStatus) {
 	if !llm.Available {
 		if llm.Path != "" {
-			return statusBrokenInstall
+			return statusBrokenInstall, authStatus{}
 		}
-		return statusNotInstalled
+		return statusNotInstalled, authStatus{}
 	}
-	if !checkAuth(llm.Name).authenticated {
-		return statusNotAuthed
+	auth := checkAuth(llm.Name)
+	if !auth.authenticated {
+		return statusNotAuthed, auth
 	}
-	return statusReady
+	return statusReady, auth
 }
 
 // printLLMRow emits one CLI's full diagnostic block.
-func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus) {
+func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus) {
 	displayName := getDisplayName(llm.Name)
 
 	switch status {
 	case statusReady:
-		auth := checkAuth(llm.Name)
 		fmt.Fprintf(out, "✓ %-15s v%-10s ready\n", displayName, llm.Version)
 		fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
 		fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
 
 	case statusNotAuthed:
-		auth := checkAuth(llm.Name)
 		fmt.Fprintf(out, "⚠ %-15s v%-10s not authenticated\n", displayName, llm.Version)
 		fmt.Fprintf(out, "    installed: %s\n", llm.Path)
 		fmt.Fprintf(out, "    fix:       %s\n", auth.hint)
@@ -147,19 +156,20 @@ func printInstallInstructions(out io.Writer, name string) {
 // user needs to do if it isn't.
 type authStatus struct {
 	authenticated bool
-	method        string // "oauth", "api_key", or empty
 	detail        string // user-facing description, e.g. "logged in (claude login)"
 	hint          string // shown when not authenticated, e.g. "run: claude login"
 }
 
-// checkAuth returns the authentication state for a given LLM. The
-// checks are file-based heuristics where possible (fast, offline) and
-// fall back to env-var presence. False negatives are possible but
-// false positives shouldn't happen — we never claim auth without
-// concrete evidence.
+// checkAuth returns the authentication state for a given LLM.
 //
-// authPathOverride is set in tests (via $LOCAL_REVIEW_AUTH_HOME) to
-// point checks at a temp dir instead of the real $HOME.
+// Uniform precedence rule across all three providers: **env-var auth
+// is checked first**, then file-based auth. The reasoning:
+//   - An exported env var represents the user's *current shell intent*
+//     ("use this key right now"), which should win over a persisted
+//     OAuth login they may have forgotten about.
+//   - Most CLIs themselves apply the same rule when picking credentials.
+//   - Without this, doctor would lie when a user with a stale OAuth
+//     login exports a fresh API key for testing.
 func checkAuth(name string) authStatus {
 	switch name {
 	case "claude":
@@ -174,8 +184,9 @@ func checkAuth(name string) authStatus {
 }
 
 // authHomeDir returns the directory where each CLI stores its auth.
-// In production this is $HOME; tests override via $LOCAL_REVIEW_AUTH_HOME
-// so we can put a fake auth file under a t.TempDir() and assert behavior.
+// Production: $HOME. Tests: set LOCAL_REVIEW_AUTH_HOME to a t.TempDir()
+// so the auth checks read fixture files instead of the developer's
+// real auth state.
 func authHomeDir() string {
 	if h := os.Getenv("LOCAL_REVIEW_AUTH_HOME"); h != "" {
 		return h
@@ -187,27 +198,24 @@ func authHomeDir() string {
 }
 
 func checkClaudeAuth() authStatus {
-	// Claude Code stores tokens in macOS Keychain (or equivalent on
-	// other OSes), so there's no credentials file we can read directly.
-	// Heuristic: if ~/.claude/sessions/ has any file, the user has
-	// successfully authenticated at some point. Not perfect (can be
-	// stale after manual logout), but better than the previous
-	// "binary found = ready" claim.
-	if home := authHomeDir(); home != "" {
-		sessions := filepath.Join(home, ".claude", "sessions")
-		if entries, err := os.ReadDir(sessions); err == nil && len(entries) > 0 {
-			return authStatus{
-				authenticated: true,
-				method:        "oauth",
-				detail:        "logged in via 'claude login'",
-			}
-		}
-	}
 	if os.Getenv("ANTHROPIC_API_KEY") != "" {
 		return authStatus{
 			authenticated: true,
-			method:        "api_key",
 			detail:        "ANTHROPIC_API_KEY env var set",
+		}
+	}
+	// Claude Code stores tokens in macOS Keychain (or equivalent on
+	// other OSes), so there's no credentials file we can read directly.
+	// Heuristic: any file under ~/.claude/sessions/ modified within
+	// claudeSessionFreshness implies a recent successful authentication.
+	// Old-only files (after explicit logout, after a token rotation,
+	// etc.) don't count.
+	if home := authHomeDir(); home != "" {
+		if hasRecentClaudeSession(filepath.Join(home, ".claude", "sessions")) {
+			return authStatus{
+				authenticated: true,
+				detail:        "logged in via 'claude login'",
+			}
 		}
 	}
 	return authStatus{
@@ -216,11 +224,32 @@ func checkClaudeAuth() authStatus {
 	}
 }
 
+// hasRecentClaudeSession returns true when sessionsDir contains any
+// regular file modified within claudeSessionFreshness. Used as a proxy
+// for "the user has a working Claude login," since the actual token is
+// stored in the OS keychain and isn't readable from a file.
+func hasRecentClaudeSession(sessionsDir string) bool {
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return false
+	}
+	cutoff := time.Now().Add(-claudeSessionFreshness)
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.Mode().IsRegular() && info.ModTime().After(cutoff) {
+			return true
+		}
+	}
+	return false
+}
+
 func checkGeminiAuth() authStatus {
 	if os.Getenv("GEMINI_API_KEY") != "" {
 		return authStatus{
 			authenticated: true,
-			method:        "api_key",
 			detail:        "GEMINI_API_KEY env var set",
 		}
 	}
@@ -235,7 +264,6 @@ func checkGeminiAuth() authStatus {
 			if err := json.Unmarshal(b, &ga); err == nil && ga.Active != nil {
 				return authStatus{
 					authenticated: true,
-					method:        "oauth",
 					detail:        "logged in via Google OAuth",
 				}
 			}
@@ -248,8 +276,16 @@ func checkGeminiAuth() authStatus {
 }
 
 func checkCodexAuth() authStatus {
+	if os.Getenv("OPENAI_API_KEY") != "" {
+		return authStatus{
+			authenticated: true,
+			detail:        "OPENAI_API_KEY env var set",
+		}
+	}
 	// Codex stores an explicit auth_mode field in ~/.codex/auth.json.
-	// "chatgpt" = OAuth via codex login; "api_key" = API key configured.
+	// Newer versions write "chatgpt" or "api_key"; older versions or
+	// hand-edited files may have an empty auth_mode but a non-null
+	// OPENAI_API_KEY field — also treat that as authenticated.
 	if home := authHomeDir(); home != "" {
 		b, err := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
 		if err == nil {
@@ -262,24 +298,22 @@ func checkCodexAuth() authStatus {
 				case "chatgpt":
 					return authStatus{
 						authenticated: true,
-						method:        "oauth",
 						detail:        "logged in via 'codex login' (ChatGPT subscription)",
 					}
 				case "api_key":
 					return authStatus{
 						authenticated: true,
-						method:        "api_key",
 						detail:        "API key configured via 'codex login --api-key'",
+					}
+				default:
+					if a.OpenAIAPIKey != nil && *a.OpenAIAPIKey != "" {
+						return authStatus{
+							authenticated: true,
+							detail:        "API key stored in ~/.codex/auth.json",
+						}
 					}
 				}
 			}
-		}
-	}
-	if os.Getenv("OPENAI_API_KEY") != "" {
-		return authStatus{
-			authenticated: true,
-			method:        "api_key",
-			detail:        "OPENAI_API_KEY env var set",
 		}
 	}
 	return authStatus{

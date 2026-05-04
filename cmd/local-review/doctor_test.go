@@ -3,7 +3,9 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mshykov/local-review/internal/cli"
 )
@@ -45,15 +47,32 @@ func TestCheckClaudeAuth_NotAuthenticated(t *testing.T) {
 	}
 }
 
-func TestCheckClaudeAuth_OAuthFromSessions(t *testing.T) {
+func TestCheckClaudeAuth_RecentSession(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".claude", "sessions", "12345.json"), `{}`)
 	got := checkClaudeAuth()
 	if !got.authenticated {
 		t.Fatalf("expected authenticated=true, got %+v", got)
 	}
-	if got.method != "oauth" {
-		t.Errorf("method: want oauth, got %q", got.method)
+	if !strings.Contains(got.detail, "claude login") {
+		t.Errorf("detail should mention claude login: %q", got.detail)
+	}
+}
+
+func TestCheckClaudeAuth_StaleSessionDoesNotCount(t *testing.T) {
+	// A session file modified before the freshness cutoff (e.g., from a
+	// long-ago login the user has since logged out of) must not be
+	// reported as authenticated.
+	home := withFakeHome(t)
+	stalePath := filepath.Join(home, ".claude", "sessions", "old.json")
+	writeFile(t, stalePath, `{}`)
+	old := time.Now().Add(-(claudeSessionFreshness + 24*time.Hour))
+	if err := os.Chtimes(stalePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	got := checkClaudeAuth()
+	if got.authenticated {
+		t.Errorf("stale session should not authenticate, got %+v", got)
 	}
 }
 
@@ -64,8 +83,20 @@ func TestCheckClaudeAuth_APIKey(t *testing.T) {
 	if !got.authenticated {
 		t.Fatalf("expected authenticated, got %+v", got)
 	}
-	if got.method != "api_key" {
-		t.Errorf("method: want api_key, got %q", got.method)
+	if !strings.Contains(got.detail, "ANTHROPIC_API_KEY") {
+		t.Errorf("detail should mention env var: %q", got.detail)
+	}
+}
+
+func TestCheckClaudeAuth_EnvVarWinsOverSession(t *testing.T) {
+	// Uniform precedence: env var represents current shell intent,
+	// must take priority over a possibly-stale OAuth session.
+	home := withFakeHome(t)
+	writeFile(t, filepath.Join(home, ".claude", "sessions", "12345.json"), `{}`)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-fresh")
+	got := checkClaudeAuth()
+	if !strings.Contains(got.detail, "ANTHROPIC_API_KEY") {
+		t.Errorf("env var should win over session, got %q", got.detail)
 	}
 }
 
@@ -98,20 +129,19 @@ func TestCheckGeminiAuth_OAuthAccount(t *testing.T) {
 	if !got.authenticated {
 		t.Fatalf("expected authenticated, got %+v", got)
 	}
-	if got.method != "oauth" {
-		t.Errorf("method: want oauth, got %q", got.method)
+	if !strings.Contains(got.detail, "OAuth") {
+		t.Errorf("detail should mention OAuth: %q", got.detail)
 	}
 }
 
-func TestCheckGeminiAuth_APIKeyOverridesOAuth(t *testing.T) {
-	// Env var takes precedence (GEMINI_API_KEY wins over OAuth state).
+func TestCheckGeminiAuth_APIKeyWinsOverOAuth(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".gemini", "google_accounts.json"),
 		`{"active": "user@example.com", "old": []}`)
 	t.Setenv("GEMINI_API_KEY", "test-key")
 	got := checkGeminiAuth()
-	if got.method != "api_key" {
-		t.Errorf("env var should win, got method=%q", got.method)
+	if !strings.Contains(got.detail, "GEMINI_API_KEY") {
+		t.Errorf("env var should win, got %q", got.detail)
 	}
 }
 
@@ -136,15 +166,12 @@ func TestCheckCodexAuth_ChatGPTSubscription(t *testing.T) {
 	if !got.authenticated {
 		t.Fatalf("expected authenticated, got %+v", got)
 	}
-	if got.method != "oauth" {
-		t.Errorf("method: want oauth (chatgpt), got %q", got.method)
+	if !strings.Contains(got.detail, "ChatGPT") {
+		t.Errorf("detail should mention ChatGPT: %q", got.detail)
 	}
 }
 
-func TestCheckCodexAuth_APIKeyFromAuthFile(t *testing.T) {
-	// Codex stores api_mode in the auth file when the user runs
-	// `codex login --api-key`. Must report this as authenticated even
-	// without the env var being set in the current shell.
+func TestCheckCodexAuth_ExplicitAPIKeyMode(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"),
 		`{"auth_mode": "api_key", "OPENAI_API_KEY": "sk-stored"}`)
@@ -152,20 +179,31 @@ func TestCheckCodexAuth_APIKeyFromAuthFile(t *testing.T) {
 	if !got.authenticated {
 		t.Fatalf("expected authenticated, got %+v", got)
 	}
-	if got.method != "api_key" {
-		t.Errorf("method: want api_key, got %q", got.method)
+	if !strings.Contains(got.detail, "codex login --api-key") {
+		t.Errorf("detail should mention --api-key flow: %q", got.detail)
 	}
 }
 
-func TestCheckCodexAuth_APIKeyFromEnv(t *testing.T) {
-	withFakeHome(t)
-	t.Setenv("OPENAI_API_KEY", "sk-from-env")
+func TestCheckCodexAuth_LegacyAuthFile(t *testing.T) {
+	// Older codex versions / hand-edited files may lack an explicit
+	// auth_mode but have a stored OPENAI_API_KEY. Honor that.
+	home := withFakeHome(t)
+	writeFile(t, filepath.Join(home, ".codex", "auth.json"),
+		`{"OPENAI_API_KEY": "sk-stored"}`)
 	got := checkCodexAuth()
 	if !got.authenticated {
-		t.Fatalf("expected authenticated, got %+v", got)
+		t.Errorf("legacy auth file with stored key should authenticate, got %+v", got)
 	}
-	if got.method != "api_key" {
-		t.Errorf("method: want api_key, got %q", got.method)
+}
+
+func TestCheckCodexAuth_APIKeyEnvWinsOverFile(t *testing.T) {
+	home := withFakeHome(t)
+	writeFile(t, filepath.Join(home, ".codex", "auth.json"),
+		`{"auth_mode": "chatgpt", "OPENAI_API_KEY": null}`)
+	t.Setenv("OPENAI_API_KEY", "sk-from-env")
+	got := checkCodexAuth()
+	if !strings.Contains(got.detail, "OPENAI_API_KEY") {
+		t.Errorf("env var should win, got %q", got.detail)
 	}
 }
 
@@ -183,35 +221,48 @@ func TestCheckCodexAuth_GarbageAuthFile(t *testing.T) {
 // --- classify ------------------------------------------------------
 
 func TestClassify(t *testing.T) {
-	withFakeHome(t)
-	t.Setenv("ANTHROPIC_API_KEY", "sk-test") // makes Claude authenticated
-
 	cases := []struct {
-		name string
-		llm  cli.LLM
-		want llmStatus
+		name    string
+		setup   func(t *testing.T)
+		llm     cli.LLM
+		want    llmStatus
+		wantSub string // substring expected in the returned authStatus.detail (when ready)
 	}{
 		{
-			"installed + version + auth → ready",
-			cli.LLM{Available: true, Path: "/x/claude", Version: "1.0", Name: "claude"},
-			statusReady,
+			name:    "installed + version + auth → ready",
+			setup:   func(t *testing.T) { withFakeHome(t); t.Setenv("ANTHROPIC_API_KEY", "sk-test") },
+			llm:     cli.LLM{Available: true, Path: "/x/claude", Version: "1.0", Name: "claude"},
+			want:    statusReady,
+			wantSub: "ANTHROPIC_API_KEY",
 		},
 		{
-			"path empty → not installed",
-			cli.LLM{Available: false, Path: "", Name: "claude"},
-			statusNotInstalled,
+			name:  "installed + version + no auth → not authenticated",
+			setup: func(t *testing.T) { withFakeHome(t) },
+			llm:   cli.LLM{Available: true, Path: "/x/claude", Version: "1.0", Name: "claude"},
+			want:  statusNotAuthed,
 		},
 		{
-			"path set but Available=false → broken install",
-			cli.LLM{Available: false, Path: "/x/claude", Name: "claude"},
-			statusBrokenInstall,
+			name:  "path empty → not installed",
+			setup: func(t *testing.T) { withFakeHome(t) },
+			llm:   cli.LLM{Available: false, Path: "", Name: "claude"},
+			want:  statusNotInstalled,
+		},
+		{
+			name:  "path set but Available=false → broken install",
+			setup: func(t *testing.T) { withFakeHome(t) },
+			llm:   cli.LLM{Available: false, Path: "/x/claude", Name: "claude"},
+			want:  statusBrokenInstall,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := classify(tc.llm)
-			if got != tc.want {
-				t.Errorf("got %v, want %v", got, tc.want)
+			tc.setup(t)
+			gotStatus, gotAuth := classify(tc.llm)
+			if gotStatus != tc.want {
+				t.Errorf("status: got %v, want %v", gotStatus, tc.want)
+			}
+			if tc.wantSub != "" && !strings.Contains(gotAuth.detail, tc.wantSub) {
+				t.Errorf("auth detail %q missing substring %q", gotAuth.detail, tc.wantSub)
 			}
 		})
 	}

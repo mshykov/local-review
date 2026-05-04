@@ -27,7 +27,7 @@ Key constraints:
 - Per-provider configuration allows mixing (e.g., Claude via CLI, GPT via API)
 
 **Supported LLM CLIs**
-1. **Claude CLI** — `npm install -g @anthropic/claude-cli` (auth: `claude login`)
+1. **Claude CLI** — `npm install -g @anthropic-ai/claude-code` (auth: `claude login`)
 2. **Gemini CLI** — `npm install -g @google/gemini-cli@0.40.0` (requires Node.js 20+; pinned version documents what was tested during development)
 3. **OpenAI Codex CLI** — `npm install -g @openai/codex@0.128.0` (requires ChatGPT Plus subscription; pinned version documents what was tested)
 
@@ -147,7 +147,7 @@ brew install node
 # Install LLM CLIs for testing
 npm install -g @google/gemini-cli@0.40.0
 npm install -g @openai/codex@0.128.0
-npm install -g @anthropic/claude-cli
+npm install -g @anthropic-ai/claude-code
 ```
 
 ### Configuration Testing

@@ -62,7 +62,7 @@ brew install node
 # Install LLM CLIs
 npm install -g @google/gemini-cli@0.40.0
 npm install -g @openai/codex@0.128.0
-npm install -g @anthropic/claude-cli
+npm install -g @anthropic-ai/claude-code
 ```
 
 Note: You don't need all 3 LLMs installed to develop. The code gracefully handles missing CLIs.
