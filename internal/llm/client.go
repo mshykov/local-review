@@ -19,10 +19,7 @@ import (
 type Client struct {
 	BaseURL string
 	APIKey  string
-	// APIKeyEnv is the name of the env var the key was sourced from.
-	// Surfaced in the empty-key error so users see the right knob to set
-	// (their config may point at OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.,
-	// not the legacy LOCAL_REVIEW_API_KEY default).
+	// APIKeyEnv is the env var the key was sourced from; used in the empty-key error.
 	APIKeyEnv string
 	Model     string
 	HTTP      *http.Client
@@ -81,7 +78,7 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 		if envName == "" {
 			envName = "LOCAL_REVIEW_API_KEY"
 		}
-		return "", fmt.Errorf("no API key: $%s is empty\n         run `local-review init` to set up a provider, or `export %s=...`\n         or use `local-review multi <cmd>` if you have LLM CLIs installed (see `local-review doctor`)", envName, envName)
+		return "", fmt.Errorf("no API key: $%s is unset or empty\n         run `local-review init` to set up a provider, or `export %s=...`\n         or use `local-review multi <cmd>` if you have LLM CLIs installed (see `local-review doctor`)", envName, envName)
 	}
 
 	req := request{
