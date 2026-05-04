@@ -121,28 +121,22 @@ func runInit(out io.Writer, in io.Reader, target string, force bool) error {
 	fmt.Fprintln(out, "local-review init — quick setup. Press Enter to accept defaults.")
 	fmt.Fprintln(out)
 
-	preset, err := promptProvider(out, r)
+	preset, err := promptProviderRetry(out, r)
 	if err != nil {
 		return err
 	}
 
 	baseURL := preset.baseURL
 	if baseURL == "" {
-		baseURL, err = promptString(out, r, "Base URL (e.g. https://api.example.com/v1)", "")
+		baseURL, err = promptNonEmpty(out, r, "Base URL (e.g. https://api.example.com/v1)", "")
 		if err != nil {
 			return err
 		}
-		if baseURL == "" {
-			return fmt.Errorf("base URL is required for a custom provider")
-		}
 	}
 
-	model, err := promptString(out, r, "Model", preset.defaultMdl)
+	model, err := promptNonEmpty(out, r, "Model", preset.defaultMdl)
 	if err != nil {
 		return err
-	}
-	if model == "" {
-		return fmt.Errorf("model is required")
 	}
 
 	var apiKeyEnv string
@@ -153,18 +147,14 @@ func runInit(out io.Writer, in io.Reader, target string, force bool) error {
 		}
 	}
 
-	minSeverity, err := promptChoice(out, r, "Minimum severity to show", []string{"nit", "info", "warning", "major", "critical"}, 2)
+	minSeverity, err := promptChoiceRetry(out, r, "Minimum severity to show", []string{"nit", "info", "warning", "major", "critical"}, 2)
 	if err != nil {
 		return err
 	}
 
-	maxFindingsStr, err := promptString(out, r, "Maximum findings per review", "20")
+	maxFindings, err := promptPositiveIntRetry(out, r, "Maximum findings per review", 20)
 	if err != nil {
 		return err
-	}
-	maxFindings, err := strconv.Atoi(strings.TrimSpace(maxFindingsStr))
-	if err != nil || maxFindings <= 0 {
-		return fmt.Errorf("max findings must be a positive integer, got %q", maxFindingsStr)
 	}
 
 	yml := renderConfig(baseURL, model, apiKeyEnv, minSeverity, maxFindings)
@@ -175,13 +165,18 @@ func runInit(out io.Writer, in io.Reader, target string, force bool) error {
 	fmt.Fprint(out, yml)
 	fmt.Fprintln(out, "----------------")
 
-	confirm, err := promptString(out, r, fmt.Sprintf("Write to %s?", target), "y")
-	if err != nil {
-		return err
-	}
-	if !isYes(confirm) {
-		fmt.Fprintln(out, "Aborted; no changes made.")
-		return nil
+	if force {
+		// --force is the non-interactive flag; don't prompt for the final confirmation either.
+		fmt.Fprintf(out, "Writing to %s (--force).\n", target)
+	} else {
+		confirm, err := promptString(out, r, fmt.Sprintf("Write to %s?", target), "y")
+		if err != nil {
+			return err
+		}
+		if !isYes(confirm) {
+			fmt.Fprintln(out, "Aborted; no changes made.")
+			return nil
+		}
 	}
 
 	if err := os.WriteFile(target, []byte(yml), 0o600); err != nil {
@@ -210,26 +205,6 @@ func resolveTarget(location string) (string, error) {
 	default:
 		return "", fmt.Errorf(`--location must be "local" or "global", got %q`, location)
 	}
-}
-
-func promptProvider(out io.Writer, r *bufio.Reader) (providerPreset, error) {
-	fmt.Fprintln(out, "Which provider?")
-	for i, p := range providerPresets {
-		fmt.Fprintf(out, "  %d) %s\n", i+1, p.label)
-	}
-	choice, err := promptString(out, r, "Choose", "1")
-	if err != nil {
-		return providerPreset{}, err
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(choice))
-	if err != nil || n < 1 || n > len(providerPresets) {
-		return providerPreset{}, fmt.Errorf("choice must be 1-%d, got %q", len(providerPresets), choice)
-	}
-	preset := providerPresets[n-1]
-	if preset.note != "" {
-		fmt.Fprintf(out, "  %s\n", preset.note)
-	}
-	return preset, nil
 }
 
 // promptChoice asks for a value from a fixed allow-list, returning the
@@ -273,9 +248,96 @@ func promptString(out io.Writer, r *bufio.Reader, label, defaultVal string) (str
 	return v, nil
 }
 
+// maxRetries caps how many times we re-prompt on bad input before
+// giving up. Without this, a piped script with no valid answer could
+// loop forever. Pure-interactive users hit Ctrl-C long before this.
+const maxRetries = 5
+
+// promptNonEmpty re-prompts until it gets a non-empty answer (or the
+// default). Returns the underlying error if reading stdin fails.
+func promptNonEmpty(out io.Writer, r *bufio.Reader, label, defaultVal string) (string, error) {
+	for i := 0; i < maxRetries; i++ {
+		v, err := promptString(out, r, label, defaultVal)
+		if err != nil {
+			return "", err
+		}
+		if v != "" {
+			return v, nil
+		}
+		fmt.Fprintln(out, "  (required) please enter a value.")
+	}
+	return "", fmt.Errorf("%s: too many empty answers, giving up", label)
+}
+
+// promptChoiceRetry re-prompts on bad input instead of aborting the
+// whole wizard. Tells the user what's expected each time.
+func promptChoiceRetry(out io.Writer, r *bufio.Reader, label string, options []string, defaultIdx int) (string, error) {
+	for i := 0; i < maxRetries; i++ {
+		v, err := promptChoice(out, r, label, options, defaultIdx)
+		if err == nil {
+			return v, nil
+		}
+		fmt.Fprintf(out, "  %v\n", err)
+	}
+	return "", fmt.Errorf("%s: too many invalid answers, giving up", label)
+}
+
+// promptPositiveIntRetry re-prompts until it gets a positive integer.
+func promptPositiveIntRetry(out io.Writer, r *bufio.Reader, label string, defaultVal int) (int, error) {
+	defStr := strconv.Itoa(defaultVal)
+	for i := 0; i < maxRetries; i++ {
+		s, err := promptString(out, r, label, defStr)
+		if err != nil {
+			return 0, err
+		}
+		n, convErr := strconv.Atoi(strings.TrimSpace(s))
+		if convErr == nil && n > 0 {
+			return n, nil
+		}
+		fmt.Fprintf(out, "  must be a positive integer, got %q\n", s)
+	}
+	return 0, fmt.Errorf("%s: too many invalid answers, giving up", label)
+}
+
+// promptProviderRetry re-prompts on bad provider choice.
+func promptProviderRetry(out io.Writer, r *bufio.Reader) (providerPreset, error) {
+	fmt.Fprintln(out, "Which provider?")
+	for i, p := range providerPresets {
+		fmt.Fprintf(out, "  %d) %s\n", i+1, p.label)
+	}
+	for i := 0; i < maxRetries; i++ {
+		choice, err := promptString(out, r, "Choose", "1")
+		if err != nil {
+			return providerPreset{}, err
+		}
+		n, convErr := strconv.Atoi(strings.TrimSpace(choice))
+		if convErr == nil && n >= 1 && n <= len(providerPresets) {
+			preset := providerPresets[n-1]
+			if preset.note != "" {
+				fmt.Fprintf(out, "  %s\n", preset.note)
+			}
+			return preset, nil
+		}
+		fmt.Fprintf(out, "  choice must be 1-%d, got %q\n", len(providerPresets), choice)
+	}
+	return providerPreset{}, fmt.Errorf("provider: too many invalid answers, giving up")
+}
+
 func isYes(s string) bool {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return s == "y" || s == "yes"
+}
+
+// yamlScalar quotes a string as a YAML double-quoted scalar so that
+// values containing '#', ':', leading reserved chars (-, ?, *, &, !,
+// |, >, %), or anything else YAML-special parse correctly.
+//
+// Go's strconv.Quote produces double-quoted strings with the same
+// escape semantics YAML supports for double-quoted flow scalars (\n,
+// \t, \uXXXX, \"). The output is slightly noisier than unquoted
+// YAML, but it's unambiguous and round-trips through any parser.
+func yamlScalar(s string) string {
+	return strconv.Quote(s)
 }
 
 // renderConfig writes a clean, commented YAML — not via go-yaml's
@@ -287,15 +349,15 @@ func renderConfig(baseURL, model, apiKeyEnv, minSeverity string, maxFindings int
 	fmt.Fprintln(&b, "# Edit freely; see examples/ in the repo for the full schema.")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "provider:")
-	fmt.Fprintf(&b, "  base_url: %s\n", baseURL)
-	fmt.Fprintf(&b, "  model: %s\n", model)
+	fmt.Fprintf(&b, "  base_url: %s\n", yamlScalar(baseURL))
+	fmt.Fprintf(&b, "  model: %s\n", yamlScalar(model))
 	if apiKeyEnv != "" {
-		fmt.Fprintf(&b, "  api_key_env: %s\n", apiKeyEnv)
+		fmt.Fprintf(&b, "  api_key_env: %s\n", yamlScalar(apiKeyEnv))
 	}
 	fmt.Fprintln(&b, "  timeout_seconds: 60")
 	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "review:")
-	fmt.Fprintf(&b, "  min_severity: %s\n", minSeverity)
+	fmt.Fprintf(&b, "  min_severity: %s\n", yamlScalar(minSeverity))
 	fmt.Fprintf(&b, "  max_findings: %d\n", maxFindings)
 	fmt.Fprintln(&b, "  exclude:")
 	fmt.Fprintln(&b, `    - "**/*.lock"`)
