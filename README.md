@@ -219,7 +219,7 @@ Exit codes:
 
 ## Prompt packs
 
-local-review ships with packs for `default`, `typescript`, `go`, `python`, with more coming. The CLI auto-picks based on the dominant language in your diff. Force a specific pack with `review.prompt_pack: <id>` in your YAML config.
+local-review ships with packs for `default`, `typescript`, `go`, `python`, `rust`, with more coming. The CLI auto-picks based on the dominant language in your diff. Force a specific pack with `review.prompt_pack: <id>` in your YAML config.
 
 Each pack is a markdown file (in [`internal/prompts/packs/`](internal/prompts/packs/)) that defines:
 - What to look for (priority-ordered)
