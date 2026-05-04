@@ -5,13 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.2] - 2026-05-04
+
+### Added
+- **`local-review doctor` shows real authentication status per CLI.** Previously the command checked only "is the binary in PATH" and printed a misleading "ready" even when the CLI was unauthenticated. Now each CLI gets one of four explicit states with actionable next-step text:
+  - ✓ ready (installed, version-detected, authenticated)
+  - ⚠ not authenticated (install fine, missing credentials/API key — shows the exact command to fix it)
+  - ⚠ install broken (binary in PATH but version probe failed — shows the resolved path so you can investigate)
+  - ✗ not installed (shows install command)
+- **Authentication section in README** documenting all auth paths per CLI: OAuth, API key, OS-keychain.
+
+### Fixed
+- **Codex auth misinformation across the project.** Doctor's install hints, the website's Codex card, the README provider table, and the multi-LLM example config all said "ChatGPT Plus required" — implying it's the only path. The OpenAI Codex CLI also accepts `OPENAI_API_KEY` (pay-per-token), which is usually **cheaper** than ChatGPT Plus for occasional review use. All five surfaces now make both paths explicit.
+- **Doctor distinguishes broken installs from missing installs.** A binary in PATH whose version probe fails (broken symlink, corrupted install, missing runtime) used to be reported as "✗ not found" — hiding the resolved path and making the issue impossible to debug. Now it's a separate ⚠ state that shows the path and recommends reinstalling.
+
+### Notes
+- Auth detection uses heuristics where there's no API to query (Claude stores tokens in the OS keychain; we look for `~/.claude/sessions/` activity as proxy for "logged in"). False negatives are possible. False positives shouldn't happen — we never claim auth without concrete evidence (a sessions file, an env var, or an explicit `auth_mode` in `~/.codex/auth.json`).
+
+## [0.4.1] - 2026-05-04
 
 ### Fixed
 - `--json` mode now honors the blocking-finding exit gate (was incorrectly exiting 0 on major/critical findings).
 - JSON output now emits `severity` as a string (e.g. `"major"`) instead of an integer, matching the documented contract.
 - `parseUnifiedDiff` now strips trailing carriage returns when given CRLF-formatted input, fixing `\r`-suffixed paths in saved patches.
-- `doctor` now reports `Available=false` for CLI providers when version detection fails (previously a stale PATH symlink showed as "ready").
+- `doctor` now reports `Available=false` for CLI providers when version detection fails (previously a stale PATH symlink showed as "ready"), and distinguishes broken installs (path shown) from missing installs.
 - `doctor` install hint for Claude CLI now uses the correct npm package name (`@anthropic-ai/claude-code`).
 - `examples/pre-commit` now references `local-review` and `LOCAL_REVIEW_SKIP` (previously a leftover from the project's earlier name).
 - `gofmt` formatting issue in `internal/cli/invoker.go`.
@@ -25,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### CI
 - Added `.github/dependabot.yml` for github-actions and gomod ecosystems.
 - Pinned all GitHub Actions in CI/release workflows to commit SHAs (defense against floating-tag tampering).
+- Bumped GitHub Actions to current major versions: `actions/checkout` v4 → v6.0.2, `actions/setup-go` v5 → v6.4.0, `actions/upload-artifact` v4 → v7.0.1, plus 2 others (PR #28).
+- Bumped `github.com/spf13/cobra` from 1.8.1 to 1.10.2 (PR #29).
 
 ## [0.4.0] - 2026-05-04
 

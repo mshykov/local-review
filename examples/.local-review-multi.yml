@@ -27,7 +27,9 @@ llms:
     api_key_env: GEMINI_API_KEY         # required for Gemini CLI
     timeout_seconds: 120
 
-  # Codex - Requires ChatGPT Plus ($20/mo), disabled by default
+  # Codex - paid; either ChatGPT Plus ($20/mo) via 'codex login', or
+  # an OpenAI API key (pay-per-token, usually cheaper for occasional use).
+  # Disabled by default.
   codex:
     enabled: false
     mode: cli
