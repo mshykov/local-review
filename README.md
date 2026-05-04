@@ -88,8 +88,8 @@ local-review multi staged --merge-with claude
 | LLM | Free Option | Installation | Status |
 |-----|-------------|--------------|--------|
 | **Claude** | ✅ Free tier via [claude.ai](https://claude.ai) | `npm install -g @anthropic/claude-cli` | Default enabled |
-| **Gemini** | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli@0.40.0` | Default enabled |
-| **Codex** | ⚠️ Requires OpenAI Plus ($20/mo) | `npm install -g @openai/codex@0.128.0` | Disabled by default |
+| **Gemini** | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` | Default enabled |
+| **Codex** | ⚠️ Requires OpenAI Plus ($20/mo) | `npm install -g @openai/codex` | Disabled by default |
 
 **How it works:**
 1. Detects installed LLM CLIs (claude, gemini, codex)
@@ -102,7 +102,7 @@ local-review multi staged --merge-with claude
 ```sh
 # Install free LLM CLIs
 npm install -g @anthropic/claude-cli
-npm install -g @google/gemini-cli@0.40.0
+npm install -g @google/gemini-cli
 
 # Authenticate
 claude login                    # Follow prompts

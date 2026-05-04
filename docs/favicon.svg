@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="72 105 879 879">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="220" fill="#f0faf0"/>
   <title>Geometric chestnut leaf</title>
   <desc>Stylized chestnut leaf composed of stacked outlined trapezoid bands.</desc>
   <g fill="#4F8A2C" stroke="#254C15" stroke-width="6" stroke-linejoin="miter" stroke-linecap="butt">
