@@ -30,9 +30,9 @@ Apply the default review rules. Plus: Rust-specific patterns to look for.
 - **`Arc<Mutex<T>>` for read-heavy data** — prefer `Arc<RwLock<T>>` when reads dominate.
 - **Lock held across `await`** — deadlock risk if any task awaiting on the same lock runs on the same thread; either drop the guard before `.await` or use `tokio::sync::Mutex`.
 - **`std::sync::Mutex` in async code** — blocks the executor thread. Use `tokio::sync::Mutex` (or hold briefly and drop before await).
-- **Channels without bounded capacity** — unbounded `mpsc` can OOM under backpressure. Default to `mpsc::channel(N)` for any input from the network/disk.
-- **`thread::spawn` without join handle** — silent panic; spawn returns `JoinHandle`, drop it with care or `.join()` to surface failures.
-- **`Send`/`Sync` impls hand-rolled with `unsafe`** — extremely high bar; demand a written invariant proof.
+- **Channels without bounded capacity** — unbounded channels can OOM under backpressure. Use `tokio::sync::mpsc::channel(N)` or `std::sync::mpsc::sync_channel(N)` (note: `std::sync::mpsc::channel()` is always unbounded — that's the issue, not a missing arg).
+- **Spawned panics swallowed** — `thread::spawn` and `tokio::spawn` capture panics into the returned handle. Dropping the handle (or never `.join()`/`.await`-ing it) means a task can panic silently with no observable failure.
+- **Hand-rolled `Send`/`Sync` impls** — high bar; require a `// SAFETY:` comment justifying the thread-safety invariant.
 
 ### Async & futures
 - **Blocking I/O inside an async fn** — `std::fs`, `std::net`, `Mutex::lock` block the executor. Use the `tokio::` / async equivalents, or `spawn_blocking`.
@@ -57,15 +57,14 @@ Apply the default review rules. Plus: Rust-specific patterns to look for.
 - **Dropping FFI-allocated memory with Rust's allocator** — must use the matching `free` from the foreign side.
 
 ### Match & pattern matching
-- **`_ =>` arms hiding new variants** — adding an enum variant won't trigger a compile error; prefer explicit patterns or `#[non_exhaustive]` thinking.
+- **`_ =>` arms hiding new variants** — adding an enum variant won't trigger a compile error at the match site; prefer explicit patterns when the enum is owned by the project.
 - **`match x { Some(_) => ..., None => panic!() }`** — that's `.unwrap()` with extra steps; prefer the latter or `.expect("reason")`.
-- **`if let Some(v) = ... else` with `_ = v`** — likely a bug; the binding is unused.
+- **`if let` binding then never used** — `if let Some(v) = expr { … }` where `v` isn't read inside the block; either consume `v` or drop it (`if let Some(_)`/`if expr.is_some()`).
 
 ### API design
 - **Returning `&str` vs `String`** — prefer `&str` for slices into existing data; return owned `String` only when allocating is unavoidable.
 - **Generic over too much** — `fn foo<T: AsRef<str>>(x: T)` is fine for ergonomics, but `fn foo<T: Trait>(...)` for one-call sites adds API surface for no reason.
 - **`pub` on internal helpers** — restricts future refactors; default to `pub(crate)` and only widen when actually consumed externally.
-- **`impl Trait` in trait return types pre-Rust 1.75** — only stable since 1.75; if the project's MSRV is older, this won't compile.
 - **Builder methods that take `self`** — fine, but breaks chaining if any branch returns a `Result`. Consider `&mut self` for fallible builders.
 
 ### Cargo, modules, and dependencies
@@ -85,7 +84,7 @@ Apply the default review rules. Plus: Rust-specific patterns to look for.
 
 ## Idioms & style
 
-- **`if let` chains nested deeply** — Rust 1.65+ has `let-else`; pre-1.65 use early returns. Either way, flatten.
+- **`if let` chains nested deeply** — flatten with early returns or `let-else` (Rust 1.65+).
 - **`match` arms returning `()` with side effects** — fine, but ensure no missing `;` ate a value silently.
 - **`as` casts for numeric narrowing** — silent truncation; prefer `try_into()` and handle the error.
 - **`.into()` chains hiding type confusion** — when the target type isn't obvious from the line, name it.

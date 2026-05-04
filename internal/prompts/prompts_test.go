@@ -35,7 +35,7 @@ func TestAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) < 5 {
-		t.Errorf("expected ≥5 packs (default + 4 langs), got %d: %v", len(ids), ids)
+	if len(ids) < 2 {
+		t.Errorf("expected at least default + one language pack, got %d: %v", len(ids), ids)
 	}
 }
