@@ -1,22 +1,118 @@
 name: Release
 
+# Single combined release pipeline:
+#   prepare → build (matrix) → publish → update-homebrew
+#
+# Triggered by:
+#   - Push to main, only when the merged PR has a `release` label.
+#     The bump type is read from `major`/`minor`/`patch` labels (default: patch).
+#   - Manual workflow_dispatch with an explicit version (e.g. v0.1.5).
+#
+# Why combined: GitHub doesn't let GITHUB_TOKEN-pushed events trigger other
+# workflows. Splitting tag/build/publish across multiple workflows broke that
+# chain. Doing it all in one run avoids the issue without needing a PAT.
+
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - 'examples/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Explicit version tag (e.g. v0.1.5). Skips label detection.'
+        required: true
 
 permissions:
   contents: write
 
 jobs:
-  release:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.gate.outputs.should_release }}
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gate (release label or manual dispatch)
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$MANUAL_VERSION" ]; then
+            echo "Manual dispatch: $MANUAL_VERSION"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Find PR number from merge commit subject. Handles "(#123)" and
+          # "Merge pull request #123 from …" formats.
+          pr_number=$(git log -1 --pretty=%s | grep -oE '(Merge pull request #[0-9]+|\(#[0-9]+\))' | grep -oE '[0-9]+' | head -1 || echo "")
+          if [ -z "$pr_number" ]; then
+            echo "No PR number in merge commit — skipping release"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          labels=$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || echo "")
+          if echo "$labels" | grep -qxF "release"; then
+            echo "PR #$pr_number has 'release' label — proceeding"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "PR #$pr_number has no 'release' label — skipping"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Determine version
+        id: bump
+        if: steps.gate.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$MANUAL_VERSION" ]; then
+            echo "version=$MANUAL_VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          version="${latest_tag#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+
+          pr_number=$(git log -1 --pretty=%s | grep -oE '(Merge pull request #[0-9]+|\(#[0-9]+\))' | grep -oE '[0-9]+' | head -1)
+          labels=$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || echo "")
+
+          if echo "$labels" | grep -qxF "major"; then
+            major=$((major + 1)); minor=0; patch=0
+          elif echo "$labels" | grep -qxF "minor"; then
+            minor=$((minor + 1)); patch=0
+          else
+            patch=$((patch + 1))
+          fi
+
+          new_version="v${major}.${minor}.${patch}"
+          echo "Latest: $latest_tag → New: $new_version"
+          echo "version=$new_version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - { goos: darwin, goarch: amd64 }
-          - { goos: darwin, goarch: arm64 }
-          - { goos: linux,  goarch: amd64 }
-          - { goos: linux,  goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
           - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@v4
@@ -30,26 +126,131 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           out="local-review"
           if [ "$GOOS" = "windows" ]; then out="local-review.exe"; fi
           go build -trimpath \
-            -ldflags="-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -ldflags="-s -w -X main.version=${VERSION}" \
             -o "$out" ./cmd/local-review
 
       - name: Package
+        id: package
         run: |
           name="local-review_${{ matrix.goos }}_${{ matrix.goarch }}"
           if [ "${{ matrix.goos }}" = "windows" ]; then
             zip "${name}.zip" local-review.exe
+            echo "file=${name}.zip" >> "$GITHUB_OUTPUT"
           else
             tar -czf "${name}.tar.gz" local-review
+            echo "file=${name}.tar.gz" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload to release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ steps.package.outputs.file }}
+          retention-days: 1
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Create and push tag
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            local-review_*.tar.gz
-            local-review_*.zip
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: ${{ needs.prepare.outputs.version }}
           generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+
+  update-homebrew:
+    needs: [prepare, publish]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: mshykov/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+
+      - name: Update formula
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version }}
+        run: |
+          version="${VERSION_TAG#v}"
+          base_url="https://github.com/mshykov/local-review/releases/download/${VERSION_TAG}"
+
+          curl -fsSL "${base_url}/local-review_darwin_amd64.tar.gz" -o darwin_amd64.tar.gz
+          curl -fsSL "${base_url}/local-review_darwin_arm64.tar.gz" -o darwin_arm64.tar.gz
+          curl -fsSL "${base_url}/local-review_linux_amd64.tar.gz"  -o linux_amd64.tar.gz
+          curl -fsSL "${base_url}/local-review_linux_arm64.tar.gz"  -o linux_arm64.tar.gz
+
+          sha_darwin_amd64=$(shasum -a 256 darwin_amd64.tar.gz | awk '{print $1}')
+          sha_darwin_arm64=$(shasum -a 256 darwin_arm64.tar.gz | awk '{print $1}')
+          sha_linux_amd64=$(shasum -a 256 linux_amd64.tar.gz | awk '{print $1}')
+          sha_linux_arm64=$(shasum -a 256 linux_arm64.tar.gz | awk '{print $1}')
+
+          # Update version line (anchored to start of line)
+          sed -i -E "s/^([[:space:]]*)version \"[^\"]*\"/\1version \"${version}\"/" Formula/local-review.rb
+
+          # Replace each platform's sha256. The pattern matches the line
+          # immediately following its corresponding url, so we need a
+          # platform-aware substitution. We use awk for clarity.
+          awk -v sda="$sha_darwin_amd64" \
+              -v sdr="$sha_darwin_arm64" \
+              -v sla="$sha_linux_amd64" \
+              -v slr="$sha_linux_arm64" '
+            /darwin_arm64\.tar\.gz/ { print; getline; sub(/sha256 "[^"]*"/, "sha256 \"" sdr "\""); print; next }
+            /darwin_amd64\.tar\.gz/ { print; getline; sub(/sha256 "[^"]*"/, "sha256 \"" sda "\""); print; next }
+            /linux_arm64\.tar\.gz/  { print; getline; sub(/sha256 "[^"]*"/, "sha256 \"" slr "\""); print; next }
+            /linux_amd64\.tar\.gz/  { print; getline; sub(/sha256 "[^"]*"/, "sha256 \"" sla "\""); print; next }
+            { print }
+          ' Formula/local-review.rb > Formula/local-review.rb.new
+          mv Formula/local-review.rb.new Formula/local-review.rb
+
+          # Sanity: version must have been updated
+          if ! grep -q "version \"${version}\"" Formula/local-review.rb; then
+            echo "ERROR: Formula version was not updated correctly!"
+            cat Formula/local-review.rb
+            exit 1
+          fi
+
+      - name: Commit and push
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/local-review.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "Update local-review to ${VERSION_TAG}"
+            git push
+          else
+            echo "No changes to commit (formula already up to date)"
+          fi
