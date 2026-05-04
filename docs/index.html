@@ -72,6 +72,13 @@
       gap: 15px;
       justify-content: center;
       flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .trust-line {
+      font-size: 0.88em;
+      opacity: 0.75;
+      letter-spacing: 0.3px;
     }
 
     .btn {
@@ -87,21 +94,25 @@
     .btn-primary {
       background: white;
       color: #667eea;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
 
     .btn-primary:hover {
       transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25);
     }
 
     .btn-secondary {
-      background: rgba(255,255,255,0.2);
+      background: transparent;
       color: white;
-      border: 2px solid white;
+      border: 2px solid rgba(255,255,255,0.7);
+      font-size: 1em;
+      padding: 11px 24px;
     }
 
     .btn-secondary:hover {
-      background: rgba(255,255,255,0.3);
+      background: rgba(255,255,255,0.12);
+      border-color: white;
     }
 
     section {
@@ -251,6 +262,77 @@
       margin-bottom: 15px;
     }
 
+    .install-card.recommended {
+      border-color: #667eea;
+    }
+
+    .install-card.coming-soon {
+      opacity: 0.55;
+      border-style: dashed;
+    }
+
+    .recommended-badge {
+      display: inline-block;
+      font-size: 0.72em;
+      font-weight: 700;
+      background: #667eea;
+      color: white;
+      padding: 2px 8px;
+      border-radius: 4px;
+      vertical-align: middle;
+      margin-left: 8px;
+      letter-spacing: 0.3px;
+    }
+
+    .qs-steps {
+      counter-reset: step;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      margin-top: 20px;
+    }
+
+    .qs-step {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .qs-step-num {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.18);
+      border: 1.5px solid rgba(255,255,255,0.4);
+      color: white;
+      font-size: 0.85em;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 2px;
+    }
+
+    .qs-step-body {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .qs-step-body p {
+      font-size: 0.95em;
+      opacity: 0.85;
+      margin-bottom: 8px;
+    }
+
+    .qs-step-body .code-wrapper {
+      margin: 0;
+    }
+
+    .qs-step-body pre {
+      margin: 0;
+    }
+
     .llm-support {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -330,9 +412,10 @@
       <h1>local-review</h1>
       <p class="tagline">Privacy-first AI code reviews with multi-LLM support</p>
       <div class="cta-buttons">
-        <a href="https://github.com/mshykov/local-review" class="btn btn-primary">View on GitHub</a>
-        <a href="https://github.com/mshykov/local-review/releases/latest" class="btn btn-secondary">Download v0.1.0</a>
+        <a href="https://github.com/mshykov/local-review/releases/latest" class="btn btn-primary">Download v0.1.0</a>
+        <a href="https://github.com/mshykov/local-review" class="btn btn-secondary">View on GitHub</a>
       </div>
+      <p class="trust-line">Open-source &middot; MIT Licensed &middot; No telemetry &middot; No SaaS</p>
     </div>
   </header>
 
@@ -402,24 +485,61 @@
   <section class="quickstart">
     <div class="container">
       <h2>Quick Start</h2>
-      <div class="code-wrapper">
-        <button type="button" class="copy-btn" aria-label="Copy to clipboard">
-          <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-          <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
-        </button>
-        <pre><code># Install local-review
-curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
-
-# Install free LLM CLIs
-npm install -g @anthropic/claude-cli
-npm install -g @google/gemini-cli@0.40.0
-
-# Authenticate
-claude login
-export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey
-
-# Run multi-LLM review
-local-review multi staged</code></pre>
+      <div class="qs-steps">
+        <div class="qs-step">
+          <div class="qs-step-num">1</div>
+          <div class="qs-step-body">
+            <p>Install local-review</p>
+            <div class="code-wrapper">
+              <button type="button" class="copy-btn" aria-label="Copy to clipboard">
+                <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+              </button>
+              <pre><code>curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh</code></pre>
+            </div>
+          </div>
+        </div>
+        <div class="qs-step">
+          <div class="qs-step-num">2</div>
+          <div class="qs-step-body">
+            <p>Install free LLM CLIs</p>
+            <div class="code-wrapper">
+              <button type="button" class="copy-btn" aria-label="Copy to clipboard">
+                <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+              </button>
+              <pre><code>npm install -g @anthropic/claude-cli
+npm install -g @google/gemini-cli</code></pre>
+            </div>
+          </div>
+        </div>
+        <div class="qs-step">
+          <div class="qs-step-num">3</div>
+          <div class="qs-step-body">
+            <p>Authenticate</p>
+            <div class="code-wrapper">
+              <button type="button" class="copy-btn" aria-label="Copy to clipboard">
+                <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+              </button>
+              <pre><code>claude login
+export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey</code></pre>
+            </div>
+          </div>
+        </div>
+        <div class="qs-step">
+          <div class="qs-step-num">4</div>
+          <div class="qs-step-body">
+            <p>Run your first review</p>
+            <div class="code-wrapper">
+              <button type="button" class="copy-btn" aria-label="Copy to clipboard">
+                <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+              </button>
+              <pre><code>local-review multi staged</code></pre>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -454,16 +574,10 @@ local-review multi staged</code></pre>
     <div class="container">
       <h2>Installation</h2>
       <div class="install-options">
-        <div class="install-card">
-          <h3>🍺 Homebrew (macOS/Linux)</h3>
-          <div class="code-wrapper">
-            <button type="button" class="copy-btn" aria-label="Copy to clipboard">
-              <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-              <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
-            </button>
-            <pre><code>brew install mshykov/tap/local-review</code></pre>
-          </div>
-          <p><small>Coming soon in v0.1.1</small></p>
+        <div class="install-card recommended">
+          <h3>📦 Download Binary <span class="recommended-badge">RECOMMENDED</span></h3>
+          <p><a href="https://github.com/mshykov/local-review/releases/latest">Download from GitHub Releases</a></p>
+          <p><small>Available for macOS, Linux, Windows &mdash; no dependencies required</small></p>
         </div>
         <div class="install-card">
           <h3>🔧 Go Install</h3>
@@ -475,10 +589,16 @@ local-review multi staged</code></pre>
             <pre><code>go install github.com/mshykov/local-review/cmd/local-review@latest</code></pre>
           </div>
         </div>
-        <div class="install-card">
-          <h3>📦 Download Binary</h3>
-          <p><a href="https://github.com/mshykov/local-review/releases/latest">Download from GitHub Releases</a></p>
-          <p><small>Available for macOS, Linux, Windows</small></p>
+        <div class="install-card coming-soon">
+          <h3>🍺 Homebrew (macOS/Linux)</h3>
+          <div class="code-wrapper">
+            <button type="button" class="copy-btn" aria-label="Copy to clipboard">
+              <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+            </button>
+            <pre><code>brew install mshykov/tap/local-review</code></pre>
+          </div>
+          <p><small>Coming in v0.1.1</small></p>
         </div>
       </div>
     </div>
@@ -492,6 +612,7 @@ local-review multi staged</code></pre>
         <a href="https://github.com/mshykov/local-review/issues">Issues</a> •
         <a href="https://github.com/mshykov/local-review/blob/main/LICENSE">MIT License</a>
       </p>
+      <p style="margin-top: 8px; opacity: 0.5; font-size: 0.82em;">v0.1.0 &mdash; May 2026</p>
     </div>
   </footer>
   <script>
