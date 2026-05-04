@@ -369,7 +369,7 @@
     <div class="container">
       <h2>Quick Start</h2>
       <div class="code-wrapper">
-        <button class="copy-btn" onclick="copyCode(this)" aria-label="Copy to clipboard">
+        <button type="button" class="copy-btn" aria-label="Copy to clipboard">
           <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
         </button>
@@ -423,7 +423,7 @@ local-review multi staged</code></pre>
         <div class="install-card">
           <h3>🍺 Homebrew (macOS/Linux)</h3>
           <div class="code-wrapper">
-            <button class="copy-btn" onclick="copyCode(this)" aria-label="Copy to clipboard">
+            <button type="button" class="copy-btn" aria-label="Copy to clipboard">
               <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
             </button>
@@ -434,7 +434,7 @@ local-review multi staged</code></pre>
         <div class="install-card">
           <h3>🔧 Go Install</h3>
           <div class="code-wrapper">
-            <button class="copy-btn" onclick="copyCode(this)" aria-label="Copy to clipboard">
+            <button type="button" class="copy-btn" aria-label="Copy to clipboard">
               <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
             </button>
@@ -461,26 +461,41 @@ local-review multi staged</code></pre>
     </div>
   </footer>
   <script>
-    function copyCode(btn) {
+    const copyTimers = new WeakMap();
+
+    function showCopied(btn) {
+      if (copyTimers.has(btn)) clearTimeout(copyTimers.get(btn));
+      btn.setAttribute('data-copied', '');
+      copyTimers.set(btn, setTimeout(() => {
+        btn.removeAttribute('data-copied');
+        copyTimers.delete(btn);
+      }, 2000));
+    }
+
+    function fallbackCopy(text, btn) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (ok) showCopied(btn);
+    }
+
+    document.addEventListener('click', function handleCopyClick(e) {
+      const btn = e.target.closest('.copy-btn');
+      if (!btn) return;
       const code = btn.closest('.code-wrapper').querySelector('code');
       const text = code.textContent.trim();
       if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text).then(() => showCopied(btn));
+        navigator.clipboard.writeText(text)
+          .then(() => showCopied(btn))
+          .catch(() => fallbackCopy(text, btn));
       } else {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        showCopied(btn);
+        fallbackCopy(text, btn);
       }
-    }
-    function showCopied(btn) {
-      btn.setAttribute('data-copied', '');
-      setTimeout(() => btn.removeAttribute('data-copied'), 2000);
-    }
+    });
   </script>
 </body>
 </html>
