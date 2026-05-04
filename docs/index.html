@@ -411,6 +411,62 @@
       border: 2px solid #ed8936;
     }
 
+    .lang-lead {
+      text-align: center;
+      max-width: 640px;
+      margin: 0 auto 8px;
+      color: #4a5568;
+      font-size: 1.05em;
+    }
+
+    .lang-support {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 16px;
+      margin-top: 28px;
+    }
+
+    .lang-card {
+      padding: 18px;
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      text-align: center;
+    }
+
+    .lang-card.universal {
+      border: 2px solid #667eea;
+    }
+
+    .lang-card.tuned {
+      border: 2px solid #48bb78;
+    }
+
+    .lang-card code {
+      color: #4a5568;
+      background: #f7fafc;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 0.88em;
+    }
+
+    .lang-footnote {
+      text-align: center;
+      margin-top: 24px;
+      color: #718096;
+      font-size: 0.95em;
+    }
+
+    .lang-footnote a {
+      color: #667eea;
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .lang-footnote a:hover {
+      text-decoration: underline;
+    }
+
     .badge {
       display: inline-block;
       padding: 4px 12px;
@@ -454,6 +510,8 @@
       .cta-buttons { flex-direction: column; align-items: stretch; }
       .btn { text-align: center; }
       .llm-support { grid-template-columns: 1fr; }
+      .lang-support { grid-template-columns: 1fr 1fr; gap: 12px; }
+      .lang-card { padding: 14px; }
       .install-options { max-width: 100%; margin-left: 0; margin-right: 0; }
       .install-card { padding: 16px; overflow: hidden; }
       .install-card h3 { font-size: 1em; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -608,6 +666,45 @@
           <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Disabled by default</p>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="container">
+      <h2>Supported Languages</h2>
+      <p class="lang-lead">
+        <strong>Works on any language</strong> the LLM understands. Specialized prompt packs add language-specific idiom checks, security patterns, and pitfalls.
+      </p>
+      <div class="lang-support">
+        <div class="lang-card universal">
+          <h3>Any language</h3>
+          <p><code>default</code> pack</p>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Universal review rules</p>
+        </div>
+        <div class="lang-card tuned">
+          <h3>Rust</h3>
+          <p><code>.rs</code></p>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Specialized pack</p>
+        </div>
+        <div class="lang-card tuned">
+          <h3>Go</h3>
+          <p><code>.go</code></p>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Specialized pack</p>
+        </div>
+        <div class="lang-card tuned">
+          <h3>TypeScript</h3>
+          <p><code>.ts</code> / <code>.tsx</code></p>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Specialized pack</p>
+        </div>
+        <div class="lang-card tuned">
+          <h3>Python</h3>
+          <p><code>.py</code></p>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Specialized pack</p>
+        </div>
+      </div>
+      <p class="lang-footnote">
+        More language packs on the way — <a href="https://github.com/mshykov/local-review/blob/main/CONTRIBUTING.md#adding-a-prompt-pack">add yours →</a>
+      </p>
     </div>
   </section>
 
