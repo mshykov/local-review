@@ -43,13 +43,26 @@ func runDoctor() error {
 		}
 	}
 
-	// Print status for each LLM
+	// Print status for each LLM. Three distinct states:
+	//   ✓ Found in PATH AND version probe succeeded → ready to use.
+	//   ⚠ Found in PATH BUT version probe failed → install is broken;
+	//     show the path so the user can investigate (broken symlink,
+	//     corrupted binary, missing runtime).
+	//   ✗ Not found in PATH → not installed; show install instructions.
 	for _, llm := range llms {
 		displayName := getDisplayName(llm.Name)
 
-		if llm.Available {
+		switch {
+		case llm.Available:
 			fmt.Printf("✓ %-15s v%-10s (found at %s)\n", displayName, llm.Version, llm.Path)
-		} else {
+		case llm.Path != "":
+			// Binary found, but version probe didn't return a parseable
+			// string. Most often: broken symlink, corrupted install, or
+			// missing runtime (e.g., Node not on PATH for an npm binary).
+			fmt.Printf("⚠ %-15s found at %s, but version probe failed\n", displayName, llm.Path)
+			fmt.Println("  Install may be broken — try reinstalling:")
+			printInstallInstructions(llm.Name)
+		default:
 			fmt.Printf("✗ %-15s not found\n", displayName)
 			printInstallInstructions(llm.Name)
 		}
@@ -86,7 +99,7 @@ func getDisplayName(name string) string {
 func printInstallInstructions(name string) {
 	switch name {
 	case "claude":
-		fmt.Println("  Install: npm install -g @anthropic/claude-cli")
+		fmt.Println("  Install: npm install -g @anthropic-ai/claude-code")
 		fmt.Println("  Auth:    claude login")
 	case "gemini":
 		fmt.Println("  Install: npm install -g @google/gemini-cli")

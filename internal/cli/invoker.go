@@ -136,4 +136,3 @@ func (c *ClaudeInvoker) RunPrompt(ctx context.Context, prompt string) (string, e
 	}
 	return string(output), nil
 }
-

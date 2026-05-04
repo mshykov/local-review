@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -73,6 +76,32 @@ func TestDetectAll(t *testing.T) {
 		if !found {
 			t.Errorf("DetectAll() missing expected LLM: %s", name)
 		}
+	}
+}
+
+func TestDetect_UnknownVersionMarksUnavailable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub uses /bin/sh; skip on windows")
+	}
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fakecli")
+	// Stub binary that prints no recognizable version, so detectVersion
+	// returns "unknown" even though LookPath finds the binary.
+	script := "#!/bin/sh\necho 'no version here'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir)
+
+	llm := Detect("fakecli")
+	if llm.Path == "" {
+		t.Fatalf("expected LookPath to succeed for stub, got empty path")
+	}
+	if llm.Version != "unknown" {
+		t.Fatalf("expected version=unknown, got %q", llm.Version)
+	}
+	if llm.Available {
+		t.Errorf("Available = true for unknown-version CLI, want false")
 	}
 }
 

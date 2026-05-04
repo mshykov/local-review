@@ -91,7 +91,7 @@ local-review multi staged --merge-with claude
 
 | LLM | Free Option | Installation | Status |
 |-----|-------------|--------------|--------|
-| **Claude** | ✅ Free tier via [claude.ai](https://claude.ai) | `npm install -g @anthropic/claude-cli` | Default enabled |
+| **Claude** | ✅ Free tier via [claude.ai](https://claude.ai) | `npm install -g @anthropic-ai/claude-code` | Default enabled |
 | **Gemini** | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` | Default enabled |
 | **Codex** | ⚠️ Requires ChatGPT Plus ($20/mo) | `npm install -g @openai/codex` | Disabled by default |
 
@@ -105,7 +105,7 @@ local-review multi staged --merge-with claude
 **Quick Setup:**
 ```sh
 # Install free LLM CLIs
-npm install -g @anthropic/claude-cli
+npm install -g @anthropic-ai/claude-code
 npm install -g @google/gemini-cli
 
 # Authenticate
