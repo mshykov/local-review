@@ -41,6 +41,7 @@ review:
   max_findings: 20
   exclude:
     - "**/*.lock"
+    - "**/*.snap"
     - "**/dist/**"
     - "**/build/**"
     - "**/node_modules/**"
