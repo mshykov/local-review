@@ -28,3 +28,17 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Inter
+
+The Inter typeface used on the website (`docs/index.html`) is by
+[The Inter Project Authors](https://github.com/rsms/inter), licensed
+under the SIL Open Font License v1.1. Full license:
+[`docs/fonts/Inter-LICENSE.txt`](docs/fonts/Inter-LICENSE.txt).
+
+## JetBrains Mono
+
+The JetBrains Mono typeface used for code blocks on the website is by
+[The JetBrains Mono Project Authors](https://github.com/JetBrains/JetBrainsMono),
+licensed under the SIL Open Font License v1.1. Full license:
+[`docs/fonts/JetBrainsMono-LICENSE.txt`](docs/fonts/JetBrainsMono-LICENSE.txt).
