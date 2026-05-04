@@ -35,20 +35,20 @@ We use **semantic versioning**: `vMAJOR.MINOR.PATCH`
 
 ### Label cheat sheet
 
-Apply these labels to a PR **only when you actually want a release on merge**. The pipeline ships when the `release` label is present *and* one of `major` / `minor` / `patch` (default: `patch`).
+Apply these labels to a PR **only when you actually want a release on merge**. The pipeline ships when the `release` label is present. If neither `major` nor `minor` is present, the release defaults to a `patch` bump; use `patch` only when you want to make that default explicit.
 
 | Label | Use it for | Don't use it for |
 |---|---|---|
 | `release` | Mandatory on any PR you want to ship | Doc-only PRs, refactors, internal tweaks |
 | `major` | Breaking CLI flag changes, removed commands, config schema rewrites | Anything that doesn't break existing user setups |
 | `minor` | A new prompt pack, a new command, a new provider in core, a new flag | Bug fixes, polish, internal refactors |
-| `patch` | Bug fixes, doc/config updates, dependency bumps, test additions | New user-visible functionality |
+| `patch` | Bug fixes, doc/config updates, dependency bumps, test additions, or when you want to make the default patch bump explicit | New user-visible functionality |
 
 **Common mistakes to avoid:**
 
 - ❌ **`minor` for "I want to ship this, the change feels notable"** → bumps the published version more than necessary. v0.1.1 → v0.2.0 implies a feature; if the PR is "fix typo in error message," use `patch`.
 - ❌ **`release` on every merged PR** → ships a tag for every doc/CI/refactor PR. Wastes version numbers and inflates release frequency. Only label `release` when you specifically want to publish.
-- ❌ **No bump label, just `release`** → defaults to `patch`. If you wanted a feature release, you'd skip a number. Always pair `release` with the explicit bump label.
+- ❌ **No bump label, just `release`, when you intended a feature or breaking release** → defaults to `patch`. Add `minor` or `major` when you need something other than the default patch bump.
 
 **0.x special case:** while you're pre-1.0, "minor" still doesn't promise stability — anything can break. But the version number is still the public-facing signal of momentum, so bumping it casually inflates expectations. Default to `patch` unless the PR adds new user-visible functionality.
 
