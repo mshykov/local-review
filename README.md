@@ -93,7 +93,7 @@ local-review multi staged --merge-with claude
 |-----|-------------|--------------|--------|
 | **Claude** | ✅ Free tier via [claude.ai](https://claude.ai) | `npm install -g @anthropic/claude-cli` | Default enabled |
 | **Gemini** | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` | Default enabled |
-| **Codex** | ⚠️ Requires ChatGPT Plus ($20/mo) | `npm install -g @openai/codex` | Disabled by default |
+| **Codex** | ⚠️ ChatGPT Plus ($20/mo) **or** OpenAI API key (pay-per-token) | `npm install -g @openai/codex` | Disabled by default |
 
 **How it works:**
 1. Detects installed LLM CLIs (claude, gemini, codex)
@@ -118,6 +118,16 @@ local-review doctor
 # Run multi-LLM review
 local-review multi staged
 ```
+
+**Authentication — what each LLM needs:**
+
+| LLM | Default (preferred) | API-key alternative |
+|---|---|---|
+| **Claude** | `claude login` — Anthropic OAuth, works with the free tier on a claude.ai account | `export ANTHROPIC_API_KEY=...` (paid API access) |
+| **Gemini** | `export GEMINI_API_KEY=...` — free key from [Google AI Studio](https://aistudio.google.com/apikey) | (Gemini CLI also supports `gemini /auth` for Google OAuth) |
+| **Codex** | `codex login` — uses your ChatGPT Plus subscription ($20/mo) | `export OPENAI_API_KEY=...` — pay-per-token; usually **cheaper** for occasional review use |
+
+Run `local-review doctor` to see which CLIs you have installed and authenticated. The output tells you exactly what to fix for each row that isn't ✓ ready.
 
 **Configuration:**
 ```yaml
