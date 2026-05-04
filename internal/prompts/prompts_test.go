@@ -6,7 +6,7 @@ import (
 )
 
 func TestGetKnown(t *testing.T) {
-	cases := []string{"default", "typescript", "go", "python"}
+	cases := []string{"default", "typescript", "go", "python", "rust"}
 	for _, lang := range cases {
 		body, err := Get(lang)
 		if err != nil {
@@ -35,7 +35,7 @@ func TestAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) < 4 {
-		t.Errorf("expected ≥4 packs (default + 3 langs), got %d: %v", len(ids), ids)
+	if len(ids) < 5 {
+		t.Errorf("expected ≥5 packs (default + 4 langs), got %d: %v", len(ids), ids)
 	}
 }

@@ -9,7 +9,7 @@ local-review is a local, BYOK (Bring Your Own Key) AI code reviewer. It's a sing
 - **v0.1+**: Supports multi-LLM parallel reviews (Claude, Gemini, Codex)
 - **v0**: Single-LLM via OpenAI-compatible API endpoints
 - Saves reviews to local storage and merges findings intelligently
-- Ships with language-aware prompt packs for TypeScript, Go, Python, and more
+- Ships with language-aware prompt packs for TypeScript, Go, Python, Rust, and more
 
 Key constraints:
 - **No vendor SDK dependencies** — keeps the binary small and portable
@@ -299,7 +299,7 @@ Exit codes:
 ### Prompt Packs (internal/prompts/)
 Embedded markdown files (packs/*.md) define language-specific review rules:
 - `default.md` — fallback for unknown languages
-- `typescript.md`, `go.md`, `python.md` — language-specific packs
+- `typescript.md`, `go.md`, `python.md`, `rust.md` — language-specific packs
 
 Each pack is a system prompt with:
 1. Priority-ordered review criteria (correctness > security > perf > style)
