@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#667eea"/>
-      <stop offset="100%" stop-color="#764ba2"/>
+      <stop offset="0%" stop-color="#52b788"/>
+      <stop offset="100%" stop-color="#1b4332"/>
     </linearGradient>
   </defs>
 
@@ -68,5 +68,5 @@
 
   <!-- Star CTA pill -->
   <rect x="80" y="480" width="310" height="46" rx="23" fill="rgba(255,255,255,0.92)"/>
-  <text x="235" y="509" text-anchor="middle" fill="#764ba2" font-family="system-ui,-apple-system,sans-serif" font-size="17" font-weight="700">&#x2605; Star on GitHub &#x2014; It&#x2019;s Free</text>
+  <text x="235" y="509" text-anchor="middle" fill="#1b4332" font-family="system-ui,-apple-system,sans-serif" font-size="17" font-weight="700">&#x2605; Star on GitHub &#x2014; It&#x2019;s Free</text>
 </svg>
