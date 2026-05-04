@@ -301,11 +301,19 @@ func checkCodexAuth() authStatus {
 						detail:        "logged in via 'codex login' (ChatGPT subscription)",
 					}
 				case "api_key":
-					return authStatus{
-						authenticated: true,
-						detail:        "API key configured via 'codex login --api-key'",
+					// auth_mode: "api_key" only counts when the stored
+					// key is actually non-empty. A partial / corrupted
+					// auth.json with the mode set but the key cleared
+					// must not produce a false "authenticated" result.
+					if a.OpenAIAPIKey != nil && *a.OpenAIAPIKey != "" {
+						return authStatus{
+							authenticated: true,
+							detail:        "API key configured via 'codex login --api-key'",
+						}
 					}
 				default:
+					// Older / hand-edited auth.json files may lack
+					// auth_mode but have a stored key. Honor that.
 					if a.OpenAIAPIKey != nil && *a.OpenAIAPIKey != "" {
 						return authStatus{
 							authenticated: true,

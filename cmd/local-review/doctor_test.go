@@ -184,6 +184,19 @@ func TestCheckCodexAuth_ExplicitAPIKeyMode(t *testing.T) {
 	}
 }
 
+func TestCheckCodexAuth_APIKeyModeWithoutStoredKey(t *testing.T) {
+	// A partial/corrupted auth.json where auth_mode is "api_key" but
+	// OPENAI_API_KEY is null/empty must not produce a false-positive
+	// authenticated result.
+	home := withFakeHome(t)
+	writeFile(t, filepath.Join(home, ".codex", "auth.json"),
+		`{"auth_mode": "api_key", "OPENAI_API_KEY": null}`)
+	got := checkCodexAuth()
+	if got.authenticated {
+		t.Errorf("api_key mode with null key should not authenticate, got %+v", got)
+	}
+}
+
 func TestCheckCodexAuth_LegacyAuthFile(t *testing.T) {
 	// Older codex versions / hand-edited files may lack an explicit
 	// auth_mode but have a stored OPENAI_API_KEY. Honor that.
