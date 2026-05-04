@@ -23,6 +23,11 @@
       padding: 0;
     }
 
+    html, body {
+      overflow-x: hidden;
+      max-width: 100%;
+    }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', sans-serif;
       line-height: 1.6;
@@ -151,19 +156,68 @@
       color: white;
     }
 
+    .code-wrapper {
+      position: relative;
+    }
+
     pre {
       background: #1a202c;
-      padding: 20px;
+      padding: 20px 52px 20px 20px;
       border-radius: 8px;
       overflow-x: auto;
       margin: 20px 0;
       border: 1px solid #4a5568;
+      max-width: 100%;
     }
 
     code {
       font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
       font-size: 0.95em;
       color: #68d391;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      width: 34px;
+      height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: #a0aec0;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      flex-shrink: 0;
+    }
+
+    .copy-btn:hover {
+      background: rgba(255,255,255,0.18);
+      color: #e2e8f0;
+    }
+
+    .copy-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+
+    .copy-btn .icon-check { display: none; }
+    .copy-btn[data-copied] .icon-copy  { display: none; }
+    .copy-btn[data-copied] .icon-check { display: block; }
+    .copy-btn[data-copied] { color: #68d391; border-color: #68d391; }
+
+    @media (max-width: 768px) {
+      .copy-btn { width: 44px; height: 44px; top: 6px; right: 6px; }
+      .copy-btn svg { width: 18px; height: 18px; }
     }
 
     .install-options {
@@ -251,7 +305,12 @@
       h1 { font-size: 2em; }
       .tagline { font-size: 1.1em; }
       .features { grid-template-columns: 1fr; }
-      .cta-buttons { flex-direction: column; }
+      .cta-buttons { flex-direction: column; align-items: stretch; }
+      .btn { text-align: center; }
+      .llm-support { grid-template-columns: 1fr; }
+      .install-options { max-width: 100%; }
+      .install-card { padding: 18px; }
+      pre { font-size: 0.82em; padding: 14px 50px 14px 14px; }
     }
   </style>
 </head>
@@ -309,7 +368,12 @@
   <section class="quickstart">
     <div class="container">
       <h2>Quick Start</h2>
-      <pre><code># Install local-review
+      <div class="code-wrapper">
+        <button class="copy-btn" onclick="copyCode(this)" aria-label="Copy to clipboard">
+          <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+        </button>
+        <pre><code># Install local-review
 curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
 
 # Install free LLM CLIs
@@ -322,6 +386,7 @@ export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey
 
 # Run multi-LLM review
 local-review multi staged</code></pre>
+      </div>
     </div>
   </section>
 
@@ -357,12 +422,24 @@ local-review multi staged</code></pre>
       <div class="install-options">
         <div class="install-card">
           <h3>🍺 Homebrew (macOS/Linux)</h3>
-          <pre><code>brew install mshykov/tap/local-review</code></pre>
+          <div class="code-wrapper">
+            <button class="copy-btn" onclick="copyCode(this)" aria-label="Copy to clipboard">
+              <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+            </button>
+            <pre><code>brew install mshykov/tap/local-review</code></pre>
+          </div>
           <p><small>Coming soon in v0.1.1</small></p>
         </div>
         <div class="install-card">
           <h3>🔧 Go Install</h3>
-          <pre><code>go install github.com/mshykov/local-review/cmd/local-review@latest</code></pre>
+          <div class="code-wrapper">
+            <button class="copy-btn" onclick="copyCode(this)" aria-label="Copy to clipboard">
+              <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <svg class="icon-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+            </button>
+            <pre><code>go install github.com/mshykov/local-review/cmd/local-review@latest</code></pre>
+          </div>
         </div>
         <div class="install-card">
           <h3>📦 Download Binary</h3>
@@ -383,5 +460,27 @@ local-review multi staged</code></pre>
       </p>
     </div>
   </footer>
+  <script>
+    function copyCode(btn) {
+      const code = btn.closest('.code-wrapper').querySelector('code');
+      const text = code.textContent.trim();
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(() => showCopied(btn));
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showCopied(btn);
+      }
+    }
+    function showCopied(btn) {
+      btn.setAttribute('data-copied', '');
+      setTimeout(() => btn.removeAttribute('data-copied'), 2000);
+    }
+  </script>
 </body>
 </html>
