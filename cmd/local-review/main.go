@@ -49,7 +49,7 @@ Ollama (fully offline), vLLM, etc.
 First-time setup:
 
   local-review init             # interactive — picks a provider, writes .local-review.yml
-  export OPENAI_API_KEY=...     # init prints which env var to set
+  export <API_KEY_ENV>=...      # init prints which env var to set
   local-review staged           # review staged changes
 
 Multi-LLM mode (runs installed LLM CLIs in parallel, merges findings):
