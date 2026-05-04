@@ -60,13 +60,9 @@ brew install node
 npm install -g @google/gemini-cli@0.40.0
 npm install -g @openai/codex@0.128.0
 npm install -g @anthropic/claude-cli
-
-# Install GitHub CLI for Copilot
-brew install gh
-gh auth login
 ```
 
-Note: You don't need all 4 LLMs installed to develop. The code gracefully handles missing CLIs.
+Note: You don't need all 3 LLMs installed to develop. The code gracefully handles missing CLIs.
 
 ## Adding a prompt pack
 

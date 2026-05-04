@@ -226,7 +226,7 @@ Track changes between versions:
 ## [0.1.0] - 2024-XX-XX
 
 ### Added
-- Multi-LLM support (claude, gemini, codex, copilot)
+- Multi-LLM support (claude, gemini, codex)
 - `local-review multi` command
 - `local-review doctor` command
 - Intelligent review merging
