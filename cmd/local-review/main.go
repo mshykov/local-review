@@ -42,14 +42,23 @@ func main() {
 		Long: `local-review reviews a git diff with an LLM of your choice and reports findings.
 
 It runs entirely on your machine. The only network call is to whichever
-chat-completions endpoint you configure (OpenAI by default; Anthropic,
-Together, Groq, OpenRouter, Ollama, vLLM all work via the same API shape).
+chat-completions endpoint you configure. Works with any OpenAI-compatible
+provider: OpenAI, Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter,
+Ollama (fully offline), vLLM, etc.
 
-Set your API key:
+First-time setup:
 
-  export LOCAL_REVIEW_API_KEY=sk-...
+  local-review init             # interactive — picks a provider, writes .local-review.yml
+  export <API_KEY_ENV>=...      # init prints which env var to set
+  local-review staged           # review staged changes
 
-Configure provider/model in ~/.local-review.yml or ./.local-review.yml. See README.`,
+Multi-LLM mode (runs installed LLM CLIs in parallel, merges findings):
+
+  local-review doctor           # check which LLM CLIs are installed/authenticated
+  local-review multi staged
+
+Configure manually in ~/.local-review.yml or ./.local-review.yml.
+See README and https://mshykov.github.io/local-review/ for details.`,
 		SilenceUsage: true,
 	}
 
