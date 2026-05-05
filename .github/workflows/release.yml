@@ -129,25 +129,57 @@ jobs:
           unresolved=0
           cursor=""
           while :; do
-            page=$(gh api graphql \
-              -F owner="$owner" -F name="$name" -F num="$pr_number" -F cursor="$cursor" \
-              -f query='
-                query($owner: String!, $name: String!, $num: Int!, $cursor: String) {
-                  repository(owner: $owner, name: $name) {
-                    pullRequest(number: $num) {
-                      reviewThreads(first: 100, after: $cursor) {
-                        pageInfo { hasNextPage endCursor }
-                        nodes {
-                          isResolved
-                          comments(first: 1) {
-                            nodes { author { login } }
+            # Build the gh-api invocation. The first iteration must NOT
+            # send a cursor at all — passing `cursor=""` makes the
+            # graphql variable an empty string instead of null, which
+            # GitHub's API rejects (it expects either a real cursor or
+            # the variable absent / null). Build the args slice
+            # accordingly.
+            if [ -z "$cursor" ]; then
+              page=$(gh api graphql \
+                -F owner="$owner" -F name="$name" -F num="$pr_number" \
+                -f query='
+                  query($owner: String!, $name: String!, $num: Int!) {
+                    repository(owner: $owner, name: $name) {
+                      pullRequest(number: $num) {
+                        reviewThreads(first: 100) {
+                          pageInfo { hasNextPage endCursor }
+                          nodes {
+                            isResolved
+                            comments(first: 1) {
+                              nodes { author { login } }
+                            }
                           }
                         }
                       }
                     }
-                  }
-                }')
-            copilot_filter='[.data.repository.pullRequest.reviewThreads.nodes[] | select(.comments.nodes[0].author.login | test("copilot"; "i"))]'
+                  }')
+            else
+              page=$(gh api graphql \
+                -F owner="$owner" -F name="$name" -F num="$pr_number" -F cursor="$cursor" \
+                -f query='
+                  query($owner: String!, $name: String!, $num: Int!, $cursor: String) {
+                    repository(owner: $owner, name: $name) {
+                      pullRequest(number: $num) {
+                        reviewThreads(first: 100, after: $cursor) {
+                          pageInfo { hasNextPage endCursor }
+                          nodes {
+                            isResolved
+                            comments(first: 1) {
+                              nodes { author { login } }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }')
+            fi
+            # Null-safe author check: a thread whose first comment has
+            # no author (deleted bot account, or a comment-less thread
+            # GitHub returned for some reason) makes `.login | test()`
+            # crash the entire release job. Coalesce to "" first so the
+            # filter just doesn't match those threads.
+            copilot_filter='[.data.repository.pullRequest.reviewThreads.nodes[] | select(((.comments.nodes[0].author.login // "") | test("copilot"; "i")))]'
             page_total=$(echo "$page" | jq "$copilot_filter | length")
             page_unresolved=$(echo "$page" | jq "$copilot_filter | map(select(.isResolved == false)) | length")
             total=$((total + page_total))

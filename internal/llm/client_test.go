@@ -242,6 +242,34 @@ func TestComplete_EmptyChoicesReturnsError(t *testing.T) {
 	}
 }
 
+func TestComplete_LocalURLOmitsAuthorizationHeaderOnEmptyKey(t *testing.T) {
+	// Pre-fix: even with an empty key (the local-URL bypass), we
+	// still set `Authorization: Bearer ` on the outgoing request.
+	// Some local OpenAI-compat servers (Ollama, vLLM) reject or
+	// log-spam on an empty bearer token; the absent-header form is
+	// what they expect for unauthenticated mode.
+	m := newMockServer(t, okResponse("ok"))
+	c := New(m.server.URL, "", "LOCAL_REVIEW_API_KEY", "ollama-model", 5)
+	if _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := m.lastRequest.Header.Get("Authorization"); got != "" {
+		t.Errorf("Authorization header should be absent on empty key, got %q", got)
+	}
+}
+
+func TestComplete_NonEmptyKeyStillSetsAuthorizationHeader(t *testing.T) {
+	// Sanity: the header conditional must not regress the normal path.
+	m := newMockServer(t, okResponse("ok"))
+	c := New(m.server.URL, "sk-real", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
+	if _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := m.lastRequest.Header.Get("Authorization"), "Bearer sk-real"; got != want {
+		t.Errorf("Authorization: want %q, got %q", want, got)
+	}
+}
+
 func TestComplete_LocalURLSkipsKeyRequirement(t *testing.T) {
 	// Ollama / vLLM at localhost don't authenticate; the init wizard's
 	// Ollama preset deliberately omits api_key_env. Pre-fix we still

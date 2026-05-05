@@ -2,6 +2,7 @@ package output
 
 import (
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/mshykov/local-review/internal/review"
@@ -25,6 +26,18 @@ func (fw *failingWriter) Write(p []byte) (int, error) {
 		n = fw.succeedFor - fw.written
 	}
 	fw.written += n
+	// io.Writer contract: a short write (n < len(p)) MUST return a
+	// non-nil error. Returning (n, nil) here would let fmt.Fprintf
+	// callers treat truncated writes as success and the error
+	// propagation we're testing wouldn't fire. Use io.ErrShortWrite
+	// so the assertion still catches via errors.Is(err, fw.err) when
+	// fw.err is set by the caller.
+	if n < len(p) {
+		if fw.err != nil {
+			return n, fw.err
+		}
+		return n, io.ErrShortWrite
+	}
 	return n, nil
 }
 

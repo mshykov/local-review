@@ -8,9 +8,9 @@ severe and the patch is small.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.5.x   | :white_check_mark: |
-| 0.4.x   | :grey_question: (severe issues only) |
-| < 0.4   | :x:                |
+| 0.6.x   | :white_check_mark: |
+| 0.5.x   | :grey_question: (severe issues only) |
+| < 0.5   | :x:                |
 
 ## Reporting a Vulnerability
 

@@ -139,7 +139,14 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 		return "", fmt.Errorf("new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	if c.APIKey != "" {
+		// Only set Authorization when we actually have a key. Sending
+		// `Authorization: Bearer ` with an empty token breaks some
+		// local OpenAI-compatible servers (Ollama, vLLM) that expect
+		// the header to be absent in unauthenticated mode. The empty-
+		// key case is reachable via the isLocalURL bypass above.
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {

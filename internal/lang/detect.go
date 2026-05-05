@@ -11,13 +11,13 @@ import (
 // Identifier returned by Detect. These match the pack file names in
 // internal/prompts/packs (e.g. Detect("foo.ts") → "typescript" → typescript.md).
 //
-// JavaScript intentionally maps to TypeScript: there's no dedicated
-// javascript.md pack and shipping one would duplicate ~95% of the TS
-// pack content (TS is a superset; the React/Next.js/Node patterns
-// covered by the TS pack apply equally to plain JS). Better to point
-// at one well-tuned pack than maintain two near-duplicates. If JS-
-// specific concerns ever diverge meaningfully, ship a javascript.md
-// and flip this constant.
+// JavaScript routes to the TypeScript pack — see the byExt map below
+// for the .js/.jsx/.mjs/.cjs entries. There's no dedicated javascript.md
+// pack; shipping one would duplicate ~95% of the TS pack content (TS
+// is a superset; the React/Next.js/Node patterns the TS pack covers
+// apply equally to plain JS). If JS-specific concerns ever diverge
+// meaningfully from TS, add a JavaScript constant here, ship a
+// javascript.md pack, and re-point the .js* entries in byExt.
 const (
 	Default    = "default"
 	TypeScript = "typescript"
@@ -33,7 +33,7 @@ const (
 var byExt = map[string]string{
 	".ts":   TypeScript,
 	".tsx":  TypeScript,
-	".js":   TypeScript, // see comment on the JavaScript constant above
+	".js":   TypeScript, // see the const-block comment above for why JS → TS
 	".jsx":  TypeScript,
 	".mjs":  TypeScript,
 	".cjs":  TypeScript,
