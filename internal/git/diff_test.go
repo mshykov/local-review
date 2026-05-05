@@ -182,6 +182,51 @@ func TestCurrentBranch(t *testing.T) {
 	}
 }
 
+func TestValidateRef(t *testing.T) {
+	cases := []struct {
+		ref     string
+		wantErr bool
+	}{
+		{"main", false},
+		{"feature/auth-fix", false},
+		{"v1.2.3", false},
+		{"abc1234", false},
+		{"HEAD", false},
+		{"", true},
+		{"--output=/tmp/xyz", true},    // flag injection
+		{"-c", true},                   // flag injection
+		{"--upload-pack=/tmp/x", true}, // git-specific flag injection
+		{"main\nmalice", true},         // newline injection
+		{"main\x00main", true},         // NUL injection
+	}
+	for _, tc := range cases {
+		err := ValidateRef(tc.ref)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ValidateRef(%q) err=%v, wantErr=%v", tc.ref, err, tc.wantErr)
+		}
+	}
+}
+
+func TestArgsFor_RejectsFlagShapedRef(t *testing.T) {
+	// argsFor must refuse to construct a `git diff` / `git show` that
+	// would interpret a user-controlled ref as a flag. Defends against
+	// `git diff --output=/tmp/x...HEAD` — `...HEAD` makes it look
+	// positional but git still parses the leading `--` as a flag.
+	if _, err := argsFor(ModeBranch, "--output=/tmp/x"); err == nil {
+		t.Error("ModeBranch with flag-shaped ref: want error, got nil")
+	}
+	if _, err := argsFor(ModeCommit, "-c"); err == nil {
+		t.Error("ModeCommit with flag-shaped ref: want error, got nil")
+	}
+	// Sanity: legitimate refs still pass through.
+	if _, err := argsFor(ModeBranch, "main"); err != nil {
+		t.Errorf("ModeBranch with 'main': want no error, got %v", err)
+	}
+	if _, err := argsFor(ModeCommit, "v1.2.3"); err != nil {
+		t.Errorf("ModeCommit with 'v1.2.3': want no error, got %v", err)
+	}
+}
+
 func TestSanitizeBranchName(t *testing.T) {
 	tests := []struct {
 		input string

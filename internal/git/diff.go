@@ -74,17 +74,50 @@ func argsFor(mode Mode, ref string) ([]string, error) {
 		if ref == "" {
 			ref = "HEAD"
 		}
+		if err := ValidateRef(ref); err != nil {
+			return nil, err
+		}
 		// `show` by itself includes the commit message. We just want the diff.
 		return []string{"show", ctx, "--format=", ref}, nil
 	case ModeBranch:
 		if ref == "" {
 			ref = "main"
 		}
+		if err := ValidateRef(ref); err != nil {
+			return nil, err
+		}
 		// Three-dot: diff from common ancestor to current HEAD.
+		// Note: we can't use `--` to separate the ref from positional
+		// args here because `<ref>...HEAD` is itself a single ref-spec
+		// argument, not a path. ValidateRef above is the defense.
 		return []string{"diff", ctx, ref + "...HEAD"}, nil
 	default:
 		return nil, fmt.Errorf("unknown mode %d", mode)
 	}
+}
+
+// ValidateRef rejects user-supplied git refs that could be parsed by
+// git as command-line flags rather than refs. A ref starting with `-`
+// (e.g., `--output=/tmp/xyz`, `-c core.editor=...`) would be treated
+// as a flag in `git diff <ref>...HEAD` or `git show <ref>` despite
+// looking like a positional argument, so we refuse anything that
+// shape rather than relying on a `--` separator that doesn't apply
+// uniformly across git subcommands.
+//
+// We also reject refs containing newlines or NUL bytes because they
+// can't survive a shell pipeline correctly and almost always indicate
+// caller bugs (or attempted injection from a wrapping script).
+func ValidateRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("ref is empty")
+	}
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("invalid ref %q: refs starting with '-' are rejected to prevent flag injection", ref)
+	}
+	if strings.ContainsAny(ref, "\x00\n\r") {
+		return fmt.Errorf("invalid ref %q: contains control characters", ref)
+	}
+	return nil
 }
 
 // parseUnifiedDiff walks `git diff` output and groups hunks by file.
@@ -242,12 +275,19 @@ func SanitizeCommit(commit string) string {
 }
 
 // ResolveRef resolves a git ref (branch name, tag, short hash) to a full commit hash.
-// Returns the first 7 characters of the commit hash, or empty string if resolution fails or times out.
+// Returns the first 7 characters of the commit hash, or empty string
+// if resolution fails / times out / the ref is rejected by ValidateRef
+// (refs starting with `-` would otherwise be parsed by git as flags).
 func ResolveRef(ref string) string {
+	if err := ValidateRef(ref); err != nil {
+		return ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", ref)
+	// `--` after the flags ensures the ref is treated as a positional
+	// argument even if a future caller bypasses ValidateRef.
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", "--", ref)
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
