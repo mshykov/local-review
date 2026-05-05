@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -30,8 +31,19 @@ func NewInvoker(llm LLM) Invoker {
 }
 
 // CodexInvoker runs the OpenAI Codex CLI.
-// Note: Actual CLI invocation pattern needs verification - current implementation
-// may not work correctly. Disabled by default pending confirmation.
+//
+// Bare `codex` (no subcommand) opens an interactive TUI — that's what the
+// pre-v0.5.1 invoker was doing, which is why every codex review failed
+// with `exit status 1`. We use `codex exec` (non-interactive), pipe the
+// prompt over stdin, and have codex write only the final assistant
+// message to a temp file via --output-last-message. That sidesteps both
+// the interactive-TUI failure AND the noisy "session id / tokens used"
+// preamble that codex exec normally prints to stdout.
+//
+// We deliberately don't use `codex review` (the dedicated review
+// subcommand) because it re-extracts the diff itself from the local
+// git tree, conflicting with the orchestrator's "extract once, fan out
+// to all LLMs with the same diff string" contract.
 type CodexInvoker struct {
 	path string
 }
@@ -45,25 +57,38 @@ func (c *CodexInvoker) Review(ctx context.Context, diff string) (string, error) 
 		"Provide specific findings with file names and line numbers.\n" +
 		"Format as markdown with severity levels (critical, major, warning, info).\n\n" +
 		"Diff:\n" + diff
-
-	cmd := exec.CommandContext(ctx, c.path)
-	cmd.Stdin = strings.NewReader(prompt)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("codex review failed: %w", err)
-	}
-
-	return string(output), nil
+	return c.runExec(ctx, prompt, "codex review")
 }
 
 func (c *CodexInvoker) RunPrompt(ctx context.Context, prompt string) (string, error) {
-	cmd := exec.CommandContext(ctx, c.path)
-	cmd.Stdin = strings.NewReader(prompt)
-	output, err := cmd.CombinedOutput()
+	return c.runExec(ctx, prompt, "codex")
+}
+
+// runExec is the shared `codex exec --output-last-message` driver for
+// Review and RunPrompt. errLabel customises the error prefix so callers
+// can tell "review failed" from "merge failed" in logs.
+func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (string, error) {
+	tmp, err := os.CreateTemp("", "codex-out-*.txt")
 	if err != nil {
-		return "", fmt.Errorf("codex failed: %w", err)
+		return "", fmt.Errorf("%s: create temp output file: %w", errLabel, err)
 	}
-	return string(output), nil
+	tmpPath := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpPath)
+
+	cmd := exec.CommandContext(ctx, c.path, "exec", "--output-last-message", tmpPath)
+	cmd.Stdin = strings.NewReader(prompt)
+	if combined, err := cmd.CombinedOutput(); err != nil {
+		// Surface the CLI's own stderr so users can see "auth required",
+		// "rate limited", etc. instead of a bare "exit status 1".
+		return "", fmt.Errorf("%s failed: %w (output: %s)", errLabel, err, strings.TrimSpace(string(combined)))
+	}
+
+	out, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return "", fmt.Errorf("%s: read codex output: %w", errLabel, err)
+	}
+	return string(out), nil
 }
 
 // GeminiInvoker runs the Google Gemini CLI.
