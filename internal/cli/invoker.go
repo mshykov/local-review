@@ -192,7 +192,11 @@ func (g *GeminiInvoker) Review(ctx context.Context, systemPrompt, diff string) (
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("gemini review failed: %w", err)
+		// Surface gemini's own stderr alongside the exit status —
+		// "auth required", "rate limited", "model not found" etc.
+		// otherwise collapse to a bare "exit status 1" that's
+		// impossible to diagnose. Matches the codex invoker.
+		return "", fmt.Errorf("gemini review failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
 	}
 
 	return string(output), nil
@@ -214,7 +218,7 @@ func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, e
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["gemini"], g.apiKey)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("gemini failed: %w", err)
+		return "", fmt.Errorf("gemini failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
 	}
 	return string(output), nil
 }
@@ -248,7 +252,10 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (strin
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["claude"], c.apiKey)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%s failed: %w", errLabel, err)
+		// Preserve claude's stderr/stdout — auth, rate-limit, and
+		// usage-quota errors otherwise collapse to "exit status 1"
+		// with no actionable signal. Matches the codex invoker.
+		return "", fmt.Errorf("%s failed: %w (output: %s)", errLabel, err, strings.TrimSpace(string(output)))
 	}
 	return string(output), nil
 }
