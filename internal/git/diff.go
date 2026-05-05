@@ -138,22 +138,25 @@ func ValidateRef(ref string) error {
 // We don't need a fully-featured patch library — just enough to feed
 // content + line numbers to the LLM.
 //
-// Streams via bufio.Scanner so a large diff doesn't double-buffer
+// Streams via bufio.Reader so a large diff doesn't double-buffer
 // (legacy: stdout.String() + strings.Split slice). Each hunk's body
 // builds in a strings.Builder so even a single huge hunk doesn't go
 // quadratic on the content concatenation.
 //
-// Returns an error when the scanner itself fails (oversize line,
-// underlying I/O error). The caller MUST treat that as fail-closed:
-// a partial diff would let the review gate exit 0 on what's
-// materially an incomplete read of the change set.
+// We use Reader.ReadString('\n') rather than Scanner because Scanner
+// caps line size (we'd previously bumped to 4 MB, but a single
+// minified-bundle line in a vendored blob can easily exceed that and
+// would trip ErrTooLong, aborting the entire review even if globs
+// would have excluded that file). Reader has no per-line limit —
+// memory grows with the longest single line, which is the same
+// memory the input string already used in the legacy path.
+//
+// Returns an error when read itself fails (underlying I/O error).
+// Caller MUST treat that as fail-closed: a partial diff would let the
+// review gate exit 0 on what's materially an incomplete read of the
+// change set.
 func parseUnifiedDiff(r io.Reader) ([]Diff, error) {
-	sc := bufio.NewScanner(r)
-	// Default scanner buffer is 64 KB / line; bump to 4 MB so a single
-	// long line in a generated file doesn't truncate the diff. (The
-	// review excludes most generated files via globs, but the parser
-	// itself shouldn't depend on that.)
-	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	br := bufio.NewReader(r)
 
 	var diffs []Diff
 	var cur *Diff
@@ -184,57 +187,60 @@ func parseUnifiedDiff(r io.Reader) ([]Diff, error) {
 	// silently overwriting cur.Path AND swallowing the line from the
 	// hunk content. Putting `hunk != nil` ahead of the header cases
 	// makes header recognition pre-@@ only.
-	for sc.Scan() {
-		// Strip trailing \r so CRLF input doesn't leak \r into paths
-		// or hunk content. (Same job the old strings.ReplaceAll did,
-		// done per-line during streaming.)
-		line := strings.TrimRight(sc.Text(), "\r")
-		switch {
-		case strings.HasPrefix(line, "diff --git"):
-			flushFile()
-			cur = &Diff{}
-		case strings.HasPrefix(line, "@@"):
-			flushHunk()
-			hunk = &Hunk{Header: line, NewFrom: parseNewFrom(line)}
-		case hunk != nil:
-			// Inside a hunk → all lines are content, regardless of
-			// what they look like. See the "Case order matters" comment
-			// above for why this can't move below the header cases.
-			hunkBody.WriteString(line)
-			hunkBody.WriteByte('\n')
-		case strings.HasPrefix(line, "--- a/"):
-			// Capture the original path as a fallback for deletions —
-			// `+++ /dev/null` is the standard `git diff` shape for a
-			// deleted file, so reading +++ alone would attribute every
-			// deletion to "/dev/null" and silently break filtering,
-			// finding attribution, and any path-based downstream logic.
-			if cur != nil {
-				cur.Path = strings.TrimPrefix(line, "--- a/")
+	for {
+		raw, readErr := br.ReadString('\n')
+		// ReadString returns the partial line + io.EOF when input
+		// ends mid-line (no trailing newline). Process the line we
+		// have, then break on EOF; only non-EOF errors are fatal.
+		if len(raw) > 0 {
+			// Strip trailing \n then \r so CRLF input doesn't leak
+			// \r into paths or hunk content. (Same job the old
+			// strings.ReplaceAll did, done per-line during streaming.)
+			line := strings.TrimRight(strings.TrimSuffix(raw, "\n"), "\r")
+			switch {
+			case strings.HasPrefix(line, "diff --git"):
+				flushFile()
+				cur = &Diff{}
+			case strings.HasPrefix(line, "@@"):
+				flushHunk()
+				hunk = &Hunk{Header: line, NewFrom: parseNewFrom(line)}
+			case hunk != nil:
+				// Inside a hunk → all lines are content, regardless of
+				// what they look like. See the "Case order matters" comment
+				// above for why this can't move below the header cases.
+				hunkBody.WriteString(line)
+				hunkBody.WriteByte('\n')
+			case strings.HasPrefix(line, "--- a/"):
+				// Capture the original path as a fallback for deletions —
+				// `+++ /dev/null` is the standard `git diff` shape for a
+				// deleted file, so reading +++ alone would attribute every
+				// deletion to "/dev/null" and silently break filtering,
+				// finding attribution, and any path-based downstream logic.
+				if cur != nil {
+					cur.Path = strings.TrimPrefix(line, "--- a/")
+				}
+			case strings.HasPrefix(line, "+++ b/"):
+				if cur != nil {
+					cur.Path = strings.TrimPrefix(line, "+++ b/")
+				}
+			case strings.HasPrefix(line, "+++ ") && cur != nil && cur.Path == "":
+				// Fallback for unusual paths (e.g. patches with non-standard
+				// prefixes). Skip the "+++ /dev/null" deletion shape — we
+				// already captured the original path from --- above.
+				suffix := strings.TrimPrefix(line, "+++ ")
+				if suffix != "/dev/null" {
+					cur.Path = suffix
+				}
 			}
-		case strings.HasPrefix(line, "+++ b/"):
-			if cur != nil {
-				cur.Path = strings.TrimPrefix(line, "+++ b/")
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
 			}
-		case strings.HasPrefix(line, "+++ ") && cur != nil && cur.Path == "":
-			// Fallback for unusual paths (e.g. patches with non-standard
-			// prefixes). Skip the "+++ /dev/null" deletion shape — we
-			// already captured the original path from --- above.
-			suffix := strings.TrimPrefix(line, "+++ ")
-			if suffix != "/dev/null" {
-				cur.Path = suffix
-			}
+			return nil, fmt.Errorf("scan diff: %w", readErr)
 		}
 	}
 	flushFile()
-
-	// Scanner errors mean we only got the prefix of the diff — fail
-	// closed. The earlier "best-effort, swallow" comment was the
-	// wrong call for a security gate: a truncated diff exits the
-	// gate on incomplete input, hiding any blocking change in the
-	// unscanned tail.
-	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("scan diff: %w", err)
-	}
 
 	// Drop any malformed entries (no path means we never saw a file header)
 	out := diffs[:0]

@@ -304,14 +304,20 @@ func mergedHasBlocking(markdown string) bool {
 	return false
 }
 
+// recommendationRE matches the "**Recommendation**: <verdict>" line
+// the merge prompt emits in the Summary block. Pre-compiled at
+// package level so anyPerLLMHasBlocking + mergedHasBlocking don't
+// pay regexp.MustCompile on every per-LLM output (one call per
+// reviewer, but adds up in tests and on big PRs).
+var recommendationRE = regexp.MustCompile(`(?im)^\s*-?\s*\**Recommendation\**\s*:\s*(.+?)\s*$`)
+
 // recommendationIsBlocking parses the "**Recommendation**: <verdict>"
 // line the merge prompt emits in the Summary block. Returns true when
 // the verdict is BLOCK MERGE or REQUEST CHANGES (case-insensitive).
 // APPROVE / unrecognized verdicts return false — the section-content
 // backstop in mergedHasBlocking still runs.
 func recommendationIsBlocking(markdown string) bool {
-	re := regexp.MustCompile(`(?im)^\s*-?\s*\**Recommendation\**\s*:\s*(.+?)\s*$`)
-	m := re.FindStringSubmatch(markdown)
+	m := recommendationRE.FindStringSubmatch(markdown)
 	if m == nil {
 		return false
 	}

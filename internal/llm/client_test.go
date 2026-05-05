@@ -320,7 +320,10 @@ func TestComplete_RejectsOversizedResponse(t *testing.T) {
 	m := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		// 12 MB of `x` — well past the 10 MB cap.
-		w.Write(make([]byte, 12*1024*1024))
+		// errcheck/linter cleanliness: the write may short-circuit when
+		// the client side detects the cap and closes mid-stream, which
+		// is the whole point of this test. Discard the return.
+		_, _ = w.Write(make([]byte, 12*1024*1024))
 	})
 	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 30)
 

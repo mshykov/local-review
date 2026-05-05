@@ -191,8 +191,32 @@ jobs:
             cursor=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
           done
 
-          if [ "$total" = "0" ]; then
-            echo "::error::Release blocked — no Copilot review found on PR #${pr_number}."
+          # A submitted PR review can exist without any reviewThreads
+          # (Copilot left only a body comment, no inline file comments).
+          # If we keyed "did Copilot review?" off threads alone, that
+          # case would falsely block the release. Cross-check against
+          # the PullRequest.reviews connection — any review object
+          # authored by a *copilot bot is evidence enough that Copilot
+          # ran, even when threads is 0.
+          reviews_resp=$(gh api graphql \
+            -F owner="$owner" -F name="$name" -F num="$pr_number" \
+            -f query='
+              query($owner: String!, $name: String!, $num: Int!) {
+                repository(owner: $owner, name: $name) {
+                  pullRequest(number: $num) {
+                    reviews(first: 100) {
+                      nodes {
+                        author { login }
+                        state
+                      }
+                    }
+                  }
+                }
+              }')
+          reviews_count=$(echo "$reviews_resp" | jq '[.data.repository.pullRequest.reviews.nodes[] | select(((.author.login // "") | test("copilot"; "i")))] | length')
+
+          if [ "$total" = "0" ] && [ "$reviews_count" = "0" ]; then
+            echo "::error::Release blocked — no Copilot review or review thread found on PR #${pr_number}."
             echo "Either wait for Copilot to complete its review and re-tag, or trigger this"
             echo "workflow manually via workflow_dispatch with an explicit version."
             exit 1
