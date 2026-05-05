@@ -44,9 +44,16 @@ which settings are being used.`,
 
 			enc := yaml.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent(2)
-			defer enc.Close()
 			if err := enc.Encode(cfg); err != nil {
+				_ = enc.Close()
 				return fmt.Errorf("encode config: %w", err)
+			}
+			// Close (not deferred) so a flush failure on a buffered
+			// stdout (broken pipe, disk full, network FS write error)
+			// surfaces as a non-zero exit instead of silently truncating
+			// the YAML output and exiting 0.
+			if err := enc.Close(); err != nil {
+				return fmt.Errorf("flush config output: %w", err)
 			}
 			return nil
 		},
