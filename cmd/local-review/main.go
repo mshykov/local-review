@@ -25,22 +25,23 @@ import (
 	"github.com/mshykov/local-review/internal/git"
 )
 
-// banner is the figlet Block-font "LOCAL-REVIEW" art shown atop --help.
-// It's ~120 columns wide and only renders in helpHeader() when stdout
-// is a real TTY ≥ 100 cols; CI logs and narrow tmux panes get a clean
-// text-only header instead.
+// banner is the figlet small-font "LOCAL-REVIEW" art shown atop --help.
+// Small font fits in ~70 columns vs the original block font's ~120, so
+// it stays readable on narrow tmux panes, the `git commit` editor, and
+// most CI logs without wrapping. helpHeader() still suppresses it for
+// non-TTY stdout (pipes/files) so machine-readable callers get clean
+// text.
 const banner = `
-  _|          _|_|      _|_|_|    _|_|    _|              _|_|_|    _|_|_|_|  _|      _|  _|_|_|  _|_|_|_|  _|          _|
-  _|        _|    _|  _|        _|    _|  _|              _|    _|  _|        _|      _|    _|    _|        _|          _|
-  _|        _|    _|  _|        _|_|_|_|  _|  _|_|_|_|_|  _|_|_|    _|_|_|    _|      _|    _|    _|_|_|    _|    _|    _|
-  _|        _|    _|  _|        _|    _|  _|              _|    _|  _|          _|  _|      _|    _|          _|  _|  _|
-  _|_|_|_|    _|_|      _|_|_|  _|    _|  _|_|_|_|        _|    _|  _|_|_|_|      _|      _|_|_|  _|_|_|_|      _|  _|
+   _    ___   ___   _   _       ___ _____   _____ _____      __
+  | |  / _ \ / __| /_\ | |  ___| _ \ __\ \ / /_ _| __\ \    / /
+  | |_| (_) | (__ / _ \| |_|___|   / _| \ V / | || _| \ \/\/ /
+  |____\___/ \___/_/ \_\____|  |_|_\___| \_/ |___|___| \_/\_/
 `
 
 // helpHeader returns the banner when stdout is a wide-enough terminal,
-// or an empty string otherwise. Cobra hard-wraps Long descriptions, so
-// the ~120-col banner becomes unreadable noise on narrower terminals
-// (CI logs, the editor that opens for `git commit`, narrow tmux panes).
+// or an empty string otherwise. The new small-font banner is ~70 cols
+// (was ~120 with block font), so the gate relaxes from 100 → 70 — most
+// terminals comfortably fit it.
 //
 // We use term.GetSize on the stdout fd. $COLUMNS isn't reliable here —
 // shells don't export it to child processes by default, so falling
@@ -51,7 +52,7 @@ func helpHeader() string {
 		return ""
 	}
 	w, _, err := term.GetSize(fd)
-	if err != nil || w < 100 {
+	if err != nil || w < 70 {
 		return ""
 	}
 	return banner + "\n"
