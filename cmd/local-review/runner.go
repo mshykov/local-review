@@ -53,7 +53,7 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 			if !ready[llm.Name] {
 				continue
 			}
-			active = append(active, withTimeout(llm, cfg))
+			active = append(active, applyConfig(llm, cfg))
 		}
 		return active, nil
 	}
@@ -66,7 +66,7 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 			configDisabled = append(configDisabled, llm.Name)
 			continue
 		}
-		active = append(active, withTimeout(llm, cfg))
+		active = append(active, applyConfig(llm, cfg))
 	}
 	return active, configDisabled
 }
@@ -86,9 +86,21 @@ func parseOnlyList(s string) map[string]bool {
 	return out
 }
 
-func withTimeout(llm cli.LLM, cfg config.Config) cli.LLM {
-	if c, ok := cfg.LLMs[llm.Name]; ok && c.TimeoutSec > 0 {
-		llm.TimeoutSec = c.TimeoutSec
+// applyConfig threads per-agent config (model, timeout) onto the
+// detected LLM struct so it reaches the invoker — without this the
+// Detector returns name+path+version only and per-agent --*-model /
+// timeout config is silently dropped on the floor.
+//
+// Renamed from withTimeout to reflect the broader scope; the function
+// now owns "everything from cfg.LLMs[llm.Name] that the invoker needs".
+func applyConfig(llm cli.LLM, cfg config.Config) cli.LLM {
+	if c, ok := cfg.LLMs[llm.Name]; ok {
+		if c.TimeoutSec > 0 {
+			llm.TimeoutSec = c.TimeoutSec
+		}
+		if c.Model != "" {
+			llm.Model = c.Model
+		}
 	}
 	if llm.TimeoutSec == 0 {
 		llm.TimeoutSec = 120
@@ -401,7 +413,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	}
 
 	mergeInput := multi.BuildMergeInput(results, cfg.Merge.ConsensusThreshold)
-	// pickAgents → withTimeout already enforces non-zero TimeoutSec on
+	// pickAgents → applyConfig already enforces non-zero TimeoutSec on
 	// every active LLM. Belt-and-suspenders: keep the explicit fallback
 	// so a future caller that bypasses pickAgents can't silently end up
 	// with `time.Duration(0)` = no timeout = a hung merge LLM hanging

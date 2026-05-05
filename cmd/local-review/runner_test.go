@@ -134,7 +134,7 @@ func TestSelectAgents_OnlyTrimsSpaces(t *testing.T) {
 func TestSelectAgents_TimeoutCarriesOver(t *testing.T) {
 	// Per-LLM timeout from config must be threaded through; previously a
 	// codex review with 240s timeout would silently get the default 120
-	// because withTimeout wasn't called consistently.
+	// because applyConfig wasn't called consistently.
 	ready := map[string]bool{"claude": true}
 	cfg := config.Config{
 		LLMs: map[string]config.LLMConfig{
@@ -150,6 +150,29 @@ func TestSelectAgents_TimeoutCarriesOver(t *testing.T) {
 	}
 	if got != 240 {
 		t.Errorf("claude.TimeoutSec: want 240 (from config), got %d", got)
+	}
+}
+
+func TestSelectAgents_ModelCarriesOver(t *testing.T) {
+	// Per-LLM model from config (or --claude-model flag, which writes
+	// to cfg before pickAgents runs) must reach the runtime LLM struct
+	// so the invoker can pass it on the CLI command line. Pre-fix this
+	// silently dropped on the floor — the roster printed the configured
+	// model but the invoker only saw Path.
+	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
+	cfg := config.Config{
+		LLMs: map[string]config.LLMConfig{
+			"claude": {Model: "claude-opus-4-7"},
+			"gemini": {Model: "gemini-2.0-flash"},
+			"codex":  {Model: "gpt-5"},
+		},
+	}
+	active, _ := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{})
+	want := map[string]string{"claude": "claude-opus-4-7", "gemini": "gemini-2.0-flash", "codex": "gpt-5"}
+	for _, llm := range active {
+		if llm.Model != want[llm.Name] {
+			t.Errorf("%s.Model: want %q, got %q", llm.Name, want[llm.Name], llm.Model)
+		}
 	}
 }
 

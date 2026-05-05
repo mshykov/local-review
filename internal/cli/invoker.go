@@ -15,16 +15,20 @@ type Invoker interface {
 	RunPrompt(ctx context.Context, prompt string) (string, error)
 }
 
-// NewInvoker creates an invoker for the given LLM.
+// NewInvoker creates an invoker for the given LLM. The Model field on
+// LLM is threaded into each invoker so per-agent --claude-model /
+// --gemini-model / --codex-model flag overrides actually reach the CLI
+// command line. An empty Model leaves the CLI on its default.
+//
 // Returns nil if the LLM name is unknown.
 func NewInvoker(llm LLM) Invoker {
 	switch llm.Name {
 	case "claude":
-		return &ClaudeInvoker{path: llm.Path}
+		return &ClaudeInvoker{path: llm.Path, model: llm.Model}
 	case "gemini":
-		return &GeminiInvoker{path: llm.Path}
+		return &GeminiInvoker{path: llm.Path, model: llm.Model}
 	case "codex":
-		return &CodexInvoker{path: llm.Path}
+		return &CodexInvoker{path: llm.Path, model: llm.Model}
 	default:
 		return nil
 	}
@@ -45,7 +49,8 @@ func NewInvoker(llm LLM) Invoker {
 // git tree, conflicting with the orchestrator's "extract once, fan out
 // to all LLMs with the same diff string" contract.
 type CodexInvoker struct {
-	path string
+	path  string
+	model string // codex exec -m <model>; empty = CLI default
 }
 
 func (c *CodexInvoker) Review(ctx context.Context, diff string) (string, error) {
@@ -76,7 +81,11 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 	tmp.Close()
 	defer os.Remove(tmpPath)
 
-	cmd := exec.CommandContext(ctx, c.path, "exec", "--output-last-message", tmpPath)
+	args := []string{"exec", "--output-last-message", tmpPath}
+	if c.model != "" {
+		args = append(args, "-m", c.model)
+	}
+	cmd := exec.CommandContext(ctx, c.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	if combined, err := cmd.CombinedOutput(); err != nil {
 		// Surface the CLI's own stderr so users can see "auth required",
@@ -94,7 +103,8 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 // GeminiInvoker runs the Google Gemini CLI.
 // Uses: git diff | gemini -p "Review these changes for bugs and security issues"
 type GeminiInvoker struct {
-	path string
+	path  string
+	model string // gemini -m <model>; empty = CLI default
 }
 
 func (g *GeminiInvoker) Review(ctx context.Context, diff string) (string, error) {
@@ -102,7 +112,11 @@ func (g *GeminiInvoker) Review(ctx context.Context, diff string) (string, error)
 		"Provide specific findings with file names and line numbers. " +
 		"Format as markdown with severity levels (critical, major, warning, info)."
 
-	cmd := exec.CommandContext(ctx, g.path, "-p", prompt)
+	args := []string{"-p", prompt}
+	if g.model != "" {
+		args = append(args, "-m", g.model)
+	}
+	cmd := exec.CommandContext(ctx, g.path, args...)
 	cmd.Stdin = strings.NewReader(diff)
 
 	output, err := cmd.CombinedOutput()
@@ -120,7 +134,11 @@ func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, e
 	// goes via stdin — sidestepping ARG_MAX (~256KB on macOS, ~2MB on
 	// Linux) that the previous "whole prompt via -p" implementation hit
 	// on merger prompts that aggregate multiple per-LLM reviews.
-	cmd := exec.CommandContext(ctx, g.path, "-p", "Follow the instructions in stdin.")
+	args := []string{"-p", "Follow the instructions in stdin."}
+	if g.model != "" {
+		args = append(args, "-m", g.model)
+	}
+	cmd := exec.CommandContext(ctx, g.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -132,7 +150,8 @@ func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, e
 // ClaudeInvoker runs the Anthropic Claude CLI.
 // Uses stdin pipe similar to Gemini.
 type ClaudeInvoker struct {
-	path string
+	path  string
+	model string // claude --model <id>; empty = CLI default
 }
 
 func (c *ClaudeInvoker) Review(ctx context.Context, diff string) (string, error) {
@@ -144,24 +163,25 @@ func (c *ClaudeInvoker) Review(ctx context.Context, diff string) (string, error)
 		"Provide specific findings with file names and line numbers.\n" +
 		"Format as markdown with severity levels (critical, major, warning, info).\n\n" +
 		"Diff:\n" + diff
-
-	// Use stdin as primary method
-	cmd := exec.CommandContext(ctx, c.path)
-	cmd.Stdin = strings.NewReader(prompt)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("claude review failed: %w", err)
-	}
-
-	return string(output), nil
+	return c.run(ctx, prompt, "claude review")
 }
 
 func (c *ClaudeInvoker) RunPrompt(ctx context.Context, prompt string) (string, error) {
-	cmd := exec.CommandContext(ctx, c.path)
+	return c.run(ctx, prompt, "claude")
+}
+
+// run is the shared driver. Splits args into "model + stdin prompt" so
+// per-agent --claude-model overrides reach the CLI.
+func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (string, error) {
+	var args []string
+	if c.model != "" {
+		args = append(args, "--model", c.model)
+	}
+	cmd := exec.CommandContext(ctx, c.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("claude failed: %w", err)
+		return "", fmt.Errorf("%s failed: %w", errLabel, err)
 	}
 	return string(output), nil
 }

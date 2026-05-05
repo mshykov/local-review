@@ -16,7 +16,14 @@ type LLM struct {
 	// resolves but whose version probe fails (broken symlink, corrupted
 	// install, missing runtime) is reported Available=false so callers
 	// don't try to invoke an unusable tool.
-	Available  bool
+	Available bool
+	// Model is the agent-specific model id (e.g., "claude-opus-4-7",
+	// "gemini-2.0-flash", "gpt-5"). Threaded through from cfg.LLMs[*]
+	// .Model so per-agent model overrides on the runner actually reach
+	// the invoker — pre-fix the field was set in config and printed in
+	// the roster but the invoker only got Path, so users got false
+	// confirmation that the requested model ran.
+	Model      string
 	TimeoutSec int // timeout in seconds for this LLM (from config)
 }
 
