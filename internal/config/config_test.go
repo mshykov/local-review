@@ -306,24 +306,17 @@ func TestMergeCoversAllExportedFields(t *testing.T) {
 	merge(&dst, src)
 
 	missing := findZeroFields(reflect.ValueOf(dst), "")
-	// Filter out fields we deliberately don't merge: the deprecated
-	// inline APIKey on Provider/LLMConfig (security warning emits a
-	// stderr nudge instead — copying it through merge would entrench
-	// the anti-pattern) and CLIPath on LLMConfig because Defaults
-	// already populates it (merge is overlay-only when src is non-zero).
-	var actual []string
-	for _, f := range missing {
-		if f == "Provider.APIKey" || strings.HasSuffix(f, ".APIKey") {
-			continue
-		}
-		actual = append(actual, f)
-	}
-
-	if len(actual) > 0 {
+	// merge() actually DOES copy the deprecated inline APIKey field
+	// for v0.4.x backward compat — a user with `api_key:` in their
+	// YAML still works, and warnDeprecatedAPIKeys nudges them toward
+	// env vars via stderr instead of silently dropping their key.
+	// So nothing is filtered out; if any exported field is missing,
+	// merge() needs an overlay branch.
+	if len(missing) > 0 {
 		t.Errorf("merge() didn't propagate these fields:\n  %s\n\n"+
 			"Add an overlay branch in merge() for each one. See the\n"+
 			"MAINTENANCE CONTRACT comment above merge().",
-			strings.Join(actual, "\n  "))
+			strings.Join(missing, "\n  "))
 	}
 }
 
@@ -337,7 +330,7 @@ func nonZeroConfig() Config {
 		Provider: Provider{
 			BaseURL:    "https://example.test/v1",
 			Model:      "test-model",
-			APIKey:     "sk-test", // deliberately set; merge() skips, contract OK
+			APIKey:     "sk-test", // merge() does copy this for v0.4.x compat; warnDeprecatedAPIKeys nudges
 			APIKeyEnv:  "TEST_KEY",
 			TimeoutSec: 99,
 		},
@@ -357,7 +350,7 @@ func nonZeroConfig() Config {
 				CLIPath:    "/opt/test/claude",
 				Model:      "claude-test",
 				APIKeyEnv:  "TEST_ANTHROPIC",
-				APIKey:     "sk-test", // deliberately set; merge() skips
+				APIKey:     "sk-test", // merge() copies for v0.4.x compat; deprecated, warnings nudge to env
 				TimeoutSec: 240,
 			},
 		},
