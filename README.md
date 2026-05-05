@@ -53,71 +53,61 @@ go install github.com/mshykov/local-review/cmd/local-review@latest
 ## Quick start
 
 ```sh
-# Interactive setup — picks a provider, writes .local-review.yml.
-local-review init
+# 1. Install one or more LLM CLIs (each one is a "team mate" reviewing your code)
+npm install -g @anthropic-ai/claude-code   # Claude   — free tier via `claude login`
+npm install -g @google/gemini-cli          # Gemini   — free key from Google AI Studio
+npm install -g @openai/codex               # Codex    — ChatGPT Plus or OPENAI_API_KEY
 
-# Set the API key for whichever provider you picked
-# (init tells you which env var to use).
-export OPENAI_API_KEY=sk-...
+# 2. Authenticate the ones you want
+claude login
+export GEMINI_API_KEY=...
+export OPENAI_API_KEY=...
 
-# Review staged changes (this is the pre-commit hook flavour).
-local-review staged
-
-# Review the latest commit.
-local-review commit
-
-# Review the whole branch against main.
-local-review branch main
-```
-
-By default, local-review shows `warning`+ findings and exits non-zero when `major`/`critical` are present (so it can gate a pre-commit hook).
-
-## Multi-LLM Reviews
-
-**Run parallel reviews with multiple AI models simultaneously:**
-
-```sh
-# Review with Claude + Gemini (both free!)
-local-review multi staged
-
-# Check which LLMs are installed
+# 3. Check who's ready
 local-review doctor
 
-# Use a specific LLM for merging findings
-local-review multi staged --merge-with claude
+# 4. Review your branch — every authenticated CLI runs in parallel and findings get merged
+local-review review
+```
+
+That's it. `local-review review` is the canonical command — it runs every LLM CLI that's installed AND authenticated, in parallel, and prints a merged report.
+
+By default findings at `warning`+ are shown and `major`/`critical` exit non-zero (good for pre-commit hooks).
+
+If you don't have any LLM CLI installed, run `local-review init` to set up a single-LLM review against any OpenAI-compatible API instead.
+
+## Multi-LLM is the default
+
+**Every authenticated LLM CLI runs by default.** No opt-in, no enabling — if you `claude login`, claude runs. If you `export OPENAI_API_KEY=...`, codex runs. If you don't authenticate one, it's silently skipped.
+
+```sh
+# Default: all active LLMs
+local-review review
+
+# Restrict to a subset (overrides config)
+local-review review --only claude,gemini
+
+# Pick a specific model for one agent
+local-review review --claude-model claude-opus-4-7
+
+# Use a specific agent to do the merge
+local-review review --merge-with claude
 ```
 
 ### Supported LLMs
 
-| LLM | Free Option | Installation | Status |
-|-----|-------------|--------------|--------|
-| **Claude** | ✅ Free tier via [claude.ai](https://claude.ai) | `npm install -g @anthropic-ai/claude-code` | Default enabled |
-| **Gemini** | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` | Default enabled |
-| **Codex** | ⚠️ ChatGPT Plus ($20/mo) **or** OpenAI API key (pay-per-token) | `npm install -g @openai/codex` | Disabled by default |
+| LLM | Free Option | Installation |
+|-----|-------------|--------------|
+| **Claude** | ✅ Free tier via `claude login` (claude.ai account) | `npm install -g @anthropic-ai/claude-code` |
+| **Gemini** | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` |
+| **Codex** | ⚠️ ChatGPT Plus ($20/mo) **or** OpenAI API key (pay-per-token) | `npm install -g @openai/codex` |
 
 **How it works:**
-1. Detects installed LLM CLIs (claude, gemini, codex)
-2. Runs reviews in parallel using free CLI tools (or API fallback)
+1. Detects installed LLM CLIs and which are authenticated (`local-review doctor`)
+2. Runs every authenticated CLI in parallel
 3. Saves each review to `.local-review/reviews/<branch>/<commit>_<llm>.md`
-4. Merges findings intelligently (deduplicates, consolidates, notes consensus)
-5. Outputs final report: `<commit>_merged.md`
-
-**Quick Setup:**
-```sh
-# Install free LLM CLIs
-npm install -g @anthropic-ai/claude-code
-npm install -g @google/gemini-cli
-
-# Authenticate
-claude login                    # Follow prompts
-export GEMINI_API_KEY=your-key  # Get from https://aistudio.google.com/apikey
-
-# Verify installations
-local-review doctor
-
-# Run multi-LLM review
-local-review multi staged
-```
+4. Merges findings (dedup, consensus tagging) into one report
+5. Prints the merged report to stdout (also saved as `<commit>_merged.md`)
 
 **Authentication — what each LLM needs:**
 
@@ -127,31 +117,28 @@ local-review multi staged
 | **Gemini** | `export GEMINI_API_KEY=...` — free key from [Google AI Studio](https://aistudio.google.com/apikey) | `gemini /auth` for Google OAuth |
 | **Codex** | `codex login` — uses your ChatGPT Plus subscription ($20/mo) | `export OPENAI_API_KEY=...` — pay-per-token; usually **cheaper** for occasional review use |
 
-Run `local-review doctor` to see which CLIs you have installed and authenticated. The output tells you exactly what to fix for each row that isn't ✓ ready.
+Run `local-review doctor` to see which CLIs you have installed and authenticated. Each row that isn't ✓ ready tells you exactly what to fix.
 
-**Configuration:**
+**Configuration is optional.** If `~/.local-review.yml` or `./.local-review.yml` exists it overrides defaults; CLI flags override config:
+
 ```yaml
-# .local-review.yml
+# .local-review.yml — example: pin specific models, disable codex
 llms:
   claude:
-    enabled: true
-    mode: cli              # use CLI (free), fallback to API if configured
+    model: claude-opus-4-7
 
   gemini:
-    enabled: true
-    mode: cli
-    api_key_env: GEMINI_API_KEY  # required for Gemini
+    model: gemini-2.0-flash
+    api_key_env: GEMINI_API_KEY
 
   codex:
-    enabled: false         # paid only, enable if you have ChatGPT Plus
-    mode: cli
+    enabled: false           # opt-out (still runs if --only codex is passed)
 
 merge:
-  preferred_llm: auto      # or: claude, gemini, codex
-  deduplicate: true
+  preferred_llm: auto        # or: claude, gemini, codex
 ```
 
-See [`examples/.local-review-multi.yml`](examples/.local-review-multi.yml) for full multi-LLM config example.
+See [`examples/.local-review-multi.yml`](examples/.local-review-multi.yml) for full schema.
 
 ## Configure
 
@@ -203,19 +190,15 @@ Bypass for emergencies: `LOCAL_REVIEW_SKIP=1 git commit ...`.
 ## CLI
 
 ```
-# Single-LLM mode (uses provider API)
+# Review (multi-LLM by default; falls back to single-LLM via configured provider if no CLI is active)
+local-review review [<base>]         # canonical: current branch vs <base> (default: main)
 local-review staged                  # review git diff --cached (pre-commit)
 local-review commit [<rev>]          # review one commit (default: HEAD)
-local-review branch [<base>]         # review branch vs base (default: main)
-
-# Multi-LLM mode (runs installed LLM CLIs in parallel, merges findings)
-local-review multi staged            # parallel review with all enabled LLMs
-local-review multi commit [<rev>]    # multi-LLM review of one commit
-local-review multi branch [<base>]   # multi-LLM review of branch
+local-review branch [<base>]         # alias of `review` for muscle-memory
 
 # Utilities
 local-review init                    # interactive setup (writes .local-review.yml)
-local-review doctor                  # check LLM installations
+local-review doctor                  # check LLM installations + auth state
 local-review config                  # print resolved config (API keys masked)
 local-review version                 # print version
 ```
@@ -224,11 +207,16 @@ Common flags:
 
 | Flag | Purpose |
 |---|---|
-| `--model <id>` | Override provider.model |
-| `--base-url <url>` | Override provider.base_url |
+| `--only <list>` | Comma-separated agents to run (e.g. `claude,gemini`); overrides config |
+| `--claude-model <id>` | Override claude's model (same for `--gemini-model`, `--codex-model`) |
+| `--merge-with <agent>` | Pick which agent merges findings (default: auto) |
+| `--model <id>` | Override `provider.model` (single-LLM fallback only) |
+| `--base-url <url>` | Override `provider.base_url` (single-LLM fallback only) |
 | `--min-severity <tier>` | `nit` / `info` / `warning` / `major` / `critical` |
 | `--max-findings <n>` | Cap output |
 | `--json` | Emit JSON (for CI integration) |
+
+Config wins by default; flags override config at runtime (e.g., `--only codex` runs codex even if your config sets `codex.enabled: false`).
 
 Exit codes:
 

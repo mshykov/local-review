@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-05
+
+### Added
+- **`local-review review`** — canonical, friendly command. Reviews the current branch with every LLM CLI you have installed AND authenticated, in parallel, and prints a merged report. This is the "one command, three teammates" workflow the project was always supposed to ship with.
+- **`--only <list>` flag** — restrict the agent set (e.g. `--only claude,gemini`). Overrides config: `--only codex` runs codex even when `codex.enabled: false` is set.
+- **Per-agent model overrides** — `--claude-model`, `--gemini-model`, `--codex-model` to pin a specific model for one agent without editing config.
+- **ASCII banner in `--help`** — figlet Block-font "LOCAL-REVIEW".
+- **Findings printed inline** after multi-LLM merge instead of just "saved to file" — you see the report in your terminal without `cat`-ing the merged.md.
+
+### Changed
+- **Multi-LLM is now the default** for `staged|commit|branch|review`. Previously you had to run `local-review multi <cmd>`; now plain `local-review staged` (etc.) detects which LLM CLIs are active and runs them all in parallel. Falls back to single-LLM via the configured `provider:` only when no CLI is active.
+- **Codex runs by default when authenticated.** Previously codex was opt-in via `enabled: true` in config — surprising for users who'd run `codex login` and expected it to "just work". Now an LLM CLI runs whenever it is installed + authenticated; `enabled: false` is the explicit opt-out.
+- **`--model` and `--base-url` are explicitly single-LLM-fallback flags now** (clarified in `--help`). For multi-LLM use the per-agent overrides.
+
+### Removed
+- **`local-review multi <subcmd>`** — deleted entirely. Promoted to the default behaviour of the existing review commands. No deprecation period because there were no released users; if you scripted against `multi`, drop the prefix.
+
+### Fixed
+- The "no API key" error message (added in v0.4.4) now suggests `local-review review` instead of the deleted `local-review multi <cmd>`.
+
 ## [0.4.4] - 2026-05-05
 
 ### Fixed

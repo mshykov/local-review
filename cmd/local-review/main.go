@@ -2,9 +2,10 @@
 //
 // Usage:
 //
-//	local-review staged                  # review staged changes (pre-commit hook)
+//	local-review review                  # current branch vs main, all active LLMs (default)
+//	local-review staged                  # review staged changes
 //	local-review commit [<rev>]          # review a single commit (default: HEAD)
-//	local-review branch [<base>]         # review the current branch vs <base> (default: main)
+//	local-review branch [<base>]         # review the current branch vs <base>
 //
 // Configuration cascades: built-in defaults → ~/.local-review.yml → ./.local-review.yml → CLI flags.
 package main
@@ -20,17 +21,38 @@ import (
 
 	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/git"
-	"github.com/mshykov/local-review/internal/output"
-	"github.com/mshykov/local-review/internal/review"
 )
 
-// flags shared across all review subcommands
+// Block-font banner shown atop --help. Generated with figlet -f block.
+// Wide (~120 chars); wraps on narrower terminals — that's accepted.
+const banner = `
+  _|          _|_|      _|_|_|    _|_|    _|              _|_|_|    _|_|_|_|  _|      _|  _|_|_|  _|_|_|_|  _|          _|
+  _|        _|    _|  _|        _|    _|  _|              _|    _|  _|        _|      _|    _|    _|        _|          _|
+  _|        _|    _|  _|        _|_|_|_|  _|  _|_|_|_|_|  _|_|_|    _|_|_|    _|      _|    _|    _|_|_|    _|    _|    _|
+  _|        _|    _|  _|        _|    _|  _|              _|    _|  _|          _|  _|      _|    _|          _|  _|  _|
+  _|_|_|_|    _|_|      _|_|_|  _|    _|  _|_|_|_|        _|    _|  _|_|_|_|      _|      _|_|_|  _|_|_|_|      _|  _|
+`
+
+// sharedFlags collects every flag accepted by the review-shape commands.
+// Single-LLM-fallback flags (--model, --base-url) and multi-LLM flags
+// (--only, --<agent>-model) coexist: which one applies depends on
+// whether any LLM CLI is active at runtime.
 type sharedFlags struct {
-	model       string
-	baseURL     string
+	// v0 single-LLM-API fallback flags
+	model   string
+	baseURL string
+
+	// shared review-tuning flags
 	minSeverity string
 	maxFindings int
 	jsonOut     bool
+
+	// multi-LLM flags
+	only        string // comma-separated agent names to restrict the run to
+	claudeModel string
+	geminiModel string
+	codexModel  string
+	mergeWith   string
 }
 
 func main() {
@@ -39,35 +61,46 @@ func main() {
 	root := &cobra.Command{
 		Use:   "local-review",
 		Short: "AI code review for your local diff. BYOK, language-agnostic.",
-		Long: `local-review reviews a git diff with an LLM of your choice and reports findings.
+		Long: banner + `
+local-review reviews a git diff with the LLMs you have installed and
+runs them in parallel. It runs entirely on your machine; the only
+network call is to whichever LLM endpoint you configured.
 
-It runs entirely on your machine. The only network call is to whichever
-chat-completions endpoint you configure. Works with any OpenAI-compatible
-provider: OpenAI, Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter,
-Ollama (fully offline), vLLM, etc.
-
-First-time setup:
+Quick start:
 
   local-review init             # interactive — picks a provider, writes .local-review.yml
-  export <API_KEY_ENV>=...      # init prints which env var to set
-  local-review staged           # review staged changes
-
-Multi-LLM mode (runs installed LLM CLIs in parallel, merges findings):
-
   local-review doctor           # check which LLM CLIs are installed/authenticated
-  local-review multi staged
+  local-review review           # review current branch with every active LLM
 
-Configure manually in ~/.local-review.yml or ./.local-review.yml.
+By default, every LLM CLI that is both installed AND authenticated runs
+in parallel and the findings are merged into one report. Use ~/.local-review.yml
+or ./.local-review.yml to override; CLI flags override config.
+
+If no LLM CLI is active, falls back to the configured 'provider:' (any
+OpenAI-compatible endpoint: OpenAI, Anthropic, Mistral, DeepSeek,
+Together, Groq, OpenRouter, Ollama, vLLM, etc.).
+
 See README and https://mshykov.github.io/local-review/ for details.`,
 		SilenceUsage: true,
 	}
 
-	root.PersistentFlags().StringVar(&sf.model, "model", "", "override provider.model")
-	root.PersistentFlags().StringVar(&sf.baseURL, "base-url", "", "override provider.base_url")
+	// review-tuning (apply to all review-shape commands)
 	root.PersistentFlags().StringVar(&sf.minSeverity, "min-severity", "", "filter findings: nit|info|warning|major|critical")
 	root.PersistentFlags().IntVar(&sf.maxFindings, "max-findings", 0, "cap total findings shown")
 	root.PersistentFlags().BoolVar(&sf.jsonOut, "json", false, "emit JSON instead of human-readable text")
 
+	// single-LLM-fallback flags
+	root.PersistentFlags().StringVar(&sf.model, "model", "", "override provider.model (single-LLM fallback)")
+	root.PersistentFlags().StringVar(&sf.baseURL, "base-url", "", "override provider.base_url (single-LLM fallback)")
+
+	// multi-LLM flags
+	root.PersistentFlags().StringVar(&sf.only, "only", "", "comma-separated agents to run (e.g. claude,gemini); overrides config")
+	root.PersistentFlags().StringVar(&sf.claudeModel, "claude-model", "", "override claude's model")
+	root.PersistentFlags().StringVar(&sf.geminiModel, "gemini-model", "", "override gemini's model")
+	root.PersistentFlags().StringVar(&sf.codexModel, "codex-model", "", "override codex's model")
+	root.PersistentFlags().StringVar(&sf.mergeWith, "merge-with", "", "agent to use for merging findings (default: auto)")
+
+	root.AddCommand(reviewCmd(&sf))
 	root.AddCommand(stagedCmd(&sf))
 	root.AddCommand(commitCmd(&sf))
 	root.AddCommand(branchCmd(&sf))
@@ -75,11 +108,33 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.AddCommand(configCmd())
 	root.AddCommand(doctorCmd())
 	root.AddCommand(initCmd())
-	root.AddCommand(multiCmd(&sf))
 
 	if err := root.Execute(); err != nil {
 		// cobra already printed the error; just set the exit code
 		os.Exit(1)
+	}
+}
+
+// reviewCmd is the friendly canonical entry point — equivalent to
+// `branch` (current branch vs auto-detected base). Most users land here.
+func reviewCmd(sf *sharedFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "review [<base>]",
+		Short: "Review the current branch with every active LLM (canonical command)",
+		Long: `Review the current branch against <base> (default: main) using every
+LLM CLI that is installed AND authenticated, in parallel. Findings are
+merged into one consolidated report.
+
+Equivalent to ` + "`local-review branch`" + ` — exists as a friendlier name for
+the most common workflow.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			base := ""
+			if len(args) == 1 {
+				base = args[0]
+			}
+			return runUnifiedReview(cmd.Context(), sf, git.ModeBranch, base)
+		},
 	}
 }
 
@@ -89,7 +144,7 @@ func stagedCmd(sf *sharedFlags) *cobra.Command {
 		Short: "Review what would be committed next (git diff --cached)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runReview(cmd.Context(), sf, git.ModeStaged, "")
+			return runUnifiedReview(cmd.Context(), sf, git.ModeStaged, "")
 		},
 	}
 }
@@ -104,7 +159,7 @@ func commitCmd(sf *sharedFlags) *cobra.Command {
 			if len(args) == 1 {
 				ref = args[0]
 			}
-			return runReview(cmd.Context(), sf, git.ModeCommit, ref)
+			return runUnifiedReview(cmd.Context(), sf, git.ModeCommit, ref)
 		},
 	}
 }
@@ -119,7 +174,7 @@ func branchCmd(sf *sharedFlags) *cobra.Command {
 			if len(args) == 1 {
 				base = args[0]
 			}
-			return runReview(cmd.Context(), sf, git.ModeBranch, base)
+			return runUnifiedReview(cmd.Context(), sf, git.ModeBranch, base)
 		},
 	}
 }
@@ -134,7 +189,10 @@ func loadConfig() (config.Config, error) {
 	return config.Load(repoCfg)
 }
 
-func runReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref string) error {
+// runUnifiedReview is the dispatch point: detects active LLMs, applies
+// flag overrides, runs multi-LLM if any are active, otherwise falls back
+// to the v0 single-LLM API path.
+func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref string) error {
 	// Trap Ctrl-C so an in-flight LLM call can be cancelled.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -143,31 +201,25 @@ func runReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref string) 
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	applyFlags(&cfg, sf)
+	applyFlagsToConfig(&cfg, sf)
 
-	r := review.New(cfg)
-	rep, err := r.Run(ctx, mode, ref)
-	if err != nil {
-		return err
-	}
-
-	if sf.jsonOut {
-		if err := output.WriteJSON(os.Stdout, rep); err != nil {
-			return err
+	active, configDisabled := pickAgents(cfg, sf)
+	if len(active) == 0 {
+		if len(configDisabled) > 0 {
+			fmt.Fprintf(os.Stderr, "All authenticated LLM CLIs are disabled in config: %v\n", configDisabled)
+			fmt.Fprintln(os.Stderr, "Pass --only <agent> to override config, or run `local-review doctor` for status.")
+			fmt.Fprintln(os.Stderr, "Falling back to single-LLM via the configured provider...")
+			fmt.Fprintln(os.Stderr)
 		}
-	} else {
-		output.WriteText(os.Stdout, rep)
+		return runSingleLLMFallback(ctx, cfg, sf, mode, ref)
 	}
-
-	// Exit non-zero when blocking-severity findings exist, so pre-commit
-	// hooks fail the commit. "major" and "critical" block by default.
-	if hasBlocking(rep) {
-		os.Exit(2)
-	}
-	return nil
+	return runMultiLLMReview(ctx, cfg, sf, active, configDisabled, mode, ref)
 }
 
-func applyFlags(cfg *config.Config, sf *sharedFlags) {
+// applyFlagsToConfig overlays --flag values onto the resolved config.
+// Single-LLM flags (--model, --base-url) hit cfg.Provider; per-agent
+// overrides (--<agent>-model) hit cfg.LLMs.
+func applyFlagsToConfig(cfg *config.Config, sf *sharedFlags) {
 	if sf.model != "" {
 		cfg.Provider.Model = sf.model
 	}
@@ -180,13 +232,24 @@ func applyFlags(cfg *config.Config, sf *sharedFlags) {
 	if sf.maxFindings != 0 {
 		cfg.Review.MaxFindings = sf.maxFindings
 	}
+
+	// Per-agent model overrides
+	if sf.claudeModel != "" {
+		setLLMModel(cfg, "claude", sf.claudeModel)
+	}
+	if sf.geminiModel != "" {
+		setLLMModel(cfg, "gemini", sf.geminiModel)
+	}
+	if sf.codexModel != "" {
+		setLLMModel(cfg, "codex", sf.codexModel)
+	}
 }
 
-func hasBlocking(r review.Report) bool {
-	for _, f := range r.Findings {
-		if f.Severity >= review.SeverityMajor {
-			return true
-		}
+func setLLMModel(cfg *config.Config, name, model string) {
+	if cfg.LLMs == nil {
+		cfg.LLMs = make(map[string]config.LLMConfig)
 	}
-	return false
+	llm := cfg.LLMs[name]
+	llm.Model = model
+	cfg.LLMs[name] = llm
 }

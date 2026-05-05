@@ -78,7 +78,7 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 		if envName == "" {
 			envName = "LOCAL_REVIEW_API_KEY"
 		}
-		return "", fmt.Errorf("no API key: $%s is unset or empty\n         run `local-review init` to set up a provider, or `export %s=...`\n         or use `local-review multi <cmd>` if you have LLM CLIs installed (see `local-review doctor`)", envName, envName)
+		return "", fmt.Errorf("no API key: $%s is unset or empty\n         run `local-review init` to set up a provider, or `export %s=...`\n         or run `local-review review` if you have LLM CLIs installed (see `local-review doctor`)", envName, envName)
 	}
 
 	req := request{

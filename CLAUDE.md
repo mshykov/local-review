@@ -94,16 +94,18 @@ storage:
   base_path: .local-review/reviews
 ```
 
-**Command Structure (v0.1)**
+**Command Structure (v0.5+)**
 ```sh
-# Multi-LLM review
-local-review multi staged
-local-review multi commit abc123
-local-review multi branch main
-local-review multi staged --merge-with claude
-
-# Legacy single-LLM (v0 compatibility)
-local-review staged
+# Review — multi-LLM by default (every authenticated CLI runs in parallel and
+# findings are merged). Falls back to single-LLM via configured provider when
+# no CLI is active.
+local-review review              # canonical: current branch vs main
+local-review staged              # what would be committed next (pre-commit)
+local-review commit [<rev>]      # one commit (default: HEAD)
+local-review branch [<base>]     # alias of `review`
+local-review review --only claude,gemini      # restrict the agent set
+local-review review --claude-model claude-opus-4-7  # override one agent's model
+local-review review --merge-with claude       # pick which agent merges
 
 # Utilities
 local-review init                # interactive setup wizard (writes .local-review.yml)
@@ -112,7 +114,7 @@ local-review config              # print resolved config (API keys masked)
 local-review version             # print version
 ```
 
-There is no standalone "re-merge" command — the merge step runs as part of `local-review multi <subcommand>`. To re-run the merge against an existing commit, re-run `local-review multi commit <ref>`.
+There is no standalone "re-merge" command — the merge step runs as part of `local-review review`. To re-run the merge against an existing commit, re-run `local-review commit <ref>`.
 
 ## Development Commands
 
@@ -127,20 +129,17 @@ go test -race ./...
 # Build the binary
 go build -o local-review ./cmd/local-review
 
-# Test v0 single-LLM mode
+# Test the canonical review path (multi-LLM by default if any CLI is active)
+./local-review review
+
+# Test staged-only review (pre-commit shape)
 ./local-review staged
 
-# Test v0.1 multi-LLM mode
-./local-review multi staged
-
-# Test doctor command (check LLM installations)
+# Test doctor command (check LLM installations + auth)
 ./local-review doctor
 
 # Test against a specific commit
 ./local-review commit HEAD
-
-# Test branch review
-./local-review branch main
 ```
 
 ### v0.1 Development Prerequisites
@@ -188,30 +187,26 @@ npm install -g @anthropic-ai/claude-code
 - Add `Storage` config (base_path)
 
 **cmd/local-review/** — New commands
-- `multi.go` — Multi-LLM review command
+- `runner.go` — Unified review dispatcher (multi-LLM with single-LLM fallback)
 - `doctor.go` — Check LLM installations and auth status
 
-### Multi-LLM Review Flow
+### Review Flow (v0.5+)
 
-1. **Command: `local-review multi staged`**
-2. **Config Load** — Resolve .local-review.yml with new `llms` schema
-3. **Doctor Check** — Detect installed LLMs, filter enabled ones
-4. **Parallel Execution** (goroutines):
-   - For each enabled LLM:
-     - Try CLI mode: execute `codex review`, `gemini -p`, etc.
-     - On CLI failure: fallback to API mode (if api_key configured)
-     - Save output to `.local-review/reviews/<branch>/<commit>_<llm>_<version>.md`
-     - Log to metadata.json: timestamp, exit code, duration
-5. **Wait for Completion** — Collect all results (including failures)
-6. **Select Merge LLM**:
-   - Check `--merge-with` flag
-   - Check `merge.preferred_llm` config
-   - Default: first successful LLM (Claude > Codex > Gemini)
-7. **Merge Reviews**:
-   - Send all `<llm>.md` files to merge LLM
-   - Prompt: "Deduplicate findings, consolidate into one report"
-   - Save to `<commit>_merged.md`
-8. **Output**: Print path to merged.md
+1. **Command: `local-review review`** (or `staged|commit|branch`)
+2. **Config Load** — Resolve cascade (~/.local-review.yml → ./.local-review.yml → flags)
+3. **Active LLM Detection** — `pickAgents()` reuses doctor's `classify()` to find every
+   LLM CLI that is installed AND authenticated. Config `enabled: false` is honored
+   as an opt-out unless `--only` overrides.
+4. **Multi-LLM path** (when ≥1 active):
+   - Print agent roster with model + CLI version
+   - Parallel `RunParallel()` over goroutines
+   - Save each per-LLM output to `.local-review/reviews/<branch>/<commit>_<llm>_<version>.md`
+   - Log metadata to `<commit>_metadata.json`
+   - Pick merge LLM (`--merge-with` → `merge.preferred_llm` → auto: claude > codex > gemini)
+   - Merge findings via the merge LLM, save `<commit>_merged.md`, print to stdout
+5. **Single-LLM fallback** (when no CLI active):
+   - Use the configured `provider:` (any OpenAI-compatible endpoint)
+   - One review pass, print findings, exit 2 on major/critical
 
 ### Storage Schema
 
@@ -342,11 +337,11 @@ Glob filtering (include/exclude) uses a custom `**` glob matcher (review.go:matc
 **Before pushing any branch to GitHub, run a self-review with the project's own tool.**
 
 ```sh
-# For a feature branch (reviews full diff vs main)
-./local-review multi branch main
+# For a feature branch (reviews full diff vs main with every active LLM)
+./local-review review main
 
-# Or, if multi-LLM is too slow, single-LLM:
-./local-review branch main
+# To restrict to one LLM (e.g., when multi-LLM is too slow):
+./local-review review main --only claude
 ```
 
 Address any `major` or `critical` findings before pushing. This is non-negotiable: we eat our own dog food. If `local-review` produces a noisy, low-value review on this codebase, that's a bug — file an issue or fix the prompt pack.
