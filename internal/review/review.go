@@ -257,13 +257,20 @@ func FilterDiffs(diffs []git.Diff, include, exclude []string) []git.Diff {
 
 // filter keeps diffs matching any IncludeGlob (when set) and not
 // matching any ExcludeGlob.
+//
+// Compiles each pattern to a regex exactly once before the per-file
+// loop. Pre-fix matchGlob did regexp.Compile inside the inner loop —
+// for a 500-file repo with 5 globs that's 2,500 compiles. Now it's
+// at most len(include)+len(exclude).
 func filter(diffs []git.Diff, include, exclude []string) []git.Diff {
+	includeRE := compileGlobs(include)
+	excludeRE := compileGlobs(exclude)
 	out := diffs[:0]
 	for _, d := range diffs {
-		if len(include) > 0 && !matchesAny(d.Path, include) {
+		if len(includeRE) > 0 && !matchesAnyCompiled(d.Path, includeRE) {
 			continue
 		}
-		if matchesAny(d.Path, exclude) {
+		if matchesAnyCompiled(d.Path, excludeRE) {
 			continue
 		}
 		out = append(out, d)
@@ -271,24 +278,55 @@ func filter(diffs []git.Diff, include, exclude []string) []git.Diff {
 	return out
 }
 
-func matchesAny(path string, patterns []string) bool {
+// compileGlobs converts each pattern to a regex via globToRegex.
+// Patterns that fail to compile are silently dropped (same fail-open
+// behavior as the legacy matchGlob, which returned false on compile
+// error). A failing pattern is invariably a config typo we can't fix
+// from this layer; the user-visible signal is that the glob doesn't
+// match anything.
+func compileGlobs(patterns []string) []*regexp.Regexp {
+	if len(patterns) == 0 {
+		return nil
+	}
+	out := make([]*regexp.Regexp, 0, len(patterns))
 	for _, p := range patterns {
-		if matchGlob(path, p) {
+		if re, err := regexp.Compile(globToRegex(p)); err == nil {
+			out = append(out, re)
+		}
+	}
+	return out
+}
+
+func matchesAnyCompiled(path string, res []*regexp.Regexp) bool {
+	for _, re := range res {
+		if re.MatchString(path) {
 			return true
 		}
 	}
 	return false
 }
 
-// matchGlob is a tiny glob matcher with `**` support. We convert the
-// glob to a regex once per check — perf is fine because we run this
-// against handfuls of files, not millions.
+// matchesAny is the un-compiled variant kept for tests and any caller
+// that has a string slice handy and doesn't care about per-call regex
+// compile cost. Production filtering goes through compileGlobs +
+// matchesAnyCompiled.
+func matchesAny(path string, patterns []string) bool {
+	return matchesAnyCompiled(path, compileGlobs(patterns))
+}
+
+// matchGlob is a tiny glob matcher with `**` support. Kept for tests
+// and back-compat with any external caller; production filtering uses
+// compileGlobs + matchesAnyCompiled to amortize regex compilation
+// across all paths in a diff.
 //
 // Semantics:
 //
-//   - matches any chars except '/'
-//     ** matches any chars (including '/')
-//     ?  matches one char except '/'
+//	*   matches any chars except '/'
+//	**/ matches zero or more path segments (anchored to a path
+//	    boundary, so **/dist/** does NOT match src/mydist/file)
+//	**  matches any chars (including '/'); only at end of pattern
+//	?   matches one char except '/'
+//	[ab] / [a-z] / [!ab] character classes (glob-native, [!...] → [^...])
 func matchGlob(path, pattern string) bool {
 	re, err := regexp.Compile(globToRegex(pattern))
 	if err != nil {
@@ -304,19 +342,45 @@ func globToRegex(pattern string) string {
 		c := pattern[i]
 		switch {
 		case c == '*' && i+1 < len(pattern) && pattern[i+1] == '*':
-			sb.WriteString(".*")
-			i++
-			// `**/foo` — consume the slash so the regex doesn't
-			// require an extra `/` between `.*` and the next chunk.
+			i++ // consume the second *
+			// `**/x` should match "x at the start of any path segment"
+			// — emit (?:.*/)? so the trailing slash is part of the
+			// optional prefix. Pre-fix we emitted plain `.*`, which
+			// happily matched src/mydist/file against **/dist/** by
+			// gobbling "src/my" without requiring a path boundary.
 			if i+1 < len(pattern) && pattern[i+1] == '/' {
-				i++
+				sb.WriteString(`(?:.*/)?`)
+				i++ // consume the /
+			} else {
+				// `**` at end of pattern — match anything remaining.
+				sb.WriteString(".*")
 			}
 		case c == '*':
 			sb.WriteString("[^/]*")
 		case c == '?':
 			sb.WriteString("[^/]")
+		case c == '[':
+			// Glob character class. Copy verbatim until the matching ']',
+			// translating a leading '!' into regex '^' negation. If we
+			// don't find a closing ']' we fall back to escaping the '['
+			// — that's what filepath.Match does and what users on the
+			// receiving end of a malformed glob probably expect.
+			end := strings.IndexByte(pattern[i+1:], ']')
+			if end < 0 {
+				sb.WriteString(`\[`)
+				continue
+			}
+			body := pattern[i+1 : i+1+end]
+			sb.WriteByte('[')
+			if strings.HasPrefix(body, "!") {
+				sb.WriteByte('^')
+				body = body[1:]
+			}
+			sb.WriteString(body)
+			sb.WriteByte(']')
+			i += 1 + end // skip past the ']'
 		case c == '.', c == '+', c == '(', c == ')', c == '|',
-			c == '^', c == '$', c == '{', c == '}', c == '[', c == ']', c == '\\':
+			c == '^', c == '$', c == '{', c == '}', c == ']', c == '\\':
 			sb.WriteByte('\\')
 			sb.WriteByte(c)
 		default:
