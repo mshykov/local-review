@@ -353,12 +353,12 @@ func TestMergedHasBlocking(t *testing.T) {
 	}
 }
 
-func TestResolveCommitBranch_DetachedHEADGetsSyntheticName(t *testing.T) {
-	// We can't easily fake git here, so exercise the synthetic-name
-	// codepath directly via the helper logic: when CurrentBranch() returns
-	// "HEAD" (detached) we substitute `detached-<short-sha>`. Pin the
-	// shape so a future "just error in detached HEAD" regression fails
-	// loudly — the v0 path worked there and we promised not to break it.
+// Note: this exercises the syntheticDetachedBranch helper directly,
+// not resolveCommitBranch (which shells out to git). The shape it pins
+// is the user-visible promise: detached HEAD must produce a stable,
+// per-commit synthetic name so storage doesn't collide. A future
+// "just error in detached HEAD" regression should fail this test loudly.
+func TestSyntheticDetachedBranch(t *testing.T) {
 	for _, branch := range []string{"HEAD", "unknown"} {
 		const sha = "abc123def456789012345678901234567890aaaa"
 		got := syntheticDetachedBranch(branch, sha)

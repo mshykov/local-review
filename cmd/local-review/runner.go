@@ -163,14 +163,14 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	}
 
 	// Per-LLM reviews succeeded but the merge step didn't produce
-	// content (mergeLLM unavailable, merger error, save failed, etc.).
-	// Without a merged report the blocking-finding gate can't run, and
-	// returning nil here would silently exit 0 — a pre-commit hook would
-	// treat the commit as clean even though no gate ever fired. Return
-	// a regular error so the caller exits non-zero (per project policy:
-	// non-zero from tool-failure paths is fail-open in hooks, but the
-	// user sees the message and knows the gate didn't run).
-	if mergedContent == "" {
+	// content (mergeLLM unavailable, merger error, save failed, or the
+	// merger returned only whitespace). Without a merged report the
+	// blocking-finding gate can't run, and returning nil would silently
+	// exit 0 — a pre-commit hook would treat the commit as clean even
+	// though no gate ever fired. TrimSpace (not just == "") catches the
+	// "merger returned `\n`" variant that codex flagged as bypassing the
+	// v0.5.1 fix.
+	if strings.TrimSpace(mergedContent) == "" {
 		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s but the blocking-finding gate did not run", cfg.Storage.BasePath)
 	}
 
