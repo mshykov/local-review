@@ -58,11 +58,17 @@ type Org struct {
 }
 
 // LLMConfig holds configuration for a single LLM (v0.1+).
+//
+// Note: a `mode: cli|api` field shipped in v0.1's example config but
+// was never wired through to the orchestrator (multi-LLM always
+// invokes via CLI). It was removed in v0.5.x. Existing YAML configs
+// with a `mode:` line still load — yaml.v3 silently ignores unknown
+// fields. The "API fallback when CLI auth fails" idea is parked in
+// do-not-merge/v06-fully-local-ollama-preset.md.
 type LLMConfig struct {
 	Enabled    *bool  `yaml:"enabled"`
-	Mode       string `yaml:"mode"`            // "cli" or "api"
 	CLIPath    string `yaml:"cli_path"`        // path to CLI binary (auto-detect if empty)
-	Model      string `yaml:"model"`           // model name (used in API mode)
+	Model      string `yaml:"model"`           // model name passed to the agent CLI
 	APIKeyEnv  string `yaml:"api_key_env"`     // env var name for API key
 	APIKey     string `yaml:"api_key"`         // DEPRECATED: use environment variable instead
 	TimeoutSec int    `yaml:"timeout_seconds"` // per-call timeout
@@ -105,7 +111,6 @@ func Defaults() Config {
 		LLMs: map[string]LLMConfig{
 			"claude": {
 				Enabled:    boolPtr(true),
-				Mode:       "cli",
 				CLIPath:    "claude",
 				Model:      "claude-3-5-sonnet-20241022",
 				APIKeyEnv:  "ANTHROPIC_API_KEY",
@@ -113,7 +118,6 @@ func Defaults() Config {
 			},
 			"gemini": {
 				Enabled:    boolPtr(true),
-				Mode:       "cli",
 				CLIPath:    "gemini",
 				Model:      "gemini-1.5-pro",
 				APIKeyEnv:  "GEMINI_API_KEY",
@@ -124,7 +128,6 @@ func Defaults() Config {
 				// codex is paid (ChatGPT Plus or pay-per-token via OPENAI_API_KEY),
 				// but we only invoke it when the user has explicitly authenticated,
 				// so running by default doesn't surprise anyone with a bill.
-				Mode:       "cli",
 				CLIPath:    "codex",
 				Model:      "gpt-4",
 				APIKeyEnv:  "OPENAI_API_KEY",
@@ -259,9 +262,6 @@ func merge(dst *Config, src Config) {
 		for name, llmCfg := range src.LLMs {
 			// If LLM exists in dst, merge fields
 			if existing, ok := dst.LLMs[name]; ok {
-				if llmCfg.Mode != "" {
-					existing.Mode = llmCfg.Mode
-				}
 				if llmCfg.CLIPath != "" {
 					existing.CLIPath = llmCfg.CLIPath
 				}
@@ -391,13 +391,6 @@ func (c *Config) Validate() error {
 		}
 		if llm.Enabled != nil && !*llm.Enabled {
 			return fmt.Errorf("merge.preferred_llm '%s' is disabled (must be enabled to use for merging)", c.Merge.PreferredLLM)
-		}
-	}
-
-	// Validate LLM modes
-	for name, llm := range c.LLMs {
-		if llm.Enabled != nil && *llm.Enabled && llm.Mode != "" && llm.Mode != "cli" && llm.Mode != "api" {
-			return fmt.Errorf("llm '%s' has invalid mode '%s' (must be 'cli' or 'api')", name, llm.Mode)
 		}
 	}
 

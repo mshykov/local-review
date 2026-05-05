@@ -141,11 +141,10 @@ func TestMergeReplaces_V01(t *testing.T) {
 		LLMs: map[string]LLMConfig{
 			"claude": {
 				Enabled: boolPtr(false), // disable claude
-				Mode:    "api",
+				Model:   "claude-3-haiku",
 			},
 			"custom": {
 				Enabled:    boolPtr(true),
-				Mode:       "cli",
 				CLIPath:    "custom-llm",
 				TimeoutSec: 60,
 			},
@@ -164,8 +163,8 @@ func TestMergeReplaces_V01(t *testing.T) {
 	if dst.LLMs["claude"].Enabled != nil && *dst.LLMs["claude"].Enabled {
 		t.Error("claude should be disabled after merge")
 	}
-	if dst.LLMs["claude"].Mode != "api" {
-		t.Errorf("claude mode = %q, want api", dst.LLMs["claude"].Mode)
+	if dst.LLMs["claude"].Model != "claude-3-haiku" {
+		t.Errorf("claude model = %q, want claude-3-haiku", dst.LLMs["claude"].Model)
 	}
 
 	// Check that custom LLM was added
@@ -208,7 +207,6 @@ llms:
   claude:
     enabled: false
   gemini:
-    mode: api
     model: gemini-1.5-flash
 merge:
   preferred_llm: gemini
@@ -227,9 +225,6 @@ storage:
 	// Check that LLMs were merged
 	if cfg.LLMs["claude"].Enabled != nil && *cfg.LLMs["claude"].Enabled {
 		t.Error("claude should be disabled")
-	}
-	if cfg.LLMs["gemini"].Mode != "api" {
-		t.Errorf("gemini mode = %q, want api", cfg.LLMs["gemini"].Mode)
 	}
 	if cfg.LLMs["gemini"].Model != "gemini-1.5-flash" {
 		t.Errorf("gemini model = %q", cfg.LLMs["gemini"].Model)
@@ -280,14 +275,14 @@ func TestValidate_InvalidPreferredLLM(t *testing.T) {
 	}
 }
 
-func TestValidate_InvalidMode(t *testing.T) {
+func TestValidate_StrayModeFieldIsIgnored(t *testing.T) {
+	// `mode:` was removed from LLMConfig in v0.5.x — it shipped in the
+	// v0.1 example but was never wired through to the orchestrator.
+	// Existing user YAML configs with `mode: cli|api|whatever` lines
+	// must keep loading: yaml.v3 silently drops unknown fields, and
+	// Validate must not refuse to start because of this legacy line.
 	cfg := Defaults()
-	claude := cfg.LLMs["claude"]
-	claude.Mode = "invalid"
-	cfg.LLMs["claude"] = claude
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Error("expected error for invalid mode")
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate failed on default config: %v", err)
 	}
 }
