@@ -65,7 +65,15 @@ func Extract(mode Mode, ref string) ([]Diff, error) {
 	// don't double-buffer the diff (string copy + strings.Split slice).
 	// Large monorepo branch diffs hit 10s of MB; the legacy version
 	// held 3-4 copies of that in flight.
-	return parseUnifiedDiff(bytes.NewReader(stdout.Bytes())), nil
+	diffs, err := parseUnifiedDiff(bytes.NewReader(stdout.Bytes()))
+	if err != nil {
+		// Fail closed: a scanner error means we have only the prefix
+		// of the diff, and the unscanned tail might contain blocking
+		// changes. Returning a partial slice + nil err would let the
+		// gate exit 0 on a materially incomplete review.
+		return nil, fmt.Errorf("parse diff: %w", err)
+	}
+	return diffs, nil
 }
 
 func argsFor(mode Mode, ref string) ([]string, error) {
@@ -134,7 +142,12 @@ func ValidateRef(ref string) error {
 // (legacy: stdout.String() + strings.Split slice). Each hunk's body
 // builds in a strings.Builder so even a single huge hunk doesn't go
 // quadratic on the content concatenation.
-func parseUnifiedDiff(r io.Reader) []Diff {
+//
+// Returns an error when the scanner itself fails (oversize line,
+// underlying I/O error). The caller MUST treat that as fail-closed:
+// a partial diff would let the review gate exit 0 on what's
+// materially an incomplete read of the change set.
+func parseUnifiedDiff(r io.Reader) ([]Diff, error) {
 	sc := bufio.NewScanner(r)
 	// Default scanner buffer is 64 KB / line; bump to 4 MB so a single
 	// long line in a generated file doesn't truncate the diff. (The
@@ -213,10 +226,15 @@ func parseUnifiedDiff(r io.Reader) []Diff {
 		}
 	}
 	flushFile()
-	// Scanner errors (oversized line, I/O failure) are deliberately
-	// swallowed — the diff is best-effort review input, not a
-	// correctness-critical parse. A truncated diff still produces
-	// useful findings for whatever was parsed before the error.
+
+	// Scanner errors mean we only got the prefix of the diff — fail
+	// closed. The earlier "best-effort, swallow" comment was the
+	// wrong call for a security gate: a truncated diff exits the
+	// gate on incomplete input, hiding any blocking change in the
+	// unscanned tail.
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("scan diff: %w", err)
+	}
 
 	// Drop any malformed entries (no path means we never saw a file header)
 	out := diffs[:0]
@@ -225,7 +243,7 @@ func parseUnifiedDiff(r io.Reader) []Diff {
 			out = append(out, d)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // parseNewFrom extracts the "+N" line number from a hunk header

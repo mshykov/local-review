@@ -1,9 +1,27 @@
 package git
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
+
+// errReader returns r.pre on the first read, then r.err on every
+// subsequent read. Used to simulate a real I/O failure mid-stream so
+// the parser's fail-closed contract is exercised end-to-end.
+type errReader struct {
+	pre []byte
+	err error
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if len(r.pre) > 0 {
+		n := copy(p, r.pre)
+		r.pre = r.pre[n:]
+		return n, nil
+	}
+	return 0, r.err
+}
 
 const sample = `diff --git a/src/foo.ts b/src/foo.ts
 index 1234567..abcdefg 100644
@@ -26,7 +44,7 @@ index 222..333 100644
 `
 
 func TestParseUnifiedDiff(t *testing.T) {
-	diffs := parseUnifiedDiff(strings.NewReader(sample))
+	diffs, _ := parseUnifiedDiff(strings.NewReader(sample))
 	if len(diffs) != 2 {
 		t.Fatalf("expected 2 files, got %d", len(diffs))
 	}
@@ -53,7 +71,7 @@ func TestParseUnifiedDiff_CRLF(t *testing.T) {
 		"@@ -1,1 +1,2 @@\r\n" +
 		" hello\r\n" +
 		"+world\r\n"
-	diffs := parseUnifiedDiff(strings.NewReader(crlf))
+	diffs, _ := parseUnifiedDiff(strings.NewReader(crlf))
 	if len(diffs) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(diffs))
 	}
@@ -85,7 +103,7 @@ index abc..0000000
 -
 -func Old() {}
 `
-	diffs := parseUnifiedDiff(strings.NewReader(deleted))
+	diffs, _ := parseUnifiedDiff(strings.NewReader(deleted))
 	if len(diffs) != 1 {
 		t.Fatalf("want 1 diff, got %d", len(diffs))
 	}
@@ -114,7 +132,7 @@ index 1..2 100644
 +++ b/customers replaces it
 +DROP TABLE customers;
 `
-	diffs := parseUnifiedDiff(strings.NewReader(sql))
+	diffs, _ := parseUnifiedDiff(strings.NewReader(sql))
 	if len(diffs) != 1 {
 		t.Fatalf("want 1 diff, got %d", len(diffs))
 	}
@@ -148,12 +166,30 @@ index aaa..bbb 100644
 +// new comment
  func F() {}
 `
-	diffs := parseUnifiedDiff(strings.NewReader(renamed))
+	diffs, _ := parseUnifiedDiff(strings.NewReader(renamed))
 	if len(diffs) != 1 {
 		t.Fatalf("want 1 diff, got %d", len(diffs))
 	}
 	if diffs[0].Path != "new.go" {
 		t.Errorf("renamed-file path = %q, want %q", diffs[0].Path, "new.go")
+	}
+}
+
+func TestParseUnifiedDiff_FailsClosedOnScannerError(t *testing.T) {
+	// A partial diff must NOT silently produce "no findings". The gate
+	// downstream relies on having seen the whole change set; a truncated
+	// read with the unscanned tail dropped would let a blocking change
+	// slip through. Pin: scanner error → returned err, not partial slice.
+	r := &errReader{
+		pre: []byte("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n"),
+		err: io.ErrUnexpectedEOF,
+	}
+	_, err := parseUnifiedDiff(r)
+	if err == nil {
+		t.Fatal("want error from parseUnifiedDiff on truncated input, got nil")
+	}
+	if !strings.Contains(err.Error(), "scan diff") {
+		t.Errorf("error should mention scan diff, got: %v", err)
 	}
 }
 
