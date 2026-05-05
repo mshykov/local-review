@@ -169,6 +169,14 @@ func applyFilters(in []Finding, min Severity, max int) []Finding {
 	return out
 }
 
+// FilterDiffs keeps diffs matching any include glob (when set) and not
+// matching any exclude glob. Exported so the multi-LLM runner can apply
+// the same review.include/review.exclude config the single-LLM path
+// already uses — pre-v0.5.x the multi path silently bypassed both.
+func FilterDiffs(diffs []git.Diff, include, exclude []string) []git.Diff {
+	return filter(diffs, include, exclude)
+}
+
 // filter keeps diffs matching any IncludeGlob (when set) and not
 // matching any ExcludeGlob.
 func filter(diffs []git.Diff, include, exclude []string) []git.Diff {

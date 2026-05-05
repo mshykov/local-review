@@ -113,6 +113,12 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	if err != nil {
 		return fmt.Errorf("extract diff: %w", err)
 	}
+	// Apply review.include/review.exclude before fan-out. The single-
+	// LLM fallback already does this in internal/review/review.go; the
+	// multi-LLM path skipped it pre-v0.5.x, so users with tuned glob
+	// configs (e.g. exclude: ["**/generated/**"]) silently saw the LLM
+	// review their auto-generated files.
+	diffs = review.FilterDiffs(diffs, cfg.Review.IncludeGlobs, cfg.Review.ExcludeGlobs)
 	if len(diffs) == 0 {
 		fmt.Println("No changes to review.")
 		return nil
