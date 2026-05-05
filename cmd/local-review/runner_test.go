@@ -206,6 +206,19 @@ func TestApplyFlagsToConfig_PerAgentModelOnEmptyMap(t *testing.T) {
 	}
 }
 
+func TestApplyFlagsToConfig_MergeWithReflectsInConfig(t *testing.T) {
+	// `local-review config --merge-with claude` should print the
+	// chosen agent in the rendered YAML's merge.preferred_llm. Pre-fix
+	// applyFlagsToConfig didn't touch Merge, so the preview was
+	// misleading even though runtime merge selection honored the flag.
+	cfg := config.Defaults()
+	sf := &sharedFlags{mergeWith: "claude"}
+	applyFlagsToConfig(&cfg, sf)
+	if cfg.Merge.PreferredLLM != "claude" {
+		t.Errorf("Merge.PreferredLLM: want claude, got %q", cfg.Merge.PreferredLLM)
+	}
+}
+
 func TestApplyFlagsToConfig_v0SingleLLMFlags(t *testing.T) {
 	cfg := config.Defaults()
 	sf := &sharedFlags{

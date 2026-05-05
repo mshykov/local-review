@@ -286,6 +286,14 @@ func applyFlagsToConfig(cfg *config.Config, sf *sharedFlags) {
 	if sf.codexModel != "" {
 		setLLMModel(cfg, "codex", sf.codexModel)
 	}
+
+	// --merge-with overrides merge.preferred_llm. Without this branch,
+	// runtime merge selection honored the flag but `local-review config
+	// --merge-with claude` still printed `merge.preferred_llm: auto`,
+	// which made the preview misleading.
+	if sf.mergeWith != "" {
+		cfg.Merge.PreferredLLM = sf.mergeWith
+	}
 }
 
 func setLLMModel(cfg *config.Config, name, model string) {
