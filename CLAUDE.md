@@ -17,14 +17,19 @@ Key constraints:
 - **Git CLI integration only** — no go-git to avoid binary bloat
 - **Hybrid CLI + API mode** — prefer free CLI tools, fallback to API if configured
 
-## v0.1 Multi-LLM Architecture
+## Multi-LLM Architecture (v0.5+)
 
-### Design Decisions (Clarified 2026-05-02)
+### Design Decisions
 
-**Dual Mode: CLI-first with API Fallback**
-- Primary: Use free LLM CLIs (claude, gemini, codex)
-- Fallback: Use API endpoints if CLI unavailable/fails
-- Per-provider configuration allows mixing (e.g., Claude via CLI, GPT via API)
+**Multi-LLM is the default, single-LLM is the fallback**
+- Default: every authenticated LLM CLI (claude, gemini, codex) runs in
+  parallel; findings are merged into one consolidated report.
+- Fallback: when *no* LLM CLI is authenticated, hit the configured
+  `provider:` (any OpenAI-compat endpoint, including local Ollama).
+- The v0.1 plan included an "API fallback when CLI auth fails" inside
+  the multi-LLM path; that idea was abandoned with v0.5.x — `mode:
+  cli|api` was removed from the schema, see do-not-merge/v06-fully-
+  local-ollama-preset.md for the shape it would take if revived.
 
 **Supported LLM CLIs**
 1. **Claude CLI** — `npm install -g @anthropic-ai/claude-code` (auth: `claude login`)
@@ -66,28 +71,27 @@ Reviews saved to `.local-review/reviews/<sanitized-branch>/<commit>_<llm>_<versi
 - Include failure notes in merged.md
 - Skip not-installed LLMs silently (only log installed ones)
 
-**Configuration Schema (v0.1)**
+**Configuration Schema (v0.5+)**
 ```yaml
-# .local-review.yml
+# .local-review.yml — every field is optional; defaults are sensible.
 llms:
   claude:
-    enabled: true
-    mode: cli                    # 'cli' or 'api'
-    cli_path: claude             # auto-detect if empty
-    model: claude-3.5-sonnet
-    api_key_env: ANTHROPIC_API_KEY
+    # enabled: true              # default; omit to use auto-detect
+    cli_path: claude             # path override; defaults to PATH lookup
+    model: claude-opus-4-7       # passed via --model
+    api_key_env: ANTHROPIC_API_KEY  # custom env var for the key
 
   gemini:
-    enabled: true
-    mode: cli
     cli_path: gemini
-    model: gemini-1.5-pro
+    model: gemini-2.0-flash
+    api_key_env: GEMINI_API_KEY
 
   codex:
-    enabled: false               # paid; opt in if you have ChatGPT Plus
-    mode: cli
+    # codex runs by default when authenticated. Set enabled: false to
+    # opt out (e.g., to keep paid-tier billing predictable).
     cli_path: codex
     model: gpt-4
+    api_key_env: OPENAI_API_KEY
 
 merge:
   preferred_llm: auto            # 'auto' or specific LLM name
@@ -96,6 +100,11 @@ merge:
 storage:
   base_path: .local-review/reviews
 ```
+
+The v0.1 schema had a `mode: cli|api` field per LLM. It was never
+wired through to the runtime — the orchestrator always invoked CLIs —
+and was removed in v0.5.x. Existing configs with stray `mode:` lines
+still load (yaml.v3 silently ignores unknown fields).
 
 **Command Structure (v0.5+)**
 ```sh
@@ -165,17 +174,16 @@ npm install -g @anthropic-ai/claude-code
 ### Required Environment
 - Go 1.23+
 - Git CLI available in PATH
-- **v0**: API key set: `export LOCAL_REVIEW_API_KEY=sk-...` (for testing with real providers)
-- **v0.1**: Node.js 20+ and npm (for LLM CLI installations)
+- For single-LLM-fallback testing: `export LOCAL_REVIEW_API_KEY=sk-...`
+- For multi-LLM (default) testing: Node.js 20+ and npm to install at least one of the LLM CLIs
 
-## v0.1 Architecture
+## Multi-LLM Architecture (v0.5+)
 
-### New Packages for Multi-LLM Support
+### Packages
 
 **internal/cli/** — LLM CLI wrapper and detection
-- `detector.go` — Check which LLM CLIs are installed (claude, gemini, codex)
-- `installer.go` — Guide users to install missing CLIs via npm/brew
-- `invoker.go` — Execute CLI commands with proper patterns per LLM
+- `detector.go` — Check which LLM CLIs are installed (claude, gemini, codex); `LLM` struct + `CanonicalAPIKeyEnv` map
+- `invoker.go` — Execute CLI commands with proper patterns per LLM; thread Model + APIKey + systemPrompt
 - `version.go` — Extract CLI version numbers for metadata
 
 **internal/multi/** — Multi-LLM orchestration
@@ -185,9 +193,9 @@ npm install -g @anthropic-ai/claude-code
 - `metadata.go` — Track run details (timestamps, exit codes, versions)
 
 **internal/config/** — Extended configuration
-- Add `LLMs` map with per-provider settings (mode, cli_path, model)
-- Add `Merge` config (preferred_llm, deduplicate)
-- Add `Storage` config (base_path)
+- `LLMs` map with per-agent settings (cli_path, model, api_key_env, timeout)
+- `Merge` config (preferred_llm, deduplicate, consensus_threshold)
+- `Storage` config (base_path)
 
 **cmd/local-review/** — New commands
 - `runner.go` — Unified review dispatcher (multi-LLM with single-LLM fallback)
@@ -255,7 +263,11 @@ npm install -g @anthropic-ai/claude-code
 }
 ```
 
-## v0 Architecture (Current Stable)
+## Single-LLM Fallback Path
+
+Used when no LLM CLI is authenticated. Same code path as the original
+v0 single-LLM design — kept verbatim because it's the simplest way to
+get a review running with just an API key.
 
 ### Configuration Cascade (internal/config/)
 Config is loaded in order of precedence (lowest to highest):
