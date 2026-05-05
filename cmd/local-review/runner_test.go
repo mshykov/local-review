@@ -3,10 +3,12 @@ package main
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
+	"github.com/mshykov/local-review/internal/multi"
 )
 
 // fakeDetected is the standard 3-CLI setup used across selectAgents tests.
@@ -419,6 +421,35 @@ func TestMergedHasBlocking(t *testing.T) {
 // is the user-visible promise: detached HEAD must produce a stable,
 // per-commit synthetic name so storage doesn't collide. A future
 // "just error in detached HEAD" regression should fail this test loudly.
+func TestAnyPerLLMHasBlocking_DefendsAgainstMergerTruncation(t *testing.T) {
+	// MaxReviewBytesForMerge truncates each per-LLM review to 8 KB
+	// before feeding the merger. A reviewer that places a Critical
+	// finding on byte 9000+ would have it dropped from the merger
+	// input → merged output → mergedHasBlocking. The on-disk file
+	// still has it, but the gate would exit 0. Independent
+	// pre-truncation scan closes that gap.
+	clean := "## Summary\n- **Recommendation**: APPROVE\n\n## Critical Issues\n*(None)*\n"
+	withBlock := strings.Repeat("Filler line.\n", 1000) +
+		"\n## Critical Issues\n- **file.go:42** — buffer overflow under load\n"
+
+	if anyPerLLMHasBlocking([]multi.ReviewResult{{LLM: "x", Output: clean}}) {
+		t.Error("clean output should not trip the gate")
+	}
+	if !anyPerLLMHasBlocking([]multi.ReviewResult{{LLM: "x", Output: withBlock}}) {
+		t.Error("blocking finding past 8 KB cutoff must still trip the gate")
+	}
+	mixed := []multi.ReviewResult{
+		{LLM: "a", Output: clean},
+		{LLM: "b", Output: withBlock},
+	}
+	if !anyPerLLMHasBlocking(mixed) {
+		t.Error("any blocking review in the set must trip the gate")
+	}
+	if anyPerLLMHasBlocking([]multi.ReviewResult{{LLM: "x", Output: ""}}) {
+		t.Error("empty review output must not be treated as blocking")
+	}
+}
+
 func TestSyntheticDetachedBranch(t *testing.T) {
 	for _, branch := range []string{"HEAD", "unknown"} {
 		const sha = "abc123def456789012345678901234567890aaaa"

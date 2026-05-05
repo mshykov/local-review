@@ -229,15 +229,44 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s but the blocking-finding gate did not run", cfg.Storage.BasePath)
 	}
 
-	// Restore the pre-commit gate broken by the v0.5 multi-default flip.
-	// Single-LLM has structured findings → exits 2 cleanly. Multi-LLM
-	// merger returns markdown, so we look for non-empty severity
-	// sections to decide whether to fail the commit. Returning the
-	// sentinel (rather than os.Exit) lets cobra and main() unwind defers.
-	if mergedHasBlocking(mergedContent) {
+	// Two independent signals trip the gate (any one is enough). False
+	// positives are preferred over false negatives — over-blocking is
+	// a re-run, under-blocking is a shipped bug.
+	//
+	//  1. The merged markdown — what the merger LLM concluded after
+	//     seeing the (possibly-truncated) per-LLM reviews.
+	//  2. Each per-LLM review's full Output — defends against the
+	//     8 KB merger-input truncation hiding blocking findings past
+	//     the cut. The merger only sees the first 8 KB of each
+	//     reviewer; without this independent check, a verbose
+	//     reviewer that puts a critical finding past byte 8000 would
+	//     produce a false-clean exit. The on-disk per-LLM file has
+	//     always had the full output; this just scans it before we
+	//     decide.
+	//
+	// Returning the sentinel (rather than os.Exit) lets cobra and
+	// main() unwind defers.
+	if mergedHasBlocking(mergedContent) || anyPerLLMHasBlocking(results) {
 		return errBlockingFindings
 	}
 	return nil
+}
+
+// anyPerLLMHasBlocking runs the same heuristic mergedHasBlocking uses
+// against each per-LLM Output, BEFORE the 8 KB truncation that
+// BuildMergeInput applies. If any reviewer raised a Critical / Major
+// finding (or BLOCK MERGE / REQUEST CHANGES verdict), the gate fires
+// even if the truncated merger input dropped it.
+func anyPerLLMHasBlocking(results []multi.ReviewResult) bool {
+	for _, r := range results {
+		if r.Output == "" {
+			continue
+		}
+		if mergedHasBlocking(r.Output) {
+			return true
+		}
+	}
+	return false
 }
 
 // mergedHasBlocking returns true when the merged markdown report
