@@ -36,7 +36,13 @@ type ReviewResult struct {
 
 // RunParallel executes reviews concurrently for all configured LLMs.
 // Returns results for all LLMs (including failures).
-func (o *Orchestrator) RunParallel(ctx context.Context, diff, commit, branch string) ([]ReviewResult, error) {
+//
+// systemPrompt is the language-specific prompt pack content the
+// caller has already loaded (lang.Dominant + prompts.Get). Passed to
+// every invoker so all agents review the diff against identical
+// review-rules and severity tiering. Empty string is allowed — each
+// invoker has a generic fallback.
+func (o *Orchestrator) RunParallel(ctx context.Context, systemPrompt, diff, commit, branch string) ([]ReviewResult, error) {
 	var wg sync.WaitGroup
 	results := make([]ReviewResult, len(o.llms))
 
@@ -70,7 +76,7 @@ func (o *Orchestrator) RunParallel(ctx context.Context, diff, commit, branch str
 			defer cancel()
 
 			// Run review
-			output, err := invoker.Review(reviewCtx, diff)
+			output, err := invoker.Review(reviewCtx, systemPrompt, diff)
 			result.Duration = time.Since(start)
 
 			if err != nil {

@@ -12,8 +12,10 @@ import (
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/git"
+	"github.com/mshykov/local-review/internal/lang"
 	"github.com/mshykov/local-review/internal/multi"
 	"github.com/mshykov/local-review/internal/output"
+	"github.com/mshykov/local-review/internal/prompts"
 	"github.com/mshykov/local-review/internal/review"
 )
 
@@ -145,6 +147,19 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	}
 	diffStr := formatDiffForLLM(diffs)
 
+	// Pick the language pack the same way the single-LLM path does
+	// (review.go:43-50). Pre-v0.6.x the multi-LLM path skipped this
+	// entirely — every agent ran with a generic 4-bullet prompt while
+	// the README claimed language-specific packs were applied. Now
+	// each agent gets the same Go/TS/Python/Rust pack the single-LLM
+	// path uses, with a markdown-output override appended (see
+	// multiLLMOutputOverride in cli/invoker.go) so the merger can
+	// consolidate prose across reviewers.
+	systemPrompt, err := selectPromptPack(cfg, diffs)
+	if err != nil {
+		return err
+	}
+
 	commit, branch, err := resolveCommitBranch(mode, ref)
 	if err != nil {
 		return err
@@ -154,7 +169,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)
 
-	results, err := orch.RunParallel(ctx, diffStr, commit, branch)
+	results, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
 	if err != nil {
 		return fmt.Errorf("run reviews: %w", err)
 	}
@@ -615,4 +630,26 @@ func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred
 		}
 	}
 	return nil
+}
+
+// selectPromptPack picks the language pack for this multi-LLM run.
+// Mirrors the single-LLM logic in internal/review/review.go: an
+// explicit review.prompt_pack in config wins, otherwise auto-detect
+// from the dominant language across the diff paths. The returned
+// string is the embedded pack content; the markdown-output override
+// is added by each invoker in internal/cli/invoker.go.
+func selectPromptPack(cfg config.Config, diffs []git.Diff) (string, error) {
+	packID := cfg.Review.PromptPack
+	if packID == "" {
+		paths := make([]string, len(diffs))
+		for i, d := range diffs {
+			paths[i] = d.Path
+		}
+		packID = lang.Dominant(paths)
+	}
+	pack, err := prompts.Get(packID)
+	if err != nil {
+		return "", fmt.Errorf("load prompt pack %q: %w", packID, err)
+	}
+	return pack, nil
 }

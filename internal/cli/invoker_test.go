@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -62,17 +63,11 @@ func TestInvokerInterface(t *testing.T) {
 }
 
 func TestCodexInvoker_Review(t *testing.T) {
-	// This is a unit test with a non-existent path (will fail as expected)
-	// Real integration testing happens in manual testing phase
+	// Unit test with a non-existent path (will fail as expected). Real
+	// integration testing happens in manual testing phase.
 	invoker := &CodexInvoker{path: "/nonexistent/codex"}
 
-	ctx := context.Background()
-	diff := "sample diff"
-
-	_, err := invoker.Review(ctx, diff)
-
-	// Should error because the path doesn't exist
-	if err == nil {
+	if _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
 		t.Error("Expected error with non-existent path, got nil")
 	}
 }
@@ -80,13 +75,7 @@ func TestCodexInvoker_Review(t *testing.T) {
 func TestGeminiInvoker_Review(t *testing.T) {
 	invoker := &GeminiInvoker{path: "/nonexistent/gemini"}
 
-	ctx := context.Background()
-	diff := "sample diff"
-
-	_, err := invoker.Review(ctx, diff)
-
-	// Should error because the path doesn't exist
-	if err == nil {
+	if _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
 		t.Error("Expected error with non-existent path, got nil")
 	}
 }
@@ -94,13 +83,34 @@ func TestGeminiInvoker_Review(t *testing.T) {
 func TestClaudeInvoker_Review(t *testing.T) {
 	invoker := &ClaudeInvoker{path: "/nonexistent/claude"}
 
-	ctx := context.Background()
-	diff := "sample diff"
-
-	_, err := invoker.Review(ctx, diff)
-
-	// Should error because the path doesn't exist
-	if err == nil {
+	if _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
 		t.Error("Expected error with non-existent path, got nil")
 	}
+}
+
+func TestBuildReviewPrompt(t *testing.T) {
+	// Pin the contract every Review() depends on:
+	//   - Empty systemPrompt → falls back to the generic 4-bullet prompt
+	//     (defends against tests / out-of-tree callers that haven't
+	//     learned to pass a pack).
+	//   - Non-empty systemPrompt → that pack content is included verbatim.
+	//   - The markdown-output override is always appended so multi-LLM
+	//     agents emit prose the merger can consolidate, regardless of
+	//     what the pack itself prescribes for output format (the packs
+	//     mandate JSON for the single-LLM path).
+	if got := buildReviewPrompt(""); !contains(got, "code reviewer") || !contains(got, "markdown") {
+		t.Errorf("empty systemPrompt should yield generic prompt + markdown override, got:\n%s", got)
+	}
+	pack := "## Custom Pack\n- Look for SQL injection.\n"
+	got := buildReviewPrompt(pack)
+	if !contains(got, "Custom Pack") {
+		t.Errorf("pack content not preserved verbatim:\n%s", got)
+	}
+	if !contains(got, "Do NOT return JSON") {
+		t.Errorf("markdown-output override not appended:\n%s", got)
+	}
+}
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

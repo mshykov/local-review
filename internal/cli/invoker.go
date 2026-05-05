@@ -9,10 +9,55 @@ import (
 )
 
 // Invoker runs an LLM CLI with a diff and returns the review output.
+//
+// Review takes a `systemPrompt` (the language-specific prompt pack
+// content the runner has already loaded via lang.Dominant +
+// prompts.Get) so each agent reviews against the same review-rules,
+// severity tiering, and hard rules the single-LLM path uses. Empty
+// systemPrompt means "fall back to the agent's built-in generic
+// prompt" — useful for tests and as a defensive default.
 type Invoker interface {
-	Review(ctx context.Context, diff string) (string, error)
+	Review(ctx context.Context, systemPrompt, diff string) (string, error)
 	// RunPrompt sends a raw prompt to the LLM without wrapping it in a code-review context
 	RunPrompt(ctx context.Context, prompt string) (string, error)
+}
+
+// multiLLMOutputOverride tells the agent to respond in markdown
+// instead of JSON. The prompt packs mandate JSON output for the
+// single-LLM path (which parses structured findings); multi-LLM
+// agents need to emit markdown so the merger can consolidate prose
+// across reviewers. We append this AFTER the pack so the LLM's most
+// recent instruction wins.
+const multiLLMOutputOverride = `
+
+---
+**Output format for this review**: respond in human-readable markdown
+with severity headings (## Critical Issues, ## Major Issues, ## Warnings,
+## Info / Notes). Each finding: file path + line number, short title,
+brief explanation, suggested fix. Do NOT return JSON — a separate
+merger step will consolidate findings across reviewers.
+`
+
+// buildReviewPrompt assembles the per-agent review prompt from the
+// caller-supplied systemPrompt (a language-specific prompt pack from
+// internal/prompts) and the multi-LLM markdown-output override.
+//
+// An empty systemPrompt falls back to a generic 4-bullet review prompt
+// so the agent still does *something* useful — defends against tests
+// or callers that haven't been updated to pass the pack content. The
+// generic fallback used to be the *default* in every invoker; since
+// v0.6.x the runner threads the pack through, so this is just a safety
+// net.
+func buildReviewPrompt(systemPrompt string) string {
+	if systemPrompt == "" {
+		systemPrompt = "You are a code reviewer. Review the diff below for:\n" +
+			"1. Bugs and logical errors\n" +
+			"2. Security vulnerabilities\n" +
+			"3. Performance issues\n" +
+			"4. Best practices violations\n\n" +
+			"Provide specific findings with file names and line numbers."
+	}
+	return systemPrompt + multiLLMOutputOverride
 }
 
 // NewInvoker creates an invoker for the given LLM. The Model field on
@@ -53,15 +98,8 @@ type CodexInvoker struct {
 	model string // codex exec -m <model>; empty = CLI default
 }
 
-func (c *CodexInvoker) Review(ctx context.Context, diff string) (string, error) {
-	prompt := "You are a code reviewer. Review the following git diff for:\n" +
-		"1. Bugs and logical errors\n" +
-		"2. Security vulnerabilities\n" +
-		"3. Performance issues\n" +
-		"4. Best practices violations\n\n" +
-		"Provide specific findings with file names and line numbers.\n" +
-		"Format as markdown with severity levels (critical, major, warning, info).\n\n" +
-		"Diff:\n" + diff
+func (c *CodexInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, error) {
+	prompt := buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff
 	return c.runExec(ctx, prompt, "codex review")
 }
 
@@ -117,17 +155,16 @@ type GeminiInvoker struct {
 	model string // gemini -m <model>; empty = CLI default
 }
 
-func (g *GeminiInvoker) Review(ctx context.Context, diff string) (string, error) {
-	prompt := "Review these code changes for bugs, security issues, and best practices. " +
-		"Provide specific findings with file names and line numbers. " +
-		"Format as markdown with severity levels (critical, major, warning, info)."
-
-	args := []string{"-p", prompt}
+func (g *GeminiInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, error) {
+	// gemini's `-p` is appended to stdin in headless mode (per its
+	// --help). Put a marker in -p, route the full pack-prompt + diff
+	// via stdin to dodge ARG_MAX on long pack content.
+	args := []string{"-p", "Follow the instructions in stdin."}
 	if g.model != "" {
 		args = append(args, "-m", g.model)
 	}
 	cmd := exec.CommandContext(ctx, g.path, args...)
-	cmd.Stdin = strings.NewReader(diff)
+	cmd.Stdin = strings.NewReader(buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -164,15 +201,8 @@ type ClaudeInvoker struct {
 	model string // claude --model <id>; empty = CLI default
 }
 
-func (c *ClaudeInvoker) Review(ctx context.Context, diff string) (string, error) {
-	prompt := "You are a code reviewer. Review the following git diff for:\n" +
-		"1. Bugs and logical errors\n" +
-		"2. Security vulnerabilities\n" +
-		"3. Performance issues\n" +
-		"4. Best practices violations\n\n" +
-		"Provide specific findings with file names and line numbers.\n" +
-		"Format as markdown with severity levels (critical, major, warning, info).\n\n" +
-		"Diff:\n" + diff
+func (c *ClaudeInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, error) {
+	prompt := buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff
 	return c.run(ctx, prompt, "claude review")
 }
 
