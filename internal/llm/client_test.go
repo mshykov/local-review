@@ -242,6 +242,49 @@ func TestComplete_EmptyChoicesReturnsError(t *testing.T) {
 	}
 }
 
+func TestComplete_LocalURLSkipsKeyRequirement(t *testing.T) {
+	// Ollama / vLLM at localhost don't authenticate; the init wizard's
+	// Ollama preset deliberately omits api_key_env. Pre-fix we still
+	// rejected with "no API key" for those URLs. Now: localhost-shaped
+	// base_url + empty key proceeds to the actual call (which the test
+	// mock satisfies).
+	m := newMockServer(t, okResponse("ok-local"))
+	// Replace the mock URL's host with 127.0.0.1 explicitly to exercise
+	// the local-host detector. httptest already binds there.
+	c := New(m.server.URL, "", "LOCAL_REVIEW_API_KEY", "ollama-model", 5)
+	got, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	if err != nil {
+		t.Fatalf("local URL with empty key should succeed, got %v", err)
+	}
+	if got != "ok-local" {
+		t.Errorf("response: got %q, want ok-local", got)
+	}
+}
+
+func TestIsLocalURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"http://localhost:11434/v1", true},
+		{"http://127.0.0.1:8080/v1", true},
+		{"http://127.99.0.1/v1", true},
+		{"http://[::1]:8000/v1", true},
+		{"http://0.0.0.0:11434/v1", true},
+		{"https://api.openai.com/v1", false},
+		{"https://api.anthropic.com/v1", false},
+		{"http://10.0.0.5:8080/v1", false}, // private but not loopback
+		{"http://192.168.1.10/v1", false},
+		{"", false},
+		{"::not a url::", false},
+	}
+	for _, tc := range cases {
+		if got := isLocalURL(tc.in); got != tc.want {
+			t.Errorf("isLocalURL(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestComplete_RejectsOversizedResponse(t *testing.T) {
 	// A spoofed/runaway provider must not OOM the CLI by streaming
 	// unbounded bytes. The cap is 10 MB; write 12 MB and confirm we

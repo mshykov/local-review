@@ -11,9 +11,34 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+// isLocalURL returns true when raw is a URL whose host points at the
+// local machine (localhost, 127.0.0.0/8, ::1, 0.0.0.0). Used to skip
+// the API-key requirement for Ollama / vLLM-style local-only setups
+// where the provider doesn't authenticate. Any non-local URL falls
+// through to the regular auth check.
+func isLocalURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	switch host {
+	case "localhost", "127.0.0.1", "0.0.0.0", "::1":
+		return true
+	}
+	// Also catch any 127.x.x.x — kept narrow on purpose; refusing
+	// to extend to RFC1918 ranges because a corporate API gateway
+	// at 10.0.0.5 still authenticates and shouldn't bypass the check.
+	return strings.HasPrefix(host, "127.")
+}
 
 // maxResponseBytes caps how much we'll read from a chat-completions
 // response. A typical review response is well under 100 KB; 10 MB is
@@ -81,7 +106,13 @@ type response struct {
 // providers respect this; for those that don't, the system prompt
 // should still steer the model to JSON.
 func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (string, error) {
-	if c.APIKey == "" {
+	if c.APIKey == "" && !isLocalURL(c.BaseURL) {
+		// Local-review init's "Ollama" preset writes a config with no
+		// api_key_env line because Ollama doesn't authenticate. A blank
+		// LOCAL_REVIEW_API_KEY (the legacy default) used to crash the
+		// review here despite the provider needing no key. Skip the
+		// check when base_url points at localhost/127.0.0.1/::1/0.0.0.0;
+		// any non-local URL still requires a key.
 		envName := c.APIKeyEnv
 		if envName == "" {
 			envName = "LOCAL_REVIEW_API_KEY"
