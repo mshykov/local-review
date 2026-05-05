@@ -212,9 +212,11 @@ Common flags:
 | `--merge-with <agent>` | Pick which agent merges findings (default: auto) |
 | `--model <id>` | Override `provider.model` (single-LLM fallback only) |
 | `--base-url <url>` | Override `provider.base_url` (single-LLM fallback only) |
-| `--min-severity <tier>` | `nit` / `info` / `warning` / `major` / `critical` |
-| `--max-findings <n>` | Cap output |
-| `--json` | Emit JSON (for CI integration) |
+| `--min-severity <tier>` | `nit` / `info` / `warning` / `major` / `critical` (single-LLM fallback only) |
+| `--max-findings <n>` | Cap output (single-LLM fallback only) |
+| `--json` | Emit JSON (single-LLM fallback only — see below) |
+
+In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are honored only when no LLM CLI is active and we fall back to the single-LLM `provider:` path. Multi-LLM passes them through with a stderr warning. A structured-JSON multi-LLM mode is parked for v0.6 (see `do-not-merge/v06-json-multi-llm-output.md`).
 
 Config wins by default; flags override config at runtime (e.g., `--only codex` runs codex even if your config sets `codex.enabled: false`).
 
