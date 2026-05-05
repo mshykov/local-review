@@ -12,13 +12,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/git"
@@ -36,21 +37,21 @@ const banner = `
   _|_|_|_|    _|_|      _|_|_|  _|    _|  _|_|_|_|        _|    _|  _|_|_|_|      _|      _|_|_|  _|_|_|_|      _|  _|
 `
 
-// helpHeader returns the banner when stdout looks like a wide-enough
-// terminal, or an empty string otherwise. Cobra hard-wraps Long
-// descriptions; the banner is unreadable noise on <100-col terminals
-// (CI logs, narrow tmux panes, the editor that opens for `git commit`).
+// helpHeader returns the banner when stdout is a wide-enough terminal,
+// or an empty string otherwise. Cobra hard-wraps Long descriptions, so
+// the ~120-col banner becomes unreadable noise on narrower terminals
+// (CI logs, the editor that opens for `git commit`, narrow tmux panes).
 //
-// Detection is intentionally stdlib-only: stat the file mode to tell
-// terminals from pipes/files, and read $COLUMNS for width. This avoids
-// pulling in golang.org/x/term and keeps the Go 1.23 floor.
+// We use term.GetSize on the stdout fd. $COLUMNS isn't reliable here —
+// shells don't export it to child processes by default, so falling
+// back to it would silently disable the banner in the common case.
 func helpHeader() string {
-	info, err := os.Stdout.Stat()
-	if err != nil || (info.Mode()&os.ModeCharDevice) == 0 {
+	fd := int(os.Stdout.Fd())
+	if !term.IsTerminal(fd) {
 		return ""
 	}
-	cols, err := strconv.Atoi(os.Getenv("COLUMNS"))
-	if err != nil || cols < 100 {
+	w, _, err := term.GetSize(fd)
+	if err != nil || w < 100 {
 		return ""
 	}
 	return banner + "\n"
@@ -104,6 +105,10 @@ Together, Groq, OpenRouter, Ollama, vLLM, etc.).
 
 See README and https://mshykov.github.io/local-review/ for details.`,
 		SilenceUsage: true,
+		// We print errors ourselves in main() so the blocking-findings
+		// sentinel can exit 2 without cobra adding a noisy "Error: ..."
+		// line after the user already saw the full review report.
+		SilenceErrors: true,
 	}
 
 	// review-tuning (apply to all review-shape commands)
@@ -132,7 +137,13 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.AddCommand(initCmd())
 
 	if err := root.Execute(); err != nil {
-		// cobra already printed the error; just set the exit code
+		// errBlockingFindings is a sentinel — review found major/critical
+		// findings, gate the pre-commit hook with exit code 2. The user
+		// already saw the full review report; no extra "Error:" line.
+		if errors.Is(err, errBlockingFindings) {
+			os.Exit(2)
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }

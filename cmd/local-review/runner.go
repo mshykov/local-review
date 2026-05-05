@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -15,6 +16,11 @@ import (
 	"github.com/mshykov/local-review/internal/output"
 	"github.com/mshykov/local-review/internal/review"
 )
+
+// errBlockingFindings signals that the review surfaced major/critical
+// findings — pre-commit hooks need exit code 2. main() translates this
+// to os.Exit(2) AFTER cobra returns, so all deferred cleanup still runs.
+var errBlockingFindings = errors.New("blocking findings present")
 
 // pickAgents returns the LLMs to run for this invocation. Wraps
 // selectAgents with a real cli.DetectAll() + classify() call; tests
@@ -159,9 +165,10 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// Restore the pre-commit gate broken by the v0.5 multi-default flip.
 	// Single-LLM has structured findings → exits 2 cleanly. Multi-LLM
 	// merger returns markdown, so we look for non-empty severity
-	// sections to decide whether to fail the commit.
+	// sections to decide whether to fail the commit. Returning the
+	// sentinel (rather than os.Exit) lets cobra and main() unwind defers.
 	if mergedHasBlocking(mergedContent) {
-		os.Exit(2)
+		return errBlockingFindings
 	}
 	return nil
 }
@@ -181,8 +188,11 @@ func mergedHasBlocking(markdown string) bool {
 }
 
 // sectionHasContent returns true when a "## <name>" heading is followed
-// by non-placeholder body text before the next "## " heading. Whitespace
-// and the common *(None)* placeholder line don't count as content.
+// by at least one Markdown list item (line starting with "- " or "* ")
+// before the next "## " heading. We deliberately key off list syntax
+// rather than "skip placeholder text" — that's the format the merge
+// prompt template prescribes for findings, and it can't be confused
+// with the section-description / *(None)* prose.
 func sectionHasContent(markdown, name string) bool {
 	re := regexp.MustCompile(`(?m)^##\s+` + regexp.QuoteMeta(name) + `\s*$`)
 	loc := re.FindStringIndex(markdown)
@@ -195,15 +205,9 @@ func sectionHasContent(markdown, name string) bool {
 	}
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
+			return true
 		}
-		if line == "*(None)*" || strings.HasPrefix(line, "*(") {
-			// Placeholder lines like "*(None)*" or
-			// "*(Block merge — will break production...)*"
-			continue
-		}
-		return true
 	}
 	return false
 }
@@ -335,9 +339,15 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	}
 
 	mergeInput := multi.BuildMergeInput(results, cfg.Merge.ConsensusThreshold)
-	// withTimeout in pickAgents already enforces a non-zero TimeoutSec,
-	// so this is purely a defense for callers that bypass that path.
+	// pickAgents → withTimeout already enforces non-zero TimeoutSec on
+	// every active LLM. Belt-and-suspenders: keep the explicit fallback
+	// so a future caller that bypasses pickAgents can't silently end up
+	// with `time.Duration(0)` = no timeout = a hung merge LLM hanging
+	// the whole review.
 	mergeTimeout := time.Duration(mergeLLM.TimeoutSec) * time.Second
+	if mergeLLM.TimeoutSec == 0 {
+		mergeTimeout = 120 * time.Second
+	}
 	mergeCtx, cancel := context.WithTimeout(ctx, mergeTimeout)
 	defer cancel()
 
@@ -393,7 +403,7 @@ func runSingleLLMFallback(ctx context.Context, cfg config.Config, sf *sharedFlag
 	}
 
 	if hasBlocking(rep) {
-		os.Exit(2)
+		return errBlockingFindings
 	}
 	return nil
 }
