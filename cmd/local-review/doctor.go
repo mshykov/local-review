@@ -63,7 +63,17 @@ func runDoctor(out io.Writer) error {
 	// vice versa.
 	overrides := map[string]string{}
 	customEnvVars := map[string]string{}
-	if cfg, err := loadConfig(); err == nil {
+	cfg, cfgErr := loadConfig()
+	if cfgErr != nil {
+		// Surface the failure inline. doctor's whole job is "tell me
+		// what state the user's setup is in"; silently falling back to
+		// defaults here would print cli_path / api_key_env diagnostics
+		// based on built-ins exactly when the user is debugging why
+		// their config isn't taking effect.
+		fmt.Fprintf(w, "WARNING: failed to load config: %v\n", cfgErr)
+		fmt.Fprintln(w, "         Falling back to compiled-in defaults; cli_path / api_key_env shown below may not reflect your config.")
+		fmt.Fprintln(w)
+	} else {
 		for name, c := range cfg.LLMs {
 			if c.CLIPath != "" {
 				overrides[name] = c.CLIPath

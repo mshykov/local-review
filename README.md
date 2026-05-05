@@ -261,7 +261,7 @@ Distributing to a few hundred engineers? Two patterns work:
 | Single-LLM, `provider.base_url: http://localhost:11434/v1` (Ollama) | **Stays on your machine.** Fully offline. |
 | Single-LLM, any cloud provider (OpenAI, Anthropic, Mistral, etc.) | The provider you configured, over TLS. Their privacy policy applies. |
 | Multi-LLM (default) — Claude / Gemini / Codex CLIs | **Each authenticated CLI calls its own backend** (Anthropic, Google AI, OpenAI). One review fans out to multiple cloud vendors. Your `provider.base_url` is irrelevant in this mode. |
-| Multi-LLM with `--only` restricted to a fully-local agent | (Possible in v0.6+ once the [Ollama multi-agent preset](https://github.com/mshykov/local-review/issues) lands.) |
+| Multi-LLM with `--only` restricted to a fully-local agent | Roadmap. Will be possible once a fully-local-agent preset lands; today every multi-LLM agent (claude / gemini / codex) calls its own cloud backend. |
 
 If you need air-gapped review today, use single-LLM mode against a local Ollama and stay off `local-review review` (which fans out to authenticated cloud CLIs by default).
 
