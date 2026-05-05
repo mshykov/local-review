@@ -32,9 +32,12 @@ Key constraints:
 3. **OpenAI Codex CLI** — `npm install -g @openai/codex` (auth via `codex login` with ChatGPT Plus, or `OPENAI_API_KEY` env var pay-per-token — usually cheaper for occasional use)
 
 **CLI Invocation Patterns**
-- Codex: `codex review --commit <sha>`
-- Gemini: stdin diff piped to `gemini -p "<prompt>"`
 - Claude: stdin diff piped to `claude` with the review prompt
+- Gemini: short instruction prompt via `-p`, prompt body / diff via stdin (gemini's `-p` content is appended to stdin in headless mode, sidestepping argv-size limits)
+- Codex: `codex exec --output-last-message <tempfile>` with the prompt on stdin. We deliberately do NOT use `codex review --commit <sha>` (the dedicated subcommand) because it re-extracts the diff itself with codex's own settings, conflicting with the orchestrator's "extract once, fan out the same diff string to all agents" contract — that would mean codex sees a different diff than the others and consensus tags become apples-to-oranges.
+
+**Version-probe failures**
+`internal/cli/detector.go` reports an LLM as `Available=false` when the `--version` probe fails (e.g., a CLI changes its banner format and our regex misses). `local-review doctor` surfaces this as the "install broken" state with the resolved binary path, but the runner currently filters silently — an upstream banner change can shrink the active agent set without an error message. Loosen the regex if a real CLI breaks this; for now the doctor row is the diagnostic.
 
 **Storage Structure**
 Reviews saved to `.local-review/reviews/<sanitized-branch>/<commit>_<llm>_<version>.md`:
