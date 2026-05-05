@@ -34,7 +34,7 @@ Reviewer tools today are mostly:
 - **Tied to a vendor** — single-provider lock-in (OpenAI-only or Anthropic-only).
 - **Runtime-heavy** — Node/Python/Java install required just to run the reviewer.
 
-local-review is the opposite: a single static binary, runs locally on a diff, talks to whatever endpoint you configure (OpenAI, Anthropic, Together, Groq, OpenRouter, **Ollama for fully-offline review**), and ships language-aware prompt packs that you can override per-repo.
+local-review is the opposite: a single static binary that runs locally on a diff, sends that diff to whatever LLM(s) you've authenticated, and prints findings. Privacy posture depends on which LLM(s) you point it at — see the [Privacy](#privacy) section for the matrix. **Run with Ollama for fully-offline review.**
 
 ## Install
 
@@ -254,7 +254,16 @@ Distributing to a few hundred engineers? Two patterns work:
 
 ## Privacy
 
-The only network call local-review makes is to the chat-completions endpoint **you configure**. Nothing else — no telemetry, no analytics, no auto-update calls. Run against Ollama and your code never leaves the machine.
+**local-review itself is telemetry-free**: no analytics, no auto-update calls, no signup, no SaaS. The binary makes no network calls of its own. All network traffic is from the LLM(s) *you* authenticate — so what "private" means depends on which LLM(s) you point it at:
+
+| Mode | Where your diff goes |
+|---|---|
+| Single-LLM, `provider.base_url: http://localhost:11434/v1` (Ollama) | **Stays on your machine.** Fully offline. |
+| Single-LLM, any cloud provider (OpenAI, Anthropic, Mistral, etc.) | The provider you configured, over TLS. Their privacy policy applies. |
+| Multi-LLM (default) — Claude / Gemini / Codex CLIs | **Each authenticated CLI calls its own backend** (Anthropic, Google AI, OpenAI). One review fans out to multiple cloud vendors. Your `provider.base_url` is irrelevant in this mode. |
+| Multi-LLM with `--only` restricted to a fully-local agent | (Possible in v0.6+ once the [Ollama multi-agent preset](https://github.com/mshykov/local-review/issues) lands.) |
+
+If you need air-gapped review today, use single-LLM mode against a local Ollama and stay off `local-review review` (which fans out to authenticated cloud CLIs by default).
 
 ## Develop
 
