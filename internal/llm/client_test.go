@@ -63,8 +63,8 @@ func TestComplete_NoAPIKeyReturnsError(t *testing.T) {
 	if !strings.Contains(msg, "local-review init") {
 		t.Errorf("error should suggest `local-review init`, got: %v", err)
 	}
-	if !strings.Contains(msg, "local-review multi") {
-		t.Errorf("error should suggest `local-review multi` as alternative, got: %v", err)
+	if !strings.Contains(msg, "local-review review") {
+		t.Errorf("error should suggest `local-review review` as alternative, got: %v", err)
 	}
 }
 

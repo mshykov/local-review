@@ -120,7 +120,10 @@ func Defaults() Config {
 				TimeoutSec: 120,
 			},
 			"codex": {
-				Enabled:    boolPtr(false), // Disabled: has usage limits, requires ChatGPT Plus subscription
+				// Enabled is intentionally nil — defaults to "run if active".
+				// codex is paid (ChatGPT Plus or pay-per-token via OPENAI_API_KEY),
+				// but we only invoke it when the user has explicitly authenticated,
+				// so running by default doesn't surprise anyone with a bill.
 				Mode:       "cli",
 				CLIPath:    "codex",
 				Model:      "gpt-4",

@@ -6,9 +6,8 @@ Thanks for considering a contribution. local-review is small on purpose — plea
 
 ```
 cmd/local-review/  CLI entry point (cobra). Thin wrapper around internal/.
-  main.go          Root command + shared flag plumbing
-  staged|commit|branch  Defined inline in main.go
-  multi.go         Parallel multi-LLM review (`local-review multi …`)
+  main.go          Root command + shared flag plumbing + ASCII banner
+  runner.go        Unified review dispatcher (multi-LLM with single-LLM fallback)
   doctor.go        Check LLM CLI installations + auth
   init.go          Interactive .local-review.yml scaffolding wizard
   config.go        Print resolved config (API keys masked)
@@ -39,11 +38,11 @@ cd local-review
 go test ./...
 go build -o local-review ./cmd/local-review
 
-# Single-LLM mode (uses provider API)
-./local-review staged
+# Multi-LLM is the default — every authenticated LLM CLI runs in parallel
+./local-review review
 
-# Multi-LLM mode (uses installed LLM CLIs in parallel)
-./local-review multi staged
+# Or use a specific scope
+./local-review staged
 ./local-review doctor
 ```
 

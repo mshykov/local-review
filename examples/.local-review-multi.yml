@@ -1,37 +1,37 @@
-# local-review v0.1+ multi-LLM config example
+# local-review v0.5+ config example
 #
 # Cascading order (lowest precedence first):
 #   1. Built-in defaults
 #   2. ~/.local-review.yml
 #   3. ./.local-review.yml          ← this file
 #   4. CLI flags
+#
+# Default behaviour: every LLM CLI that is installed AND authenticated
+# runs in parallel and the findings are merged. You only need this file
+# to override defaults — pin a model, disable a provider, change merge
+# settings, etc. Setting `enabled: true` is redundant; `enabled: false`
+# is the explicit opt-out (still overridable with `--only <name>`).
 
-# Multi-LLM configuration (v0.1+)
-# Run reviews in parallel with multiple AI models
 llms:
-  # Claude - Free tier available via claude.ai
   claude:
-    enabled: true
+    # enabled: true                     # default; omit to use auto-detect
     mode: cli                           # 'cli' or 'api'
     cli_path: claude                    # auto-detected if empty
     model: claude-3-5-sonnet-20241022
     api_key_env: ANTHROPIC_API_KEY      # used if CLI auth fails
     timeout_seconds: 120
 
-  # Gemini - Free API key from https://aistudio.google.com/apikey
   gemini:
-    enabled: true
     mode: cli
     cli_path: gemini
     model: gemini-1.5-pro
-    api_key_env: GEMINI_API_KEY         # required for Gemini CLI
+    api_key_env: GEMINI_API_KEY         # free key from https://aistudio.google.com/apikey
     timeout_seconds: 120
 
   # Codex - paid; either ChatGPT Plus ($20/mo) via 'codex login', or
   # an OpenAI API key (pay-per-token, usually cheaper for occasional use).
-  # Disabled by default.
+  # Runs by default if you've authenticated. Set `enabled: false` to opt out.
   codex:
-    enabled: false
     mode: cli
     cli_path: codex
     model: gpt-4

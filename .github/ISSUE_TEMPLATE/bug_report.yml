@@ -23,9 +23,10 @@ body:
       label: Mode
       description: Which mode were you using?
       options:
-        - Single-LLM (local-review staged/commit/branch)
-        - Multi-LLM (local-review multi)
+        - Review (local-review review/staged/commit/branch — multi-LLM by default)
+        - Single-LLM fallback (no LLM CLI authenticated, hit configured provider:)
         - Doctor (local-review doctor)
+        - Init (local-review init)
         - Other
     validations:
       required: true
