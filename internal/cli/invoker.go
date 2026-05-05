@@ -60,23 +60,43 @@ func buildReviewPrompt(systemPrompt string) string {
 	return systemPrompt + multiLLMOutputOverride
 }
 
-// NewInvoker creates an invoker for the given LLM. The Model field on
-// LLM is threaded into each invoker so per-agent --claude-model /
-// --gemini-model / --codex-model flag overrides actually reach the CLI
-// command line. An empty Model leaves the CLI on its default.
+// NewInvoker creates an invoker for the given LLM. The Model and
+// APIKey fields on LLM are threaded into each invoker so per-agent
+// --claude-model / --gemini-model / --codex-model flag overrides
+// actually reach the CLI command line, and so a key sourced from a
+// user-named env var (cfg.LLMs[name].APIKeyEnv) still reaches the
+// subprocess under the canonical name the CLI itself expects.
+// An empty Model leaves the CLI on its default; an empty APIKey
+// means "rely on the CLI's own auth flow / OAuth session."
 //
 // Returns nil if the LLM name is unknown.
 func NewInvoker(llm LLM) Invoker {
 	switch llm.Name {
 	case "claude":
-		return &ClaudeInvoker{path: llm.Path, model: llm.Model}
+		return &ClaudeInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}
 	case "gemini":
-		return &GeminiInvoker{path: llm.Path, model: llm.Model}
+		return &GeminiInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}
 	case "codex":
-		return &CodexInvoker{path: llm.Path, model: llm.Model}
+		return &CodexInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}
 	default:
 		return nil
 	}
+}
+
+// withInjectedKey returns os.Environ() augmented (or overridden) with
+// canonicalEnv=apiKey when apiKey is non-empty. This lets a user keep
+// the key under any env-var name they like in their shell — the CLI
+// always sees the canonical name it knows how to read.
+//
+// Pre-existing env vars set by the parent shell still pass through;
+// our line wins because Go's exec.Cmd uses last-occurrence semantics
+// when the same name appears multiple times.
+func withInjectedKey(canonicalEnv, apiKey string) []string {
+	env := os.Environ()
+	if apiKey == "" {
+		return env
+	}
+	return append(env, canonicalEnv+"="+apiKey)
 }
 
 // CodexInvoker runs the OpenAI Codex CLI.
@@ -94,8 +114,9 @@ func NewInvoker(llm LLM) Invoker {
 // git tree, conflicting with the orchestrator's "extract once, fan out
 // to all LLMs with the same diff string" contract.
 type CodexInvoker struct {
-	path  string
-	model string // codex exec -m <model>; empty = CLI default
+	path   string
+	model  string // codex exec -m <model>; empty = CLI default
+	apiKey string // injected as OPENAI_API_KEY into subprocess env
 }
 
 func (c *CodexInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, error) {
@@ -135,6 +156,7 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 	}
 	cmd := exec.CommandContext(ctx, c.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["codex"], c.apiKey)
 	if combined, err := cmd.CombinedOutput(); err != nil {
 		// Surface the CLI's own stderr so users can see "auth required",
 		// "rate limited", etc. instead of a bare "exit status 1".
@@ -151,8 +173,9 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 // GeminiInvoker runs the Google Gemini CLI.
 // Uses: git diff | gemini -p "Review these changes for bugs and security issues"
 type GeminiInvoker struct {
-	path  string
-	model string // gemini -m <model>; empty = CLI default
+	path   string
+	model  string // gemini -m <model>; empty = CLI default
+	apiKey string // injected as GEMINI_API_KEY into subprocess env
 }
 
 func (g *GeminiInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, error) {
@@ -165,6 +188,7 @@ func (g *GeminiInvoker) Review(ctx context.Context, systemPrompt, diff string) (
 	}
 	cmd := exec.CommandContext(ctx, g.path, args...)
 	cmd.Stdin = strings.NewReader(buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff)
+	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["gemini"], g.apiKey)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -187,6 +211,7 @@ func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, e
 	}
 	cmd := exec.CommandContext(ctx, g.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["gemini"], g.apiKey)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("gemini failed: %w", err)
@@ -197,8 +222,9 @@ func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, e
 // ClaudeInvoker runs the Anthropic Claude CLI.
 // Uses stdin pipe similar to Gemini.
 type ClaudeInvoker struct {
-	path  string
-	model string // claude --model <id>; empty = CLI default
+	path   string
+	model  string // claude --model <id>; empty = CLI default
+	apiKey string // injected as ANTHROPIC_API_KEY into subprocess env
 }
 
 func (c *ClaudeInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, error) {
@@ -219,6 +245,7 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (strin
 	}
 	cmd := exec.CommandContext(ctx, c.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["claude"], c.apiKey)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%s failed: %w", errLabel, err)

@@ -39,7 +39,14 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 	detected := cli.DetectAllWithOverrides(overrides)
 	ready := make(map[string]bool, len(detected))
 	for _, llm := range detected {
-		status, _ := classify(llm)
+		// Mirror doctor: honor cfg.LLMs[*].APIKeyEnv so a user with
+		// a key under a non-canonical env var gets ✓ ready instead
+		// of being silently filtered out.
+		var customEnvVar string
+		if c, ok := cfg.LLMs[llm.Name]; ok {
+			customEnvVar = c.APIKeyEnv
+		}
+		status, _ := classify(llm, customEnvVar)
 		ready[llm.Name] = status == statusReady
 	}
 	return selectAgents(detected, ready, cfg, sf)
@@ -110,6 +117,13 @@ func applyConfig(llm cli.LLM, cfg config.Config) cli.LLM {
 		}
 		if c.Model != "" {
 			llm.Model = c.Model
+		}
+		// APIKey is already resolved from c.APIKeyEnv by
+		// config.resolveAPIKeys() during Load(), so the value is
+		// either the user's custom-env-var key or empty (in which
+		// case the CLI's own auth flow takes over).
+		if c.APIKey != "" {
+			llm.APIKey = c.APIKey
 		}
 	}
 	if llm.TimeoutSec == 0 {

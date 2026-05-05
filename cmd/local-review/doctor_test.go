@@ -38,7 +38,7 @@ func writeFile(t *testing.T, path, content string) {
 
 func TestCheckClaudeAuth_NotAuthenticated(t *testing.T) {
 	withFakeHome(t)
-	got := checkClaudeAuth()
+	got := checkClaudeAuth("")
 	if got.authenticated {
 		t.Errorf("clean home + no env var: expected unauth, got %+v", got)
 	}
@@ -50,7 +50,7 @@ func TestCheckClaudeAuth_NotAuthenticated(t *testing.T) {
 func TestCheckClaudeAuth_RecentSession(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".claude", "sessions", "12345.json"), `{}`)
-	got := checkClaudeAuth()
+	got := checkClaudeAuth("")
 	if !got.authenticated {
 		t.Fatalf("expected authenticated=true, got %+v", got)
 	}
@@ -70,7 +70,7 @@ func TestCheckClaudeAuth_StaleSessionDoesNotCount(t *testing.T) {
 	if err := os.Chtimes(stalePath, old, old); err != nil {
 		t.Fatal(err)
 	}
-	got := checkClaudeAuth()
+	got := checkClaudeAuth("")
 	if got.authenticated {
 		t.Errorf("stale session should not authenticate, got %+v", got)
 	}
@@ -79,7 +79,7 @@ func TestCheckClaudeAuth_StaleSessionDoesNotCount(t *testing.T) {
 func TestCheckClaudeAuth_APIKey(t *testing.T) {
 	withFakeHome(t)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
-	got := checkClaudeAuth()
+	got := checkClaudeAuth("")
 	if !got.authenticated {
 		t.Fatalf("expected authenticated, got %+v", got)
 	}
@@ -94,7 +94,7 @@ func TestCheckClaudeAuth_EnvVarWinsOverSession(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".claude", "sessions", "12345.json"), `{}`)
 	t.Setenv("ANTHROPIC_API_KEY", "sk-fresh")
-	got := checkClaudeAuth()
+	got := checkClaudeAuth("")
 	if !strings.Contains(got.detail, "ANTHROPIC_API_KEY") {
 		t.Errorf("env var should win over session, got %q", got.detail)
 	}
@@ -104,7 +104,7 @@ func TestCheckClaudeAuth_EnvVarWinsOverSession(t *testing.T) {
 
 func TestCheckGeminiAuth_NotAuthenticated(t *testing.T) {
 	withFakeHome(t)
-	got := checkGeminiAuth()
+	got := checkGeminiAuth("")
 	if got.authenticated {
 		t.Errorf("expected unauth, got %+v", got)
 	}
@@ -115,7 +115,7 @@ func TestCheckGeminiAuth_NotAuthenticatedWithEmptyAccountsFile(t *testing.T) {
 	// pre-login state. Must not be reported as authenticated.
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".gemini", "google_accounts.json"), `{"active": null, "old": []}`)
-	got := checkGeminiAuth()
+	got := checkGeminiAuth("")
 	if got.authenticated {
 		t.Errorf("active=null should not count as authenticated, got %+v", got)
 	}
@@ -125,7 +125,7 @@ func TestCheckGeminiAuth_OAuthAccount(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".gemini", "google_accounts.json"),
 		`{"active": "user@example.com", "old": []}`)
-	got := checkGeminiAuth()
+	got := checkGeminiAuth("")
 	if !got.authenticated {
 		t.Fatalf("expected authenticated, got %+v", got)
 	}
@@ -139,9 +139,42 @@ func TestCheckGeminiAuth_APIKeyWinsOverOAuth(t *testing.T) {
 	writeFile(t, filepath.Join(home, ".gemini", "google_accounts.json"),
 		`{"active": "user@example.com", "old": []}`)
 	t.Setenv("GEMINI_API_KEY", "test-key")
-	got := checkGeminiAuth()
+	got := checkGeminiAuth("")
 	if !strings.Contains(got.detail, "GEMINI_API_KEY") {
 		t.Errorf("env var should win, got %q", got.detail)
+	}
+}
+
+func TestCheckGeminiAuth_HonorsCustomEnvVar(t *testing.T) {
+	// A user with `api_key_env: MY_GEMINI_KEY` in config and only that
+	// var exported should see ✓ ready, not "not authenticated". Pre-fix
+	// the auth check hardcoded GEMINI_API_KEY so the configured var was
+	// silently ignored.
+	withFakeHome(t)
+	t.Setenv("MY_GEMINI_KEY", "secret-from-custom-env")
+	got := checkGeminiAuth("MY_GEMINI_KEY")
+	if !got.authenticated {
+		t.Fatalf("expected authenticated via custom env var, got %+v", got)
+	}
+	if !strings.Contains(got.detail, "MY_GEMINI_KEY") {
+		t.Errorf("detail should mention the configured env var, got %q", got.detail)
+	}
+}
+
+func TestCheckGeminiAuth_HintMentionsCustomEnvVar(t *testing.T) {
+	// When the user is unauthed AND has a custom api_key_env configured,
+	// the "fix" hint must point at THEIR env var, not the canonical one
+	// — otherwise the user fixes the wrong knob.
+	withFakeHome(t)
+	got := checkGeminiAuth("MY_GEMINI_KEY")
+	if got.authenticated {
+		t.Fatal("expected unauth, got authenticated")
+	}
+	if !strings.Contains(got.hint, "MY_GEMINI_KEY") {
+		t.Errorf("hint should reference the configured env var, got %q", got.hint)
+	}
+	if strings.Contains(got.hint, "GEMINI_API_KEY") {
+		t.Errorf("hint should NOT reference the canonical default when a custom env is set, got %q", got.hint)
 	}
 }
 
@@ -149,7 +182,7 @@ func TestCheckGeminiAuth_APIKeyWinsOverOAuth(t *testing.T) {
 
 func TestCheckCodexAuth_NotAuthenticated(t *testing.T) {
 	withFakeHome(t)
-	got := checkCodexAuth()
+	got := checkCodexAuth("")
 	if got.authenticated {
 		t.Errorf("expected unauth, got %+v", got)
 	}
@@ -162,7 +195,7 @@ func TestCheckCodexAuth_ChatGPTSubscription(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"),
 		`{"auth_mode": "chatgpt", "OPENAI_API_KEY": null, "tokens": {"id_token": "x"}}`)
-	got := checkCodexAuth()
+	got := checkCodexAuth("")
 	if !got.authenticated {
 		t.Fatalf("expected authenticated, got %+v", got)
 	}
@@ -175,7 +208,7 @@ func TestCheckCodexAuth_ExplicitAPIKeyMode(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"),
 		`{"auth_mode": "api_key", "OPENAI_API_KEY": "sk-stored"}`)
-	got := checkCodexAuth()
+	got := checkCodexAuth("")
 	if !got.authenticated {
 		t.Fatalf("expected authenticated, got %+v", got)
 	}
@@ -191,7 +224,7 @@ func TestCheckCodexAuth_APIKeyModeWithoutStoredKey(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"),
 		`{"auth_mode": "api_key", "OPENAI_API_KEY": null}`)
-	got := checkCodexAuth()
+	got := checkCodexAuth("")
 	if got.authenticated {
 		t.Errorf("api_key mode with null key should not authenticate, got %+v", got)
 	}
@@ -203,7 +236,7 @@ func TestCheckCodexAuth_LegacyAuthFile(t *testing.T) {
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"),
 		`{"OPENAI_API_KEY": "sk-stored"}`)
-	got := checkCodexAuth()
+	got := checkCodexAuth("")
 	if !got.authenticated {
 		t.Errorf("legacy auth file with stored key should authenticate, got %+v", got)
 	}
@@ -214,7 +247,7 @@ func TestCheckCodexAuth_APIKeyEnvWinsOverFile(t *testing.T) {
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"),
 		`{"auth_mode": "chatgpt", "OPENAI_API_KEY": null}`)
 	t.Setenv("OPENAI_API_KEY", "sk-from-env")
-	got := checkCodexAuth()
+	got := checkCodexAuth("")
 	if !strings.Contains(got.detail, "OPENAI_API_KEY") {
 		t.Errorf("env var should win, got %q", got.detail)
 	}
@@ -225,7 +258,7 @@ func TestCheckCodexAuth_GarbageAuthFile(t *testing.T) {
 	// false-positive auth.
 	home := withFakeHome(t)
 	writeFile(t, filepath.Join(home, ".codex", "auth.json"), `not json`)
-	got := checkCodexAuth()
+	got := checkCodexAuth("")
 	if got.authenticated {
 		t.Errorf("garbage auth file should not count as authenticated, got %+v", got)
 	}
@@ -270,7 +303,7 @@ func TestClassify(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.setup(t)
-			gotStatus, gotAuth := classify(tc.llm)
+			gotStatus, gotAuth := classify(tc.llm, "")
 			if gotStatus != tc.want {
 				t.Errorf("status: got %v, want %v", gotStatus, tc.want)
 			}

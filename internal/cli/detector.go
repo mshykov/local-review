@@ -23,8 +23,27 @@ type LLM struct {
 	// the invoker — pre-fix the field was set in config and printed in
 	// the roster but the invoker only got Path, so users got false
 	// confirmation that the requested model ran.
-	Model      string
+	Model string
+	// APIKey is the resolved API-key value sourced from
+	// cfg.LLMs[name].APIKeyEnv (or the legacy hard-coded env var when
+	// APIKeyEnv is empty). The invoker injects it into the subprocess
+	// env under the *canonical* variable name each CLI expects
+	// (ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY) so users
+	// can stash the key under any env name they like and the agent
+	// still authenticates.
+	APIKey     string
 	TimeoutSec int // timeout in seconds for this LLM (from config)
+}
+
+// CanonicalAPIKeyEnv is the env var each CLI itself reads to find its
+// API key. Doctor uses these as the default check when the user hasn't
+// configured a custom APIKeyEnv; invokers use them as the injection
+// target when the user *has* (so a key in $MY_GEMINI_KEY still ends
+// up as $GEMINI_API_KEY for the gemini subprocess).
+var CanonicalAPIKeyEnv = map[string]string{
+	"claude": "ANTHROPIC_API_KEY",
+	"gemini": "GEMINI_API_KEY",
+	"codex":  "OPENAI_API_KEY",
 }
 
 // DetectAll checks for all supported LLM CLIs and returns their status.
