@@ -28,16 +28,31 @@ type LLM struct {
 }
 
 // DetectAll checks for all supported LLM CLIs and returns their status.
-// Returns a slice of LLM structs, one per supported CLI (even if not found).
-// Runs detections concurrently to avoid sequential timeouts.
+// Returns a slice of LLM structs, one per supported CLI (even if not
+// found). Runs detections concurrently to avoid sequential timeouts.
+//
+// Equivalent to DetectAllWithOverrides(nil) — kept for callers that
+// don't need cli_path overrides (e.g. tests).
 func DetectAll() []LLM {
-	// Map of LLM names to their binary names (for cases where they differ)
-	llmBinaries := map[string]string{
+	return DetectAllWithOverrides(nil)
+}
+
+// DetectAllWithOverrides is DetectAll plus per-LLM cli_path overrides
+// from config (cfg.LLMs[name].CLIPath). An override may be an absolute
+// path (`/opt/corporate/bin/claude`) or a bare binary name; exec.LookPath
+// handles both — anything with a slash bypasses $PATH per Go's docs.
+//
+// Pre-fix the orchestrator detected only the hardcoded `claude` /
+// `gemini` / `codex` binary names, so the cli_path field shipped in
+// every example config was inert. Users with corporate installs at
+// non-standard paths got "✗ not installed" with no path-override
+// escape hatch.
+func DetectAllWithOverrides(overrides map[string]string) []LLM {
+	defaults := map[string]string{
 		"claude": "claude",
 		"gemini": "gemini",
 		"codex":  "codex",
 	}
-
 	llms := []string{"claude", "gemini", "codex"}
 	results := make([]LLM, len(llms))
 	var wg sync.WaitGroup
@@ -46,7 +61,10 @@ func DetectAll() []LLM {
 		wg.Add(1)
 		go func(idx int, llmName string) {
 			defer wg.Done()
-			binaryName := llmBinaries[llmName]
+			binaryName := defaults[llmName]
+			if override, ok := overrides[llmName]; ok && override != "" {
+				binaryName = override
+			}
 			results[idx] = detectWithBinary(llmName, binaryName)
 		}(i, name)
 	}

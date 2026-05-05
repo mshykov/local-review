@@ -26,7 +26,15 @@ var errBlockingFindings = errors.New("blocking findings present")
 // selectAgents with a real cli.DetectAll() + classify() call; tests
 // drive selectAgents directly with synthetic input.
 func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDisabled []string) {
-	detected := cli.DetectAll()
+	// Honor cfg.LLMs[*].CLIPath when set — corporate / nix-store installs
+	// at non-standard paths can override the default binary name.
+	overrides := make(map[string]string, len(cfg.LLMs))
+	for name, c := range cfg.LLMs {
+		if c.CLIPath != "" {
+			overrides[name] = c.CLIPath
+		}
+	}
+	detected := cli.DetectAllWithOverrides(overrides)
 	ready := make(map[string]bool, len(detected))
 	for _, llm := range detected {
 		status, _ := classify(llm)

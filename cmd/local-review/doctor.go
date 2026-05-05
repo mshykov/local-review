@@ -57,7 +57,19 @@ func runDoctor(out io.Writer) error {
 	fmt.Fprintln(w, "Checking LLM installations and authentication...")
 	fmt.Fprintln(w)
 
-	llms := cli.DetectAll()
+	// Mirror the runner: honor cfg.LLMs[*].CLIPath overrides so doctor
+	// and runtime see the same binaries. Without this a user with a
+	// custom cli_path would see ✗ in doctor but a successful run, or
+	// vice versa.
+	overrides := map[string]string{}
+	if cfg, err := loadConfig(); err == nil {
+		for name, c := range cfg.LLMs {
+			if c.CLIPath != "" {
+				overrides[name] = c.CLIPath
+			}
+		}
+	}
+	llms := cli.DetectAllWithOverrides(overrides)
 
 	readyCount := 0
 	for _, llm := range llms {
