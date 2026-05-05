@@ -7,9 +7,11 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -59,7 +61,11 @@ func Extract(mode Mode, ref string) ([]Diff, error) {
 		return nil, fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, stderr.String())
 	}
 
-	return parseUnifiedDiff(stdout.String()), nil
+	// Stream-parse stdout via bytes.NewReader → bufio.Scanner so we
+	// don't double-buffer the diff (string copy + strings.Split slice).
+	// Large monorepo branch diffs hit 10s of MB; the legacy version
+	// held 3-4 copies of that in flight.
+	return parseUnifiedDiff(bytes.NewReader(stdout.Bytes())), nil
 }
 
 func argsFor(mode Mode, ref string) ([]string, error) {
@@ -123,18 +129,31 @@ func ValidateRef(ref string) error {
 // parseUnifiedDiff walks `git diff` output and groups hunks by file.
 // We don't need a fully-featured patch library — just enough to feed
 // content + line numbers to the LLM.
-func parseUnifiedDiff(s string) []Diff {
-	// Normalize CRLF so trailing \r doesn't end up in paths/hunks.
-	s = strings.ReplaceAll(s, "\r\n", "\n")
+//
+// Streams via bufio.Scanner so a large diff doesn't double-buffer
+// (legacy: stdout.String() + strings.Split slice). Each hunk's body
+// builds in a strings.Builder so even a single huge hunk doesn't go
+// quadratic on the content concatenation.
+func parseUnifiedDiff(r io.Reader) []Diff {
+	sc := bufio.NewScanner(r)
+	// Default scanner buffer is 64 KB / line; bump to 4 MB so a single
+	// long line in a generated file doesn't truncate the diff. (The
+	// review excludes most generated files via globs, but the parser
+	// itself shouldn't depend on that.)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+
 	var diffs []Diff
 	var cur *Diff
 	var hunk *Hunk
+	var hunkBody strings.Builder
 
 	flushHunk := func() {
 		if cur != nil && hunk != nil {
+			hunk.Content = hunkBody.String()
 			cur.Hunks = append(cur.Hunks, *hunk)
 		}
 		hunk = nil
+		hunkBody.Reset()
 	}
 	flushFile := func() {
 		flushHunk()
@@ -152,7 +171,11 @@ func parseUnifiedDiff(s string) []Diff {
 	// silently overwriting cur.Path AND swallowing the line from the
 	// hunk content. Putting `hunk != nil` ahead of the header cases
 	// makes header recognition pre-@@ only.
-	for _, line := range strings.Split(s, "\n") {
+	for sc.Scan() {
+		// Strip trailing \r so CRLF input doesn't leak \r into paths
+		// or hunk content. (Same job the old strings.ReplaceAll did,
+		// done per-line during streaming.)
+		line := strings.TrimRight(sc.Text(), "\r")
 		switch {
 		case strings.HasPrefix(line, "diff --git"):
 			flushFile()
@@ -164,7 +187,8 @@ func parseUnifiedDiff(s string) []Diff {
 			// Inside a hunk → all lines are content, regardless of
 			// what they look like. See the "Case order matters" comment
 			// above for why this can't move below the header cases.
-			hunk.Content += line + "\n"
+			hunkBody.WriteString(line)
+			hunkBody.WriteByte('\n')
 		case strings.HasPrefix(line, "--- a/"):
 			// Capture the original path as a fallback for deletions —
 			// `+++ /dev/null` is the standard `git diff` shape for a
@@ -189,6 +213,10 @@ func parseUnifiedDiff(s string) []Diff {
 		}
 	}
 	flushFile()
+	// Scanner errors (oversized line, I/O failure) are deliberately
+	// swallowed — the diff is best-effort review input, not a
+	// correctness-critical parse. A truncated diff still produces
+	// useful findings for whatever was parsed before the error.
 
 	// Drop any malformed entries (no path means we never saw a file header)
 	out := diffs[:0]

@@ -26,7 +26,7 @@ index 222..333 100644
 `
 
 func TestParseUnifiedDiff(t *testing.T) {
-	diffs := parseUnifiedDiff(sample)
+	diffs := parseUnifiedDiff(strings.NewReader(sample))
 	if len(diffs) != 2 {
 		t.Fatalf("expected 2 files, got %d", len(diffs))
 	}
@@ -53,7 +53,7 @@ func TestParseUnifiedDiff_CRLF(t *testing.T) {
 		"@@ -1,1 +1,2 @@\r\n" +
 		" hello\r\n" +
 		"+world\r\n"
-	diffs := parseUnifiedDiff(crlf)
+	diffs := parseUnifiedDiff(strings.NewReader(crlf))
 	if len(diffs) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(diffs))
 	}
@@ -85,7 +85,7 @@ index abc..0000000
 -
 -func Old() {}
 `
-	diffs := parseUnifiedDiff(deleted)
+	diffs := parseUnifiedDiff(strings.NewReader(deleted))
 	if len(diffs) != 1 {
 		t.Fatalf("want 1 diff, got %d", len(diffs))
 	}
@@ -114,7 +114,7 @@ index 1..2 100644
 +++ b/customers replaces it
 +DROP TABLE customers;
 `
-	diffs := parseUnifiedDiff(sql)
+	diffs := parseUnifiedDiff(strings.NewReader(sql))
 	if len(diffs) != 1 {
 		t.Fatalf("want 1 diff, got %d", len(diffs))
 	}
@@ -148,7 +148,7 @@ index aaa..bbb 100644
 +// new comment
  func F() {}
 `
-	diffs := parseUnifiedDiff(renamed)
+	diffs := parseUnifiedDiff(strings.NewReader(renamed))
 	if len(diffs) != 1 {
 		t.Fatalf("want 1 diff, got %d", len(diffs))
 	}
