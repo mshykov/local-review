@@ -417,14 +417,17 @@ func resolveCommitBranch(mode git.Mode, ref string) (string, string, error) {
 	branch := git.CurrentBranch()
 
 	if mode == git.ModeCommit && ref != "" {
-		commit = ref
-		if len(commit) < 40 {
-			resolved := git.ResolveRef(ref)
-			if resolved == "" {
-				return "", "", fmt.Errorf("failed to resolve ref '%s' to commit hash", ref)
-			}
-			commit = resolved
+		// Always resolve, even for full 40-char SHAs — `git rev-parse
+		// --short` normalizes everything (branch name, tag, short hash,
+		// full hash) to the same canonical short form, so the same
+		// commit can't end up under two different storage keys when
+		// the user invokes `local-review commit abc1234` once and
+		// `local-review commit <full-40-char-sha>` another time.
+		resolved := git.ResolveRef(ref)
+		if resolved == "" {
+			return "", "", fmt.Errorf("failed to resolve ref '%s' to commit hash", ref)
 		}
+		commit = resolved
 	}
 
 	if commit == "HEAD" {
