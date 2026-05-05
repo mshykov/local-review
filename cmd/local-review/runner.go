@@ -457,7 +457,9 @@ func runSingleLLMFallback(ctx context.Context, cfg config.Config, sf *sharedFlag
 			return err
 		}
 	} else {
-		output.WriteText(os.Stdout, rep)
+		if err := output.WriteText(os.Stdout, rep); err != nil {
+			return err
+		}
 	}
 
 	if hasBlocking(rep) {
