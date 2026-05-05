@@ -7,7 +7,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func configCmd() *cobra.Command {
+func configCmd(sf *sharedFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "config",
 		Short: "Show resolved configuration",
@@ -25,6 +25,11 @@ which settings are being used.`,
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
+			// Doc claims CLI flags are part of the cascade — apply them
+			// before printing so what the user sees here matches what
+			// `local-review review` would actually use. Pre-fix the
+			// command silently dropped flag overrides on the floor.
+			applyFlagsToConfig(&cfg, sf)
 
 			// Mask API keys before printing (config dumps should be shareable)
 			if cfg.Provider.APIKey != "" {

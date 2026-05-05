@@ -132,7 +132,7 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.AddCommand(commitCmd(&sf))
 	root.AddCommand(branchCmd(&sf))
 	root.AddCommand(versionCmd())
-	root.AddCommand(configCmd())
+	root.AddCommand(configCmd(&sf))
 	root.AddCommand(doctorCmd())
 	root.AddCommand(initCmd())
 
