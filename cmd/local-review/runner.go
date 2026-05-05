@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,8 +39,7 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 //  3. If config explicitly sets enabled:false, skip — but report it
 //     separately so we can tell the user about the override path.
 func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDisabled []string) {
-	if sf.only != "" {
-		want := parseOnlyList(sf.only)
+	if want := parseOnlyList(sf.only); len(want) > 0 {
 		for _, llm := range detected {
 			if !want[llm.Name] {
 				continue
@@ -65,10 +65,17 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 	return active, configDisabled
 }
 
+// parseOnlyList splits a comma-separated --only value into a set.
+// Trims whitespace per element and drops empty entries so callers don't
+// need a separate guard against `--only ""` or `--only " ,, "`.
 func parseOnlyList(s string) map[string]bool {
 	out := make(map[string]bool)
 	for _, name := range strings.Split(s, ",") {
-		out[strings.TrimSpace(name)] = true
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out[name] = true
 	}
 	return out
 }
@@ -87,6 +94,13 @@ func withTimeout(llm cli.LLM, cfg config.Config) cli.LLM {
 // agent roster, extract the diff, fan out reviews, merge findings, save
 // to disk, and print the merged report to stdout.
 func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, configDisabled []string, mode git.Mode, ref string) error {
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("invalid config: %w", err)
+	}
+	warnIgnoredFlags(sf)
+	if err := validateMergeWith(sf, active); err != nil {
+		return err
+	}
 	printAgentRoster(active, configDisabled, cfg)
 
 	diffs, err := git.Extract(mode, ref)
@@ -131,15 +145,101 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return fmt.Errorf("all %d LLM reviews failed", len(results))
 	}
 
-	mergedPath := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
-	_, _ = storage.SaveMetadata(branch, commit, metadata)
+	mergedPath, mergedContent := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
+	if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to save metadata: %v\n", err)
+	}
 
 	fmt.Println()
 	fmt.Printf("✓ %d/%d LLMs succeeded\n", successCount, len(results))
 	if mergedPath != "" {
 		fmt.Printf("Merged report: %s\n", mergedPath)
 	}
+
+	// Restore the pre-commit gate broken by the v0.5 multi-default flip.
+	// Single-LLM has structured findings → exits 2 cleanly. Multi-LLM
+	// merger returns markdown, so we look for non-empty severity
+	// sections to decide whether to fail the commit.
+	if mergedHasBlocking(mergedContent) {
+		os.Exit(2)
+	}
 	return nil
+}
+
+// mergedHasBlocking returns true when the merged markdown report has a
+// "## Critical Issues" or "## Major Issues" section with at least one
+// finding (i.e., not just the placeholder *(None)* marker the merge
+// prompt template emits for empty buckets). Used to keep `local-review
+// staged` exiting 2 in a pre-commit hook even though the multi-LLM
+// merger returns prose, not structured findings.
+func mergedHasBlocking(markdown string) bool {
+	if markdown == "" {
+		return false
+	}
+	return sectionHasContent(markdown, "Critical Issues") ||
+		sectionHasContent(markdown, "Major Issues")
+}
+
+// sectionHasContent returns true when a "## <name>" heading is followed
+// by non-placeholder body text before the next "## " heading. Whitespace
+// and the common *(None)* placeholder line don't count as content.
+func sectionHasContent(markdown, name string) bool {
+	re := regexp.MustCompile(`(?m)^##\s+` + regexp.QuoteMeta(name) + `\s*$`)
+	loc := re.FindStringIndex(markdown)
+	if loc == nil {
+		return false
+	}
+	body := markdown[loc[1]:]
+	if next := strings.Index(body, "\n## "); next >= 0 {
+		body = body[:next]
+	}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line == "*(None)*" || strings.HasPrefix(line, "*(") {
+			// Placeholder lines like "*(None)*" or
+			// "*(Block merge — will break production...)*"
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// warnIgnoredFlags emits stderr notes when v0-only flags slip into a
+// multi-LLM run. Better to be noisy than to silently produce reports
+// that don't reflect what the user asked for.
+func warnIgnoredFlags(sf *sharedFlags) {
+	if sf.jsonOut {
+		fmt.Fprintln(os.Stderr, "Warning: --json is only honored in single-LLM fallback (the merged report is markdown).")
+	}
+	if sf.minSeverity != "" {
+		fmt.Fprintln(os.Stderr, "Warning: --min-severity is only honored in single-LLM fallback; multi-LLM filtering happens inside the merge prompt.")
+	}
+	if sf.maxFindings != 0 {
+		fmt.Fprintln(os.Stderr, "Warning: --max-findings is only honored in single-LLM fallback; multi-LLM trims inside the merge prompt.")
+	}
+}
+
+// validateMergeWith fails fast on a typo'd --merge-with so the user
+// doesn't silently get the auto-fallback agent and assume their flag
+// took effect.
+func validateMergeWith(sf *sharedFlags, active []cli.LLM) error {
+	if sf.mergeWith == "" || sf.mergeWith == "auto" {
+		return nil
+	}
+	for _, llm := range active {
+		if llm.Name == sf.mergeWith {
+			return nil
+		}
+	}
+	names := make([]string, len(active))
+	for i, l := range active {
+		names[i] = l.Name
+	}
+	return fmt.Errorf("--merge-with %q not in active set %v", sf.mergeWith, names)
 }
 
 // printAgentRoster prints "Running review with N agents" plus one line
@@ -208,8 +308,10 @@ func resolveCommitBranch(mode git.Mode, ref string) (string, string, error) {
 
 // mergeAndPrint runs the merge LLM, saves the merged report, and prints
 // it to stdout so users see findings without `cat`-ing a file. Returns
-// the saved path, or "" when merge was skipped/failed.
-func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) string {
+// the saved path and the merged content; both are "" on skip/failure.
+// The content is returned so the caller can run the blocking-finding
+// gate without re-reading from disk.
+func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) (string, string) {
 	fmt.Println("Merging reviews...")
 
 	preferred := cfg.Merge.PreferredLLM
@@ -220,7 +322,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	if mergeLLM == nil {
 		fmt.Println("Warning: no LLM available for merging (skipping merge)")
 		metadata.Merge.Status = "skipped"
-		return ""
+		return "", ""
 	}
 	fmt.Printf("Using %s for merge...\n", mergeLLM.Name)
 
@@ -229,14 +331,13 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 		fmt.Printf("Warning: failed to create merger: %v\n", err)
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return ""
+		return "", ""
 	}
 
 	mergeInput := multi.BuildMergeInput(results, cfg.Merge.ConsensusThreshold)
+	// withTimeout in pickAgents already enforces a non-zero TimeoutSec,
+	// so this is purely a defense for callers that bypass that path.
 	mergeTimeout := time.Duration(mergeLLM.TimeoutSec) * time.Second
-	if mergeLLM.TimeoutSec == 0 {
-		mergeTimeout = 120 * time.Second
-	}
 	mergeCtx, cancel := context.WithTimeout(ctx, mergeTimeout)
 	defer cancel()
 
@@ -248,7 +349,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 		fmt.Printf("Warning: merge failed: %v\n", err)
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return ""
+		return "", ""
 	}
 
 	mergedPath, err := storage.SaveMerged(branch, commit, merged)
@@ -256,7 +357,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 		fmt.Printf("Warning: failed to save merged review: %v\n", err)
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return ""
+		return "", ""
 	}
 
 	metadata.Merge.LLM = mergeLLM.Name
@@ -270,7 +371,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	fmt.Println(merged)
 	fmt.Println("─── End ───")
 
-	return mergedPath
+	return mergedPath, merged
 }
 
 // runSingleLLMFallback is the v0 path: hit the configured provider's

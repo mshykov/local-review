@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Multi-LLM is now the default** for `staged|commit|branch|review`. Previously you had to run `local-review multi <cmd>`; now plain `local-review staged` (etc.) detects which LLM CLIs are active and runs them all in parallel. Falls back to single-LLM via the configured `provider:` only when no CLI is active.
 - **Codex runs by default when authenticated.** Previously codex was opt-in via `enabled: true` in config — surprising for users who'd run `codex login` and expected it to "just work". Now an LLM CLI runs whenever it is installed + authenticated; `enabled: false` is the explicit opt-out.
+
+  ⚠ **Heads-up if you have `OPENAI_API_KEY` exported for unrelated reasons** (e.g., other tooling): the codex CLI treats that env var as authentication, so v0.5+ will start invoking codex on every review. To keep the previous behavior, add to your `.local-review.yml`:
+  ```yaml
+  llms:
+    codex:
+      enabled: false
+  ```
+  Or, when you do want codex for one run only, pass `--only codex` (flags override config opt-outs).
 - **`--model` and `--base-url` are explicitly single-LLM-fallback flags now** (clarified in `--help`). For multi-LLM use the per-agent overrides.
 
 ### Removed

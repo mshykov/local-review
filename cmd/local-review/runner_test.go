@@ -214,11 +214,14 @@ func TestParseOnlyList(t *testing.T) {
 		{"claude", []string{"claude"}},
 		{"claude,gemini", []string{"claude", "gemini"}},
 		{" claude , gemini ", []string{"claude", "gemini"}},
-		{"", []string{""}}, // empty string yields one empty entry; pickAgents short-circuits before this
+		{"", nil},          // empty input → empty set, callers don't need a separate guard
+		{" ", nil},         // whitespace-only → empty set
+		{",,, ", nil},      // delimiters with no names → empty set
+		{"claude,,", []string{"claude"}},
 	}
 	for _, tc := range cases {
 		got := parseOnlyList(tc.in)
-		gotKeys := make([]string, 0, len(got))
+		var gotKeys []string
 		for k := range got {
 			gotKeys = append(gotKeys, k)
 		}
@@ -226,6 +229,88 @@ func TestParseOnlyList(t *testing.T) {
 		sort.Strings(tc.want)
 		if !reflect.DeepEqual(gotKeys, tc.want) {
 			t.Errorf("parseOnlyList(%q): got %v, want %v", tc.in, gotKeys, tc.want)
+		}
+	}
+}
+
+func TestSelectAgents_OnlyWhitespaceFallsThrough(t *testing.T) {
+	// `--only " "` previously bypassed the multi-LLM run because " " was
+	// non-empty but parsed to {""}, matching no LLMs. Now whitespace-only
+	// is treated as "no filter set" and the default behavior kicks in.
+	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
+	active, _ := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{only: "   "})
+	if got, want := names(active), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("active: got %v, want %v", got, want)
+	}
+}
+
+func TestMergedHasBlocking(t *testing.T) {
+	cases := []struct {
+		name string
+		md   string
+		want bool
+	}{
+		{
+			name: "empty",
+			md:   "",
+			want: false,
+		},
+		{
+			name: "no critical or major sections",
+			md:   "# Code Review\n\n## Summary\n\n- 0 findings\n",
+			want: false,
+		},
+		{
+			name: "critical section with placeholder only",
+			md:   "## Critical Issues\n*(None)*\n\n## Major Issues\n*(None)*\n",
+			want: false,
+		},
+		{
+			name: "critical section with placeholder description only",
+			md:   "## Critical Issues\n*(Block merge — will break production, lose data, or create security holes)*\n\n## Major Issues\n*(None)*\n",
+			want: false,
+		},
+		{
+			name: "critical section with a real finding",
+			md:   "## Critical Issues\n\n- **runner.go:42** — buffer overflow when input is very large\n  Fix: bounds-check before write.\n",
+			want: true,
+		},
+		{
+			name: "major section with a real finding (critical empty)",
+			md:   "## Critical Issues\n*(None)*\n\n## Major Issues\n\n- **runner.go:42** — pre-commit gate broken\n",
+			want: true,
+		},
+		{
+			name: "warning-only finding does not block",
+			md:   "## Critical Issues\n*(None)*\n\n## Major Issues\n*(None)*\n\n## Warnings\n\n- nit on naming\n",
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mergedHasBlocking(tc.md); got != tc.want {
+				t.Errorf("mergedHasBlocking: got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateMergeWith(t *testing.T) {
+	active := []cli.LLM{{Name: "claude"}, {Name: "gemini"}}
+	cases := []struct {
+		mergeWith string
+		wantErr   bool
+	}{
+		{"", false},        // unset is fine
+		{"auto", false},    // sentinel is fine
+		{"claude", false},  // member of active set
+		{"codex", true},    // not active — typo or misconfig
+		{"claud", true},    // typo — must error, not silently fall through
+	}
+	for _, tc := range cases {
+		err := validateMergeWith(&sharedFlags{mergeWith: tc.mergeWith}, active)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("validateMergeWith(%q): err=%v, wantErr=%v", tc.mergeWith, err, tc.wantErr)
 		}
 	}
 }

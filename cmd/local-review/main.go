@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -23,8 +24,10 @@ import (
 	"github.com/mshykov/local-review/internal/git"
 )
 
-// Block-font banner shown atop --help. Generated with figlet -f block.
-// Wide (~120 chars); wraps on narrower terminals — that's accepted.
+// banner is the figlet Block-font "LOCAL-REVIEW" art shown atop --help.
+// It's ~120 columns wide and only renders in helpHeader() when stdout
+// is a real TTY ≥ 100 cols; CI logs and narrow tmux panes get a clean
+// text-only header instead.
 const banner = `
   _|          _|_|      _|_|_|    _|_|    _|              _|_|_|    _|_|_|_|  _|      _|  _|_|_|  _|_|_|_|  _|          _|
   _|        _|    _|  _|        _|    _|  _|              _|    _|  _|        _|      _|    _|    _|        _|          _|
@@ -32,6 +35,26 @@ const banner = `
   _|        _|    _|  _|        _|    _|  _|              _|    _|  _|          _|  _|      _|    _|          _|  _|  _|
   _|_|_|_|    _|_|      _|_|_|  _|    _|  _|_|_|_|        _|    _|  _|_|_|_|      _|      _|_|_|  _|_|_|_|      _|  _|
 `
+
+// helpHeader returns the banner when stdout looks like a wide-enough
+// terminal, or an empty string otherwise. Cobra hard-wraps Long
+// descriptions; the banner is unreadable noise on <100-col terminals
+// (CI logs, narrow tmux panes, the editor that opens for `git commit`).
+//
+// Detection is intentionally stdlib-only: stat the file mode to tell
+// terminals from pipes/files, and read $COLUMNS for width. This avoids
+// pulling in golang.org/x/term and keeps the Go 1.23 floor.
+func helpHeader() string {
+	info, err := os.Stdout.Stat()
+	if err != nil || (info.Mode()&os.ModeCharDevice) == 0 {
+		return ""
+	}
+	cols, err := strconv.Atoi(os.Getenv("COLUMNS"))
+	if err != nil || cols < 100 {
+		return ""
+	}
+	return banner + "\n"
+}
 
 // sharedFlags collects every flag accepted by the review-shape commands.
 // Single-LLM-fallback flags (--model, --base-url) and multi-LLM flags
@@ -61,8 +84,7 @@ func main() {
 	root := &cobra.Command{
 		Use:   "local-review",
 		Short: "AI code review for your local diff. BYOK, language-agnostic.",
-		Long: banner + `
-local-review reviews a git diff with the LLMs you have installed and
+		Long: helpHeader() + `local-review reviews a git diff with the LLMs you have installed and
 runs them in parallel. It runs entirely on your machine; the only
 network call is to whichever LLM endpoint you configured.
 
