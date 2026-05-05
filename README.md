@@ -254,7 +254,7 @@ Distributing to a few hundred engineers? Two patterns work:
 
 ## Privacy
 
-**local-review itself is telemetry-free**: no analytics, no auto-update calls, no signup, no SaaS. The binary makes no network calls of its own. All network traffic is from the LLM(s) *you* authenticate — so what "private" means depends on which LLM(s) you point it at:
+**local-review is telemetry-free**: no analytics, no auto-update calls, no signup, no SaaS. The only network traffic is to the LLM endpoint(s) *you* configure — either an HTTP call from local-review's built-in client (single-LLM mode) or the authenticated CLI subprocesses (multi-LLM mode). What "private" means therefore depends on which LLM(s) you point it at:
 
 | Mode | Where your diff goes |
 |---|---|
