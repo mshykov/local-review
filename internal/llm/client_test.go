@@ -242,6 +242,26 @@ func TestComplete_EmptyChoicesReturnsError(t *testing.T) {
 	}
 }
 
+func TestComplete_RejectsOversizedResponse(t *testing.T) {
+	// A spoofed/runaway provider must not OOM the CLI by streaming
+	// unbounded bytes. The cap is 10 MB; write 12 MB and confirm we
+	// get a clear error instead of silently buffering 12 MB of garbage.
+	m := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// 12 MB of `x` — well past the 10 MB cap.
+		w.Write(make([]byte, 12*1024*1024))
+	})
+	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 30)
+
+	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	if err == nil {
+		t.Fatal("expected oversize error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeded") {
+		t.Errorf("error should mention size cap, got: %v", err)
+	}
+}
+
 func TestComplete_MalformedJSONResponse(t *testing.T) {
 	m := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

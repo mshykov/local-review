@@ -15,6 +15,14 @@ import (
 	"time"
 )
 
+// maxResponseBytes caps how much we'll read from a chat-completions
+// response. A typical review response is well under 100 KB; 10 MB is
+// generous headroom for an unusually verbose model and small enough
+// to crash the CLI with a clear error rather than exhaust RAM if a
+// provider streams unbounded data, hangs mid-transmission, or is
+// spoofed by a man-in-the-middle on the configured base URL.
+const maxResponseBytes = 10 * 1024 * 1024
+
 // Client wraps a base URL + API key. Construct once, reuse.
 type Client struct {
 	BaseURL string
@@ -108,9 +116,15 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// LimitReader at maxResponseBytes+1 so we can distinguish "exactly
+	// at the cap" from "ran past the cap" — if we read >max bytes the
+	// provider returned more than we'll trust.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read response: %w", err)
+	}
+	if int64(len(respBody)) > maxResponseBytes {
+		return "", fmt.Errorf("llm %s: response exceeded %d-byte cap (possible runaway provider or spoofed endpoint)", c.BaseURL, maxResponseBytes)
 	}
 
 	if resp.StatusCode >= 400 {
