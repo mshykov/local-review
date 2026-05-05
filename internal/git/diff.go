@@ -144,11 +144,27 @@ func parseUnifiedDiff(s string) []Diff {
 		cur = nil
 	}
 
+	// Case order matters here — once we're inside a hunk (post-@@),
+	// every line is content even if it happens to start with `--- a/`
+	// or `+++ b/`. A deleted SQL comment `-- a/users` renders as
+	// `--- a/users` in the diff (the leading `-` is the diff prefix),
+	// and the previous case order matched that as a file header,
+	// silently overwriting cur.Path AND swallowing the line from the
+	// hunk content. Putting `hunk != nil` ahead of the header cases
+	// makes header recognition pre-@@ only.
 	for _, line := range strings.Split(s, "\n") {
 		switch {
 		case strings.HasPrefix(line, "diff --git"):
 			flushFile()
 			cur = &Diff{}
+		case strings.HasPrefix(line, "@@"):
+			flushHunk()
+			hunk = &Hunk{Header: line, NewFrom: parseNewFrom(line)}
+		case hunk != nil:
+			// Inside a hunk → all lines are content, regardless of
+			// what they look like. See the "Case order matters" comment
+			// above for why this can't move below the header cases.
+			hunk.Content += line + "\n"
 		case strings.HasPrefix(line, "--- a/"):
 			// Capture the original path as a fallback for deletions —
 			// `+++ /dev/null` is the standard `git diff` shape for a
@@ -170,11 +186,6 @@ func parseUnifiedDiff(s string) []Diff {
 			if suffix != "/dev/null" {
 				cur.Path = suffix
 			}
-		case strings.HasPrefix(line, "@@"):
-			flushHunk()
-			hunk = &Hunk{Header: line, NewFrom: parseNewFrom(line)}
-		case hunk != nil:
-			hunk.Content += line + "\n"
 		}
 	}
 	flushFile()

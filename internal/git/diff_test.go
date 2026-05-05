@@ -94,6 +94,44 @@ index abc..0000000
 	}
 }
 
+func TestParseUnifiedDiff_HunkContentLooksLikeHeader(t *testing.T) {
+	// A deleted SQL comment `-- a/users` (or any code where a deleted
+	// line happens to start with `-- a/` or an added line with `++ b/`)
+	// renders inside a hunk as `--- a/users` / `+++ b/users` after the
+	// diff's leading `-` / `+`. Pre-fix, the parser matched those as
+	// file headers and BOTH overwrote cur.Path AND lost the line from
+	// the hunk content. Pin the corrected behavior:
+	//   - cur.Path stays attributed to the real file (migrations.sql)
+	//   - the deleted/added lines remain in the hunk content verbatim
+	sql := `diff --git a/migrations.sql b/migrations.sql
+index 1..2 100644
+--- a/migrations.sql
++++ b/migrations.sql
+@@ -1,4 +1,4 @@
+ SELECT 1;
+--- a/users is the legacy table
+-DROP TABLE users;
++++ b/customers replaces it
++DROP TABLE customers;
+`
+	diffs := parseUnifiedDiff(sql)
+	if len(diffs) != 1 {
+		t.Fatalf("want 1 diff, got %d", len(diffs))
+	}
+	if diffs[0].Path != "migrations.sql" {
+		t.Errorf("path = %q, want migrations.sql (header-look-alike inside hunk leaked into Path)", diffs[0].Path)
+	}
+	if len(diffs[0].Hunks) != 1 {
+		t.Fatalf("want 1 hunk, got %d", len(diffs[0].Hunks))
+	}
+	body := diffs[0].Hunks[0].Content
+	for _, want := range []string{"-- a/users is the legacy table", "++ b/customers replaces it"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("hunk content missing %q (was eaten by header recognition)\n--- got ---\n%s", want, body)
+		}
+	}
+}
+
 func TestParseUnifiedDiff_RenameUsesNewPath(t *testing.T) {
 	// Renames should attribute to the new path — that's what reviewers
 	// will navigate to. This pins the existing behavior so the
