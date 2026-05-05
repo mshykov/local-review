@@ -68,6 +68,57 @@ func TestParseUnifiedDiff_CRLF(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedDiff_DeletedFileKeepsOriginalPath(t *testing.T) {
+	// `git diff` emits `+++ /dev/null` when a file is deleted. Pre-fix
+	// the parser took the path from +++, so deletions were attributed
+	// to "/dev/null" — silently broke include/exclude filtering, the
+	// per-file finding output, and any path-based downstream logic.
+	// Now we capture --- a/<path> first and only let +++ b/<path>
+	// overwrite it for non-deletion diffs.
+	deleted := `diff --git a/legacy/old.go b/legacy/old.go
+deleted file mode 100644
+index abc..0000000
+--- a/legacy/old.go
++++ /dev/null
+@@ -1,3 +0,0 @@
+-package legacy
+-
+-func Old() {}
+`
+	diffs := parseUnifiedDiff(deleted)
+	if len(diffs) != 1 {
+		t.Fatalf("want 1 diff, got %d", len(diffs))
+	}
+	if diffs[0].Path != "legacy/old.go" {
+		t.Errorf("deleted-file path = %q, want %q (was '/dev/null' pre-fix)", diffs[0].Path, "legacy/old.go")
+	}
+}
+
+func TestParseUnifiedDiff_RenameUsesNewPath(t *testing.T) {
+	// Renames should attribute to the new path — that's what reviewers
+	// will navigate to. This pins the existing behavior so the
+	// deleted-file fix doesn't accidentally invert it.
+	renamed := `diff --git a/old.go b/new.go
+similarity index 80%
+rename from old.go
+rename to new.go
+index aaa..bbb 100644
+--- a/old.go
++++ b/new.go
+@@ -1,3 +1,4 @@
+ package x
++// new comment
+ func F() {}
+`
+	diffs := parseUnifiedDiff(renamed)
+	if len(diffs) != 1 {
+		t.Fatalf("want 1 diff, got %d", len(diffs))
+	}
+	if diffs[0].Path != "new.go" {
+		t.Errorf("renamed-file path = %q, want %q", diffs[0].Path, "new.go")
+	}
+}
+
 func TestParseNewFrom(t *testing.T) {
 	cases := map[string]int{
 		"@@ -1,2 +37,5 @@":  37,

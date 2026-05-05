@@ -116,13 +116,27 @@ func parseUnifiedDiff(s string) []Diff {
 		case strings.HasPrefix(line, "diff --git"):
 			flushFile()
 			cur = &Diff{}
+		case strings.HasPrefix(line, "--- a/"):
+			// Capture the original path as a fallback for deletions —
+			// `+++ /dev/null` is the standard `git diff` shape for a
+			// deleted file, so reading +++ alone would attribute every
+			// deletion to "/dev/null" and silently break filtering,
+			// finding attribution, and any path-based downstream logic.
+			if cur != nil {
+				cur.Path = strings.TrimPrefix(line, "--- a/")
+			}
 		case strings.HasPrefix(line, "+++ b/"):
 			if cur != nil {
 				cur.Path = strings.TrimPrefix(line, "+++ b/")
 			}
 		case strings.HasPrefix(line, "+++ ") && cur != nil && cur.Path == "":
-			// Fallback for unusual paths
-			cur.Path = strings.TrimPrefix(line, "+++ ")
+			// Fallback for unusual paths (e.g. patches with non-standard
+			// prefixes). Skip the "+++ /dev/null" deletion shape — we
+			// already captured the original path from --- above.
+			suffix := strings.TrimPrefix(line, "+++ ")
+			if suffix != "/dev/null" {
+				cur.Path = suffix
+			}
 		case strings.HasPrefix(line, "@@"):
 			flushHunk()
 			hunk = &Hunk{Header: line, NewFrom: parseNewFrom(line)}
