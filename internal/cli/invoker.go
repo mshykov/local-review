@@ -114,10 +114,14 @@ func (g *GeminiInvoker) Review(ctx context.Context, diff string) (string, error)
 }
 
 func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, error) {
-	// Pass prompt via -p flag (Gemini CLI doesn't read prompts from stdin)
-	// Note: Very large prompts may hit ARG_MAX limits (~2MB on Linux, ~256KB on macOS)
-	// If this becomes an issue, we'd need to investigate alternative invocation patterns
-	cmd := exec.CommandContext(ctx, g.path, "-p", prompt)
+	// gemini's --help: "-p, --prompt: Run in non-interactive mode with
+	// the given prompt. Appended to input on stdin (if any)." So a tiny
+	// marker via -p activates headless mode and the real prompt body
+	// goes via stdin — sidestepping ARG_MAX (~256KB on macOS, ~2MB on
+	// Linux) that the previous "whole prompt via -p" implementation hit
+	// on merger prompts that aggregate multiple per-LLM reviews.
+	cmd := exec.CommandContext(ctx, g.path, "-p", "Follow the instructions in stdin.")
+	cmd.Stdin = strings.NewReader(prompt)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("gemini failed: %w", err)
