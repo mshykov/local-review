@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-05
+
+### Added
+- **Multi-LLM honors language-specific prompt packs.** Pre-fix, every agent ran with a generic 4-bullet prompt while README claimed pack-aware reviews. Now `lang.Dominant` + `prompts.Get` feed each agent the same Go/TS/Python/Rust pack the single-LLM path uses, with a markdown-output override appended so the merger can consolidate prose across reviewers.
+- **`api_key_env` works end-to-end.** Doctor now reads the configured env var (not the hardcoded canonical default), and invokers inject the resolved key into the subprocess as the canonical name each CLI expects. A user with `api_key_env: MY_GEMINI_KEY` sees ✓ ready and gemini actually authenticates from `$MY_GEMINI_KEY`.
+- **Per-agent model overrides actually take effect** — `--claude-model`, `--gemini-model`, `--codex-model` (plus the matching config fields) are now threaded through to the CLI command line. Pre-v0.6 they were displayed in the roster but never passed to the invoker.
+- **`cli_path` honored** — corporate / nix-store installs at non-standard paths now work (was hardcoded to PATH lookup).
+- **`local-review config` applies CLI flag overrides** as the docs claim (was previously claimed in --help but ignored).
+- **Multi-LLM honors `review.include` / `review.exclude` globs.** Previously the multi path bypassed the filter entirely and reviewed files the user had told it to skip.
+- **`local-review review` (already in v0.5) gains `--only` strictness**: when `--only` matches no ready agents (typo, unauthed agent), the run errors out instead of silently falling back to the configured `provider:` — that fallback would have sent the diff to a different vendor than the one named, a privacy / cost footgun.
+- **Multi-LLM blocking gate has two independent signals**: the merged report AND each per-LLM Output (full, before merger truncation). Defends against a verbose reviewer pushing a Critical finding past the 8 KB merger-input cap.
+- **`install.sh` verifies SHA-256 checksums** of release tarballs. Each release now ships a `checksums.txt` manifest; the installer downloads it alongside the tarball and verifies before extracting. Defends against accidental corruption and basic CDN/MITM tampering. Cosign signing is on the v0.7 roadmap for compromised-release-key defense.
+
+### Changed
+- **`ParseSeverity` defaults to `major` for unknown values** (was `warning`). LLM typos (`"criticl"`, `"sev-high"`, `"BLOCKER"`) used to silently demote out of the blocking range, hiding real findings from the pre-commit hook. Now: unknown → fail-closed at major. **Heads-up:** previously-passing reviews where the LLM emitted a typo'd severity may now block; rerun with the typo corrected, or treat the new failure as the gate working correctly.
+- **JavaScript routes to the TypeScript pack.** No separate `javascript.md` ships — the TS pack covers React/Next.js/Node patterns that apply equally to plain JS.
+- **CodexInvoker uses `codex exec --output-last-message`** instead of bare `codex` (which was launching the interactive TUI in v0.5.0 and aborting every codex review with `exit status 1`).
+- **`--help` banner switched to figlet small font** (~70 cols) so it doesn't garble narrow terminals.
+- **Privacy posture documented honestly.** README's "Privacy" section was overclaiming for default multi-LLM (which fans the diff out to Claude/Gemini/Codex cloud backends). Replaced with a per-mode matrix.
+
+### Fixed
+- **Diff parser preserves deleted-file paths.** `+++ /dev/null` is the standard `git diff` shape for a deleted file; the old parser took the path from `+++` and attributed every deletion to "/dev/null", silently breaking glob filtering and finding attribution.
+- **Diff parser doesn't mistake hunk content for headers.** A deleted SQL comment `-- a/users` rendered inside a hunk as `--- a/users` (with the diff's leading `-`); the old parser matched that as a file header.
+- **Diff parser uses `bufio.Reader` (no per-line cap)** instead of `bufio.Scanner` (4 MB cap → `ErrTooLong` on a single minified-bundle line, aborting the entire review even if globs would have excluded that file).
+- **`parseUnifiedDiff` fails closed on scanner / I/O errors** — a partial-read diff can't satisfy the gate. The earlier "best-effort, swallow" comment was the wrong call.
+- **`parseFindings` brace-counting JSON extractor** instead of first/last-`{` heuristic. The old approach concatenated example + answer when an LLM emitted both, failing to unmarshal.
+- **LLM client caps response at 10 MB.** Defends against runaway providers / spoofed endpoints — the old `io.ReadAll` was unbounded.
+- **LLM client only sets `Authorization: Bearer ...` when a key exists.** Empty-token header used to break local OpenAI-compat servers (Ollama, vLLM) that expect the header absent in unauthenticated mode.
+- **Ollama "no API key" path works.** When `base_url` points at localhost / 127.x / ::1, the empty-key check is skipped — required for the documented fully-offline workflow.
+- **Globs compile once, not per file.** Pre-fix `matchGlob` re-compiled the regex inside the per-file loop; a 500-file diff with 5 globs cost 2,500 compiles. Plus: `**/dist/**` now correctly anchors to a path-segment boundary (was matching `src/mydist/file`), and bracket character classes (`[0-9]`, `[!a-z]`) actually work.
+- **Fail-closed on all-invalid include globs.** Previously `include: ["[!]"]` (and other compile-error patterns) silently *expanded* the review to every file because the empty `includeRE` was treated as "no include filter".
+- **`Authorization` / `--json` / `--min-severity` / `--max-findings` ignored in multi-LLM** — README now states this explicitly instead of "passes them through with a warning". Multi-LLM emits a stderr warning when those flags are set but otherwise drops them; the structured-JSON multi-LLM mode is on the v0.7 roadmap.
+- **`mergeAndPrint` truncates per-review output to 8 KB** before feeding the merger, defending against verbose reviewers blowing the merger's context window. Independent gate signal scans the full per-LLM Output to catch findings past the cutoff.
+- **Git refs are validated** — `--`-prefixed refs (e.g. `local-review commit -c`) and refs with NUL/newline are rejected to defend against `git` flag-injection.
+- **Output write errors propagate** — `WriteText` and `configCmd` no longer silently exit 0 on broken pipe / disk full.
+- **GeminiInvoker / ClaudeInvoker preserve subprocess output on failure** — auth/rate-limit/quota errors no longer collapse to a bare "exit status 1".
+- **Storage SHA normalized** — full and short SHAs hit the same storage key, so re-running with `local-review commit <full-sha>` doesn't create a duplicate artifact.
+- **Detached HEAD review writes to `detached-<short-sha>/`** instead of colliding under `HEAD/`.
+
+### Removed
+- **`LLMConfig.Mode` field**: never wired through to the runtime. yaml.v3 silently ignores stray `mode:` lines, so existing configs keep loading.
+- **JavaScript constant in `internal/lang`** — unused after the JS-→-TypeScript routing.
+
+### CI / release pipeline
+- **Release workflow gates on Copilot review.** Release-labeled PRs that haven't received a Copilot review (or that have unresolved Copilot threads) fail the prepare job loudly instead of tagging silently. Both `PullRequest.reviews` and `reviewThreads` are queried; `PENDING` and `DISMISSED` review states are excluded from the "Copilot reviewed" check.
+- Workflow `paths-ignore` updated to skip docs-only changes.
+- Release workflow generates `local-review_<version>_checksums.txt` and uploads alongside binaries; `install.sh` consumes it.
+
 ## [0.5.1] - 2026-05-05
 
 ### Fixed

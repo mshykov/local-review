@@ -40,9 +40,11 @@ if [ "$VERSION" = "latest" ]; then
   fi
 fi
 
-# ----- Download + install ------------------------------------------------
+# ----- Download + verify + install ---------------------------------------
 asset="local-review_${os}_${arch}.tar.gz"
 url="https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+checksums="local-review_${VERSION}_checksums.txt"
+checksums_url="https://github.com/${REPO}/releases/download/${VERSION}/${checksums}"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -50,7 +52,37 @@ trap 'rm -rf "$tmp"' EXIT
 echo "Downloading ${url}"
 curl -fsSL "$url" -o "${tmp}/${asset}"
 
-cd "$tmp"
+# SHA-256 verification before extract. The checksums manifest ships
+# alongside the tarball in every v0.6+ release; for older versions
+# (no manifest) we fall through with a loud warning so the user can
+# still install but knows verification didn't run.
+echo "Downloading ${checksums_url}"
+if curl -fsSL "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
+  cd "$tmp"
+  if command -v sha256sum >/dev/null 2>&1; then
+    # GNU coreutils (Linux, Homebrew on macOS).
+    if ! grep " ${asset}\$" "$checksums" | sha256sum -c -; then
+      echo "❌ checksum mismatch for ${asset}" >&2
+      echo "   refusing to install — possible tampering or corrupted download" >&2
+      exit 1
+    fi
+  elif command -v shasum >/dev/null 2>&1; then
+    # macOS default: shasum -a 256 -c reads <hash>  <file> lines.
+    if ! grep " ${asset}\$" "$checksums" | shasum -a 256 -c -; then
+      echo "❌ checksum mismatch for ${asset}" >&2
+      echo "   refusing to install — possible tampering or corrupted download" >&2
+      exit 1
+    fi
+  else
+    echo "⚠️  no sha256sum / shasum binary found — skipping integrity check" >&2
+    echo "   install one of: coreutils (sha256sum) or perl (shasum) for tamper resistance" >&2
+  fi
+else
+  echo "⚠️  no checksums.txt for ${VERSION} — skipping integrity check" >&2
+  echo "   (releases before v0.6.0 don't ship a manifest; upgrade to v0.6+ for verified installs)" >&2
+  cd "$tmp"
+fi
+
 tar -xzf "$asset"
 
 mkdir -p "$INSTALL_DIR"

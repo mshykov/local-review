@@ -213,7 +213,17 @@ jobs:
                   }
                 }
               }')
-          reviews_count=$(echo "$reviews_resp" | jq '[.data.repository.pullRequest.reviews.nodes[] | select(((.author.login // "") | test("copilot"; "i")))] | length')
+          # State filter: a "Copilot reviewed this" claim only counts
+          # for reviews that actually shipped a verdict. Drop:
+          #   - PENDING  : draft, never submitted (doesn't represent any opinion)
+          #   - DISMISSED: was a review, then explicitly invalidated (stale)
+          # Keep:
+          #   - APPROVED, CHANGES_REQUESTED, COMMENTED — all real submissions
+          #     that produced thread state and/or verdicts the maintainer can
+          #     act on. The unresolved-thread check downstream still catches
+          #     the case where Copilot raised concerns and they weren't
+          #     addressed.
+          reviews_count=$(echo "$reviews_resp" | jq '[.data.repository.pullRequest.reviews.nodes[] | select(((.author.login // "") | test("copilot"; "i"))) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "COMMENTED")] | length')
 
           if [ "$total" = "0" ] && [ "$reviews_count" = "0" ]; then
             echo "::error::Release blocked — no Copilot review or review thread found on PR #${pr_number}."
@@ -338,6 +348,21 @@ jobs:
           path: dist/
           merge-multiple: true
 
+      - name: Generate sha256 checksums manifest
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          # Manifest format: `<sha256>  <filename>`, one per line.
+          # That's what `sha256sum -c` and `shasum -a 256 -c` both
+          # consume natively, so install.sh doesn't need to do any
+          # parsing — it just feeds the manifest line to the verifier.
+          # File names match what install.sh expects:
+          # local-review_<version>_checksums.txt
+          cd dist
+          sha256sum local-review_*.tar.gz local-review_*.zip > "local-review_${VERSION}_checksums.txt"
+          echo "--- generated checksums ---"
+          cat "local-review_${VERSION}_checksums.txt"
+
       - name: Create and push tag
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -361,6 +386,7 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/local-review_*_checksums.txt
 
   update-homebrew:
     needs: [prepare, publish]
