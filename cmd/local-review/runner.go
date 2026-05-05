@@ -211,18 +211,54 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	return nil
 }
 
-// mergedHasBlocking returns true when the merged markdown report has a
-// "## Critical Issues" or "## Major Issues" section with at least one
-// finding (i.e., not just the placeholder *(None)* marker the merge
-// prompt template emits for empty buckets). Used to keep `local-review
-// staged` exiting 2 in a pre-commit hook even though the multi-LLM
-// merger returns prose, not structured findings.
+// mergedHasBlocking returns true when the merged markdown report
+// indicates blocking findings. We use two independent signals so that
+// LLM drift on one shape doesn't silently disable the gate:
+//
+//  1. The Recommendation line in the Summary block. The merge prompt
+//     pins this to "BLOCK MERGE" / "REQUEST CHANGES" / "APPROVE" — both
+//     of the first two count as blocking. Strongest signal because
+//     it's an explicit decision the merger has already made.
+//  2. Any non-placeholder content under a Critical / Major section
+//     heading (with a few common heading variants). Backstop for the
+//     case where the LLM forgets the Recommendation line but still
+//     enumerates findings.
+//
+// Either signal independently trips the gate. False positives are
+// preferred to false negatives — this is a security gate, the cost
+// of over-blocking is a re-run, the cost of under-blocking is a
+// shipped bug.
 func mergedHasBlocking(markdown string) bool {
 	if markdown == "" {
 		return false
 	}
-	return sectionHasContent(markdown, "Critical Issues") ||
-		sectionHasContent(markdown, "Major Issues")
+	if recommendationIsBlocking(markdown) {
+		return true
+	}
+	for _, name := range []string{
+		"Critical Issues", "Critical issues", "CRITICAL ISSUES", "Critical",
+		"Major Issues", "Major issues", "MAJOR ISSUES", "Major",
+	} {
+		if sectionHasContent(markdown, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// recommendationIsBlocking parses the "**Recommendation**: <verdict>"
+// line the merge prompt emits in the Summary block. Returns true when
+// the verdict is BLOCK MERGE or REQUEST CHANGES (case-insensitive).
+// APPROVE / unrecognized verdicts return false — the section-content
+// backstop in mergedHasBlocking still runs.
+func recommendationIsBlocking(markdown string) bool {
+	re := regexp.MustCompile(`(?im)^\s*-?\s*\**Recommendation\**\s*:\s*(.+?)\s*$`)
+	m := re.FindStringSubmatch(markdown)
+	if m == nil {
+		return false
+	}
+	verdict := strings.ToUpper(strings.Trim(m[1], "* `"))
+	return strings.Contains(verdict, "BLOCK MERGE") || strings.Contains(verdict, "REQUEST CHANGES")
 }
 
 // sectionHasContent returns true when a "## <name>" heading has any

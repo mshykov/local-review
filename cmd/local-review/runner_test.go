@@ -366,6 +366,31 @@ func TestMergedHasBlocking(t *testing.T) {
 			md:   "## Critical Issues\nNone.\n\n## Major Issues\n*(None)*\n",
 			want: false,
 		},
+		{
+			name: "Recommendation: BLOCK MERGE blocks even with empty sections",
+			md:   "## Summary\n- **Recommendation**: BLOCK MERGE\n\n## Critical Issues\n*(None)*\n",
+			want: true,
+		},
+		{
+			name: "Recommendation: REQUEST CHANGES blocks too",
+			md:   "## Summary\n**Recommendation**: REQUEST CHANGES\n\n## Critical Issues\n*(None)*\n",
+			want: true,
+		},
+		{
+			name: "Recommendation: APPROVE alone does not block",
+			md:   "## Summary\n- **Recommendation**: APPROVE\n\n## Critical Issues\n*(None)*\n",
+			want: false,
+		},
+		{
+			name: "alternate heading 'Critical' (without 'Issues') with content blocks",
+			md:   "## Critical\n- something is broken at file:42\n\n## Major\n*(None)*\n",
+			want: true,
+		},
+		{
+			name: "ALL-CAPS 'CRITICAL ISSUES' heading still blocks",
+			md:   "## CRITICAL ISSUES\n- file:99 race condition\n",
+			want: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
