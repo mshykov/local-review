@@ -353,6 +353,26 @@ func TestMergedHasBlocking(t *testing.T) {
 	}
 }
 
+func TestResolveCommitBranch_DetachedHEADGetsSyntheticName(t *testing.T) {
+	// We can't easily fake git here, so exercise the synthetic-name
+	// codepath directly via the helper logic: when CurrentBranch() returns
+	// "HEAD" (detached) we substitute `detached-<short-sha>`. Pin the
+	// shape so a future "just error in detached HEAD" regression fails
+	// loudly — the v0 path worked there and we promised not to break it.
+	for _, branch := range []string{"HEAD", "unknown"} {
+		const sha = "abc123def456789012345678901234567890aaaa"
+		got := syntheticDetachedBranch(branch, sha)
+		want := "detached-abc123d"
+		if got != want {
+			t.Errorf("syntheticDetachedBranch(%q, %q) = %q, want %q", branch, sha, got, want)
+		}
+	}
+	// A real branch name passes through unchanged.
+	if got := syntheticDetachedBranch("feature/x", "abc1234"); got != "feature/x" {
+		t.Errorf("real branch should pass through unchanged, got %q", got)
+	}
+}
+
 func TestValidateMergeWith(t *testing.T) {
 	active := []cli.LLM{{Name: "claude"}, {Name: "gemini"}}
 	cases := []struct {
