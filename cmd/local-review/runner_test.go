@@ -244,6 +244,44 @@ func TestSelectAgents_OnlyWhitespaceFallsThrough(t *testing.T) {
 	}
 }
 
+// realMergedReportWithMajorFinding is a captured fixture from a real
+// claude merge run on this codebase. The previous bullet-only heuristic
+// would have correctly blocked on this; the new "any non-placeholder
+// line" heuristic does too. Pinned here so heuristic regressions can't
+// silently let a real-world blocking review through.
+const realMergedReportWithMajorFinding = `# Code Review — Consolidated Report
+
+## Summary
+- **Total unique findings**: 6
+- **Recommendation**: REQUEST CHANGES
+
+## Critical Issues
+
+*None.*
+
+## Major Issues
+
+- ` + "`runner.go:198-219`" + ` — sectionHasContent is tightly coupled to bullet syntax
+
+  The new implementation only counts a section as having content if it contains a Markdown list item.
+
+  **Fix**: Be more permissive.
+
+## Warnings
+
+- ` + "`main.go:48-58`" + ` — Reintroduces golang.org/x/term
+
+## Conclusion
+
+The change has a major issue worth pushing on before merge.
+`
+
+func TestMergedHasBlocking_RealFixture(t *testing.T) {
+	if !mergedHasBlocking(realMergedReportWithMajorFinding) {
+		t.Error("real merged report with a Major finding must trigger the gate")
+	}
+}
+
 func TestMergedHasBlocking(t *testing.T) {
 	cases := []struct {
 		name string
@@ -283,6 +321,26 @@ func TestMergedHasBlocking(t *testing.T) {
 		{
 			name: "warning-only finding does not block",
 			md:   "## Critical Issues\n*(None)*\n\n## Major Issues\n*(None)*\n\n## Warnings\n\n- nit on naming\n",
+			want: false,
+		},
+		{
+			name: "prose finding (no list bullet) still blocks",
+			md:   "## Critical Issues\nThe code path X has a race condition under load.\n\n## Major Issues\n*(None)*\n",
+			want: true,
+		},
+		{
+			name: "numbered-list finding still blocks",
+			md:   "## Critical Issues\n*(Block merge — ...)*\n\n1. file:42 — buffer overflow\n",
+			want: true,
+		},
+		{
+			name: "*None.* (italic, no parens) is treated as placeholder",
+			md:   "## Critical Issues\n\n*None.*\n\n## Major Issues\n*(None)*\n",
+			want: false,
+		},
+		{
+			name: "bare 'None.' line is treated as placeholder",
+			md:   "## Critical Issues\nNone.\n\n## Major Issues\n*(None)*\n",
 			want: false,
 		},
 	}

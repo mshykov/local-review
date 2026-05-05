@@ -187,12 +187,17 @@ func mergedHasBlocking(markdown string) bool {
 		sectionHasContent(markdown, "Major Issues")
 }
 
-// sectionHasContent returns true when a "## <name>" heading is followed
-// by at least one Markdown list item (line starting with "- " or "* ")
-// before the next "## " heading. We deliberately key off list syntax
-// rather than "skip placeholder text" — that's the format the merge
-// prompt template prescribes for findings, and it can't be confused
-// with the section-description / *(None)* prose.
+// sectionHasContent returns true when a "## <name>" heading has any
+// real content before the next "## " heading. We skip blank lines, the
+// italicized section descriptions the merge prompt template prescribes
+// (`*(...)*`), and a small set of common "no findings" placeholder
+// shapes the LLM sometimes uses (`*(None)*`, `*None.*`, `_None_`, bare
+// `None.`).
+//
+// This is a security gate — false negatives let blocking findings
+// through silently — so we lean toward false positives. If the LLM
+// emits findings as bullets, prose, numbered lists, or tables, they
+// all count.
 func sectionHasContent(markdown, name string) bool {
 	re := regexp.MustCompile(`(?m)^##\s+` + regexp.QuoteMeta(name) + `\s*$`)
 	loc := re.FindStringIndex(markdown)
@@ -205,9 +210,26 @@ func sectionHasContent(markdown, name string) bool {
 	}
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
-			return true
+		if line == "" || isNonePlaceholder(line) {
+			continue
 		}
+		return true
+	}
+	return false
+}
+
+// isNonePlaceholder recognizes the empty-section markers the merge
+// prompt template emits or that LLMs commonly substitute. Kept narrow
+// on purpose — too lenient and it swallows real one-line findings.
+func isNonePlaceholder(line string) bool {
+	// `*(...)*` — italic parenthetical (section description or *(None)*)
+	if strings.HasPrefix(line, "*(") && strings.HasSuffix(line, ")*") {
+		return true
+	}
+	// Bare italic/underscored "None"/"None." with no surrounding content.
+	switch strings.ToLower(line) {
+	case "*none*", "*none.*", "_none_", "_none._", "none", "none.":
+		return true
 	}
 	return false
 }
@@ -345,7 +367,9 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	// with `time.Duration(0)` = no timeout = a hung merge LLM hanging
 	// the whole review.
 	mergeTimeout := time.Duration(mergeLLM.TimeoutSec) * time.Second
-	if mergeLLM.TimeoutSec == 0 {
+	// Negative timeouts (e.g., a `timeout_sec: -1` typo) would otherwise
+	// produce an already-expired context that cancels the merge instantly.
+	if mergeLLM.TimeoutSec <= 0 {
 		mergeTimeout = 120 * time.Second
 	}
 	mergeCtx, cancel := context.WithTimeout(ctx, mergeTimeout)
