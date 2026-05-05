@@ -2,9 +2,14 @@
 
 ## Supported Versions
 
+Only the current release line gets security fixes. Older lines may
+still receive a fix at the maintainer's discretion if the impact is
+severe and the patch is small.
+
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.4.x   | :white_check_mark: |
+| 0.5.x   | :white_check_mark: |
+| 0.4.x   | :grey_question: (severe issues only) |
 | < 0.4   | :x:                |
 
 ## Reporting a Vulnerability
