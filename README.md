@@ -34,7 +34,7 @@ Reviewer tools today are mostly:
 - **Tied to a vendor** — single-provider lock-in (OpenAI-only or Anthropic-only).
 - **Runtime-heavy** — Node/Python/Java install required just to run the reviewer.
 
-local-review is the opposite: a single static binary, runs locally on a diff, talks to whatever endpoint you configure (OpenAI, Anthropic, Together, Groq, OpenRouter, **Ollama for fully-offline review**), and ships language-aware prompt packs that you can override per-repo.
+local-review is the opposite: a single static binary that runs locally on a diff, sends that diff to whatever LLM(s) you've authenticated, and prints findings. Privacy posture depends on which LLM(s) you point it at — see the [Privacy](#privacy) section for the matrix. **Run with Ollama for fully-offline review.**
 
 ## Install
 
@@ -212,9 +212,11 @@ Common flags:
 | `--merge-with <agent>` | Pick which agent merges findings (default: auto) |
 | `--model <id>` | Override `provider.model` (single-LLM fallback only) |
 | `--base-url <url>` | Override `provider.base_url` (single-LLM fallback only) |
-| `--min-severity <tier>` | `nit` / `info` / `warning` / `major` / `critical` |
-| `--max-findings <n>` | Cap output |
-| `--json` | Emit JSON (for CI integration) |
+| `--min-severity <tier>` | `nit` / `info` / `warning` / `major` / `critical` (single-LLM fallback only) |
+| `--max-findings <n>` | Cap output (single-LLM fallback only) |
+| `--json` | Emit JSON (single-LLM fallback only — see below) |
+
+In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the v0.7 roadmap.
 
 Config wins by default; flags override config at runtime (e.g., `--only codex` runs codex even if your config sets `codex.enabled: false`).
 
@@ -252,7 +254,16 @@ Distributing to a few hundred engineers? Two patterns work:
 
 ## Privacy
 
-The only network call local-review makes is to the chat-completions endpoint **you configure**. Nothing else — no telemetry, no analytics, no auto-update calls. Run against Ollama and your code never leaves the machine.
+**local-review is telemetry-free**: no analytics, no auto-update calls, no signup, no SaaS. The only network traffic is to the LLM endpoint(s) *you* configure — either an HTTP call from local-review's built-in client (single-LLM mode) or the authenticated CLI subprocesses (multi-LLM mode). What "private" means therefore depends on which LLM(s) you point it at:
+
+| Mode | Where your diff goes |
+|---|---|
+| Single-LLM, `provider.base_url: http://localhost:11434/v1` (Ollama) | **Stays on your machine.** Fully offline. |
+| Single-LLM, any cloud provider (OpenAI, Anthropic, Mistral, etc.) | The provider you configured, over TLS. Their privacy policy applies. |
+| Multi-LLM (default) — Claude / Gemini / Codex CLIs | **Each authenticated CLI calls its own backend** (Anthropic, Google AI, OpenAI). One review fans out to multiple cloud vendors. Your `provider.base_url` is irrelevant in this mode. |
+| Multi-LLM with `--only` restricted to a fully-local agent | Roadmap. Will be possible once a fully-local-agent preset lands; today every multi-LLM agent (claude / gemini / codex) calls its own cloud backend. |
+
+If you need air-gapped review today, use single-LLM mode against a local Ollama and stay off `local-review review` (which fans out to authenticated cloud CLIs by default).
 
 ## Develop
 

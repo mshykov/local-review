@@ -1,9 +1,27 @@
 package git
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
+
+// errReader returns r.pre on the first read, then r.err on every
+// subsequent read. Used to simulate a real I/O failure mid-stream so
+// the parser's fail-closed contract is exercised end-to-end.
+type errReader struct {
+	pre []byte
+	err error
+}
+
+func (r *errReader) Read(p []byte) (int, error) {
+	if len(r.pre) > 0 {
+		n := copy(p, r.pre)
+		r.pre = r.pre[n:]
+		return n, nil
+	}
+	return 0, r.err
+}
 
 const sample = `diff --git a/src/foo.ts b/src/foo.ts
 index 1234567..abcdefg 100644
@@ -26,7 +44,10 @@ index 222..333 100644
 `
 
 func TestParseUnifiedDiff(t *testing.T) {
-	diffs := parseUnifiedDiff(sample)
+	diffs, err := parseUnifiedDiff(strings.NewReader(sample))
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff(sample): %v", err)
+	}
 	if len(diffs) != 2 {
 		t.Fatalf("expected 2 files, got %d", len(diffs))
 	}
@@ -53,7 +74,10 @@ func TestParseUnifiedDiff_CRLF(t *testing.T) {
 		"@@ -1,1 +1,2 @@\r\n" +
 		" hello\r\n" +
 		"+world\r\n"
-	diffs := parseUnifiedDiff(crlf)
+	diffs, err := parseUnifiedDiff(strings.NewReader(crlf))
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff(crlf): %v", err)
+	}
 	if len(diffs) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(diffs))
 	}
@@ -65,6 +89,122 @@ func TestParseUnifiedDiff_CRLF(t *testing.T) {
 	}
 	if strings.Contains(diffs[0].Hunks[0].Content, "\r") {
 		t.Errorf("hunk content contains \\r: %q", diffs[0].Hunks[0].Content)
+	}
+}
+
+func TestParseUnifiedDiff_DeletedFileKeepsOriginalPath(t *testing.T) {
+	// `git diff` emits `+++ /dev/null` when a file is deleted. Pre-fix
+	// the parser took the path from +++, so deletions were attributed
+	// to "/dev/null" — silently broke include/exclude filtering, the
+	// per-file finding output, and any path-based downstream logic.
+	// Now we capture --- a/<path> first and only let +++ b/<path>
+	// overwrite it for non-deletion diffs.
+	deleted := `diff --git a/legacy/old.go b/legacy/old.go
+deleted file mode 100644
+index abc..0000000
+--- a/legacy/old.go
++++ /dev/null
+@@ -1,3 +0,0 @@
+-package legacy
+-
+-func Old() {}
+`
+	diffs, err := parseUnifiedDiff(strings.NewReader(deleted))
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff(deleted): %v", err)
+	}
+	if len(diffs) != 1 {
+		t.Fatalf("want 1 diff, got %d", len(diffs))
+	}
+	if diffs[0].Path != "legacy/old.go" {
+		t.Errorf("deleted-file path = %q, want %q (was '/dev/null' pre-fix)", diffs[0].Path, "legacy/old.go")
+	}
+}
+
+func TestParseUnifiedDiff_HunkContentLooksLikeHeader(t *testing.T) {
+	// A deleted SQL comment `-- a/users` (or any code where a deleted
+	// line happens to start with `-- a/` or an added line with `++ b/`)
+	// renders inside a hunk as `--- a/users` / `+++ b/users` after the
+	// diff's leading `-` / `+`. Pre-fix, the parser matched those as
+	// file headers and BOTH overwrote cur.Path AND lost the line from
+	// the hunk content. Pin the corrected behavior:
+	//   - cur.Path stays attributed to the real file (migrations.sql)
+	//   - the deleted/added lines remain in the hunk content verbatim
+	sql := `diff --git a/migrations.sql b/migrations.sql
+index 1..2 100644
+--- a/migrations.sql
++++ b/migrations.sql
+@@ -1,4 +1,4 @@
+ SELECT 1;
+--- a/users is the legacy table
+-DROP TABLE users;
++++ b/customers replaces it
++DROP TABLE customers;
+`
+	diffs, err := parseUnifiedDiff(strings.NewReader(sql))
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff(sql): %v", err)
+	}
+	if len(diffs) != 1 {
+		t.Fatalf("want 1 diff, got %d", len(diffs))
+	}
+	if diffs[0].Path != "migrations.sql" {
+		t.Errorf("path = %q, want migrations.sql (header-look-alike inside hunk leaked into Path)", diffs[0].Path)
+	}
+	if len(diffs[0].Hunks) != 1 {
+		t.Fatalf("want 1 hunk, got %d", len(diffs[0].Hunks))
+	}
+	body := diffs[0].Hunks[0].Content
+	for _, want := range []string{"-- a/users is the legacy table", "++ b/customers replaces it"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("hunk content missing %q (was eaten by header recognition)\n--- got ---\n%s", want, body)
+		}
+	}
+}
+
+func TestParseUnifiedDiff_RenameUsesNewPath(t *testing.T) {
+	// Renames should attribute to the new path — that's what reviewers
+	// will navigate to. This pins the existing behavior so the
+	// deleted-file fix doesn't accidentally invert it.
+	renamed := `diff --git a/old.go b/new.go
+similarity index 80%
+rename from old.go
+rename to new.go
+index aaa..bbb 100644
+--- a/old.go
++++ b/new.go
+@@ -1,3 +1,4 @@
+ package x
++// new comment
+ func F() {}
+`
+	diffs, err := parseUnifiedDiff(strings.NewReader(renamed))
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff(renamed): %v", err)
+	}
+	if len(diffs) != 1 {
+		t.Fatalf("want 1 diff, got %d", len(diffs))
+	}
+	if diffs[0].Path != "new.go" {
+		t.Errorf("renamed-file path = %q, want %q", diffs[0].Path, "new.go")
+	}
+}
+
+func TestParseUnifiedDiff_FailsClosedOnScannerError(t *testing.T) {
+	// A partial diff must NOT silently produce "no findings". The gate
+	// downstream relies on having seen the whole change set; a truncated
+	// read with the unscanned tail dropped would let a blocking change
+	// slip through. Pin: scanner error → returned err, not partial slice.
+	r := &errReader{
+		pre: []byte("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n"),
+		err: io.ErrUnexpectedEOF,
+	}
+	_, err := parseUnifiedDiff(r)
+	if err == nil {
+		t.Fatal("want error from parseUnifiedDiff on truncated input, got nil")
+	}
+	if !strings.Contains(err.Error(), "scan diff") {
+		t.Errorf("error should mention scan diff, got: %v", err)
 	}
 }
 
@@ -128,6 +268,51 @@ func TestCurrentBranch(t *testing.T) {
 	branch := CurrentBranch()
 	if branch == "" {
 		t.Error("CurrentBranch() returned empty string")
+	}
+}
+
+func TestValidateRef(t *testing.T) {
+	cases := []struct {
+		ref     string
+		wantErr bool
+	}{
+		{"main", false},
+		{"feature/auth-fix", false},
+		{"v1.2.3", false},
+		{"abc1234", false},
+		{"HEAD", false},
+		{"", true},
+		{"--output=/tmp/xyz", true},    // flag injection
+		{"-c", true},                   // flag injection
+		{"--upload-pack=/tmp/x", true}, // git-specific flag injection
+		{"main\nmalice", true},         // newline injection
+		{"main\x00main", true},         // NUL injection
+	}
+	for _, tc := range cases {
+		err := ValidateRef(tc.ref)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ValidateRef(%q) err=%v, wantErr=%v", tc.ref, err, tc.wantErr)
+		}
+	}
+}
+
+func TestArgsFor_RejectsFlagShapedRef(t *testing.T) {
+	// argsFor must refuse to construct a `git diff` / `git show` that
+	// would interpret a user-controlled ref as a flag. Defends against
+	// `git diff --output=/tmp/x...HEAD` — `...HEAD` makes it look
+	// positional but git still parses the leading `--` as a flag.
+	if _, err := argsFor(ModeBranch, "--output=/tmp/x"); err == nil {
+		t.Error("ModeBranch with flag-shaped ref: want error, got nil")
+	}
+	if _, err := argsFor(ModeCommit, "-c"); err == nil {
+		t.Error("ModeCommit with flag-shaped ref: want error, got nil")
+	}
+	// Sanity: legitimate refs still pass through.
+	if _, err := argsFor(ModeBranch, "main"); err != nil {
+		t.Errorf("ModeBranch with 'main': want no error, got %v", err)
+	}
+	if _, err := argsFor(ModeCommit, "v1.2.3"); err != nil {
+		t.Errorf("ModeCommit with 'v1.2.3': want no error, got %v", err)
 	}
 }
 

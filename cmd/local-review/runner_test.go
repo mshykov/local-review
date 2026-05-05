@@ -3,10 +3,12 @@ package main
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
+	"github.com/mshykov/local-review/internal/multi"
 )
 
 // fakeDetected is the standard 3-CLI setup used across selectAgents tests.
@@ -134,7 +136,7 @@ func TestSelectAgents_OnlyTrimsSpaces(t *testing.T) {
 func TestSelectAgents_TimeoutCarriesOver(t *testing.T) {
 	// Per-LLM timeout from config must be threaded through; previously a
 	// codex review with 240s timeout would silently get the default 120
-	// because withTimeout wasn't called consistently.
+	// because applyConfig wasn't called consistently.
 	ready := map[string]bool{"claude": true}
 	cfg := config.Config{
 		LLMs: map[string]config.LLMConfig{
@@ -150,6 +152,29 @@ func TestSelectAgents_TimeoutCarriesOver(t *testing.T) {
 	}
 	if got != 240 {
 		t.Errorf("claude.TimeoutSec: want 240 (from config), got %d", got)
+	}
+}
+
+func TestSelectAgents_ModelCarriesOver(t *testing.T) {
+	// Per-LLM model from config (or --claude-model flag, which writes
+	// to cfg before pickAgents runs) must reach the runtime LLM struct
+	// so the invoker can pass it on the CLI command line. Pre-fix this
+	// silently dropped on the floor — the roster printed the configured
+	// model but the invoker only saw Path.
+	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
+	cfg := config.Config{
+		LLMs: map[string]config.LLMConfig{
+			"claude": {Model: "claude-opus-4-7"},
+			"gemini": {Model: "gemini-2.0-flash"},
+			"codex":  {Model: "gpt-5"},
+		},
+	}
+	active, _ := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{})
+	want := map[string]string{"claude": "claude-opus-4-7", "gemini": "gemini-2.0-flash", "codex": "gpt-5"}
+	for _, llm := range active {
+		if llm.Model != want[llm.Name] {
+			t.Errorf("%s.Model: want %q, got %q", llm.Name, want[llm.Name], llm.Model)
+		}
 	}
 }
 
@@ -180,6 +205,19 @@ func TestApplyFlagsToConfig_PerAgentModelOnEmptyMap(t *testing.T) {
 	applyFlagsToConfig(&cfg, sf)
 	if got := cfg.LLMs["claude"].Model; got != "claude-opus-4-7" {
 		t.Errorf("model on empty cfg: got %q", got)
+	}
+}
+
+func TestApplyFlagsToConfig_MergeWithReflectsInConfig(t *testing.T) {
+	// `local-review config --merge-with claude` should print the
+	// chosen agent in the rendered YAML's merge.preferred_llm. Pre-fix
+	// applyFlagsToConfig didn't touch Merge, so the preview was
+	// misleading even though runtime merge selection honored the flag.
+	cfg := config.Defaults()
+	sf := &sharedFlags{mergeWith: "claude"}
+	applyFlagsToConfig(&cfg, sf)
+	if cfg.Merge.PreferredLLM != "claude" {
+		t.Errorf("Merge.PreferredLLM: want claude, got %q", cfg.Merge.PreferredLLM)
 	}
 }
 
@@ -343,6 +381,31 @@ func TestMergedHasBlocking(t *testing.T) {
 			md:   "## Critical Issues\nNone.\n\n## Major Issues\n*(None)*\n",
 			want: false,
 		},
+		{
+			name: "Recommendation: BLOCK MERGE blocks even with empty sections",
+			md:   "## Summary\n- **Recommendation**: BLOCK MERGE\n\n## Critical Issues\n*(None)*\n",
+			want: true,
+		},
+		{
+			name: "Recommendation: REQUEST CHANGES blocks too",
+			md:   "## Summary\n**Recommendation**: REQUEST CHANGES\n\n## Critical Issues\n*(None)*\n",
+			want: true,
+		},
+		{
+			name: "Recommendation: APPROVE alone does not block",
+			md:   "## Summary\n- **Recommendation**: APPROVE\n\n## Critical Issues\n*(None)*\n",
+			want: false,
+		},
+		{
+			name: "alternate heading 'Critical' (without 'Issues') with content blocks",
+			md:   "## Critical\n- something is broken at file:42\n\n## Major\n*(None)*\n",
+			want: true,
+		},
+		{
+			name: "ALL-CAPS 'CRITICAL ISSUES' heading still blocks",
+			md:   "## CRITICAL ISSUES\n- file:99 race condition\n",
+			want: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -353,12 +416,41 @@ func TestMergedHasBlocking(t *testing.T) {
 	}
 }
 
-func TestResolveCommitBranch_DetachedHEADGetsSyntheticName(t *testing.T) {
-	// We can't easily fake git here, so exercise the synthetic-name
-	// codepath directly via the helper logic: when CurrentBranch() returns
-	// "HEAD" (detached) we substitute `detached-<short-sha>`. Pin the
-	// shape so a future "just error in detached HEAD" regression fails
-	// loudly — the v0 path worked there and we promised not to break it.
+// Note: this exercises the syntheticDetachedBranch helper directly,
+// not resolveCommitBranch (which shells out to git). The shape it pins
+// is the user-visible promise: detached HEAD must produce a stable,
+// per-commit synthetic name so storage doesn't collide. A future
+// "just error in detached HEAD" regression should fail this test loudly.
+func TestAnyPerLLMHasBlocking_DefendsAgainstMergerTruncation(t *testing.T) {
+	// MaxReviewBytesForMerge truncates each per-LLM review to 8 KB
+	// before feeding the merger. A reviewer that places a Critical
+	// finding on byte 9000+ would have it dropped from the merger
+	// input → merged output → mergedHasBlocking. The on-disk file
+	// still has it, but the gate would exit 0. Independent
+	// pre-truncation scan closes that gap.
+	clean := "## Summary\n- **Recommendation**: APPROVE\n\n## Critical Issues\n*(None)*\n"
+	withBlock := strings.Repeat("Filler line.\n", 1000) +
+		"\n## Critical Issues\n- **file.go:42** — buffer overflow under load\n"
+
+	if anyPerLLMHasBlocking([]multi.ReviewResult{{LLM: "x", Output: clean}}) {
+		t.Error("clean output should not trip the gate")
+	}
+	if !anyPerLLMHasBlocking([]multi.ReviewResult{{LLM: "x", Output: withBlock}}) {
+		t.Error("blocking finding past 8 KB cutoff must still trip the gate")
+	}
+	mixed := []multi.ReviewResult{
+		{LLM: "a", Output: clean},
+		{LLM: "b", Output: withBlock},
+	}
+	if !anyPerLLMHasBlocking(mixed) {
+		t.Error("any blocking review in the set must trip the gate")
+	}
+	if anyPerLLMHasBlocking([]multi.ReviewResult{{LLM: "x", Output: ""}}) {
+		t.Error("empty review output must not be treated as blocking")
+	}
+}
+
+func TestSyntheticDetachedBranch(t *testing.T) {
 	for _, branch := range []string{"HEAD", "unknown"} {
 		const sha = "abc123def456789012345678901234567890aaaa"
 		got := syntheticDetachedBranch(branch, sha)

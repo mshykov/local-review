@@ -33,13 +33,17 @@ func TestSeverityJSONRoundTrip(t *testing.T) {
 }
 
 func TestSeverityUnmarshalUnknown(t *testing.T) {
-	// Unknown strings demote to warning, matching ParseSeverity.
+	// Unknown strings *promote* to major — fail-closed for the gate.
+	// LLM typos ("criticl", "sev-high", "BLOCKER") used to silently
+	// demote to warning, hiding real blocking findings from the
+	// pre-commit hook. We'd rather over-block a malformed finding than
+	// under-block a real one.
 	var got Severity
 	if err := json.Unmarshal([]byte(`"bogus"`), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got != SeverityWarning {
-		t.Errorf("unknown -> %v, want %v", got, SeverityWarning)
+	if got != SeverityMajor {
+		t.Errorf("unknown -> %v, want %v (fail-closed)", got, SeverityMajor)
 	}
 }
 

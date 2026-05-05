@@ -59,36 +59,63 @@ func reset(on bool) string {
 	return ""
 }
 
-// WriteText renders a Report to w as terminal-friendly text.
-func WriteText(w io.Writer, r review.Report) {
+// WriteText renders a Report to w as terminal-friendly text. Returns
+// the first I/O error from the underlying writer. Previously this was
+// fire-and-forget — a broken-pipe (`local-review staged | head`) or
+// disk-full (`> /dev/full`) would silently exit 0 even though no
+// findings reached the user. Mirrors the errWriter pattern doctor.go
+// uses so callers get a single error to check at the end.
+func WriteText(w io.Writer, r review.Report) error {
+	ew := &errWriter{w: w}
 	color := useColor()
 	if len(r.Findings) == 0 {
-		fmt.Fprintf(w, "%sno findings%s — %d files reviewed via %s\n",
+		fmt.Fprintf(ew, "%sno findings%s — %d files reviewed via %s\n",
 			ifColor(color, colorDim), reset(color), r.Meta.Files, r.Meta.Model)
-		return
+		return ew.err
 	}
 
-	fmt.Fprintf(w, "%s%d finding(s)%s — %d files reviewed via %s\n\n",
+	fmt.Fprintf(ew, "%s%d finding(s)%s — %d files reviewed via %s\n\n",
 		ifColor(color, colorBold), len(r.Findings), reset(color), r.Meta.Files, r.Meta.Model)
 
 	for _, f := range r.Findings {
 		sevC := severityColor(f.Severity, color)
 		// Severity tag + location
-		fmt.Fprintf(w, "%s[%s]%s %s%s%s\n",
+		fmt.Fprintf(ew, "%s[%s]%s %s%s%s\n",
 			sevC, f.Severity, reset(color),
 			ifColor(color, colorCyan), f.Loc(), reset(color))
 		// Title
-		fmt.Fprintf(w, "  %s%s%s\n", ifColor(color, colorBold), f.Title, reset(color))
+		fmt.Fprintf(ew, "  %s%s%s\n", ifColor(color, colorBold), f.Title, reset(color))
 		// Body
 		if f.Body != "" {
-			fmt.Fprintf(w, "  %s\n", f.Body)
+			fmt.Fprintf(ew, "  %s\n", f.Body)
 		}
 		// Optional tag
 		if f.Tag != "" {
-			fmt.Fprintf(w, "  %s#%s%s\n", ifColor(color, colorMagenta), f.Tag, reset(color))
+			fmt.Fprintf(ew, "  %s#%s%s\n", ifColor(color, colorMagenta), f.Tag, reset(color))
 		}
-		fmt.Fprintln(w)
+		fmt.Fprintln(ew)
 	}
+	return ew.err
+}
+
+// errWriter is an io.Writer that captures the first error from the
+// underlying writer and short-circuits subsequent writes — same shape
+// as the doctor's errWriter so multi-line output can ignore the per-
+// fmt.Fprintf return values and check one error at the end.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (ew *errWriter) Write(p []byte) (int, error) {
+	if ew.err != nil {
+		return 0, ew.err
+	}
+	n, err := ew.w.Write(p)
+	if err != nil {
+		ew.err = err
+	}
+	return n, err
 }
 
 // WriteJSON renders a Report as machine-readable JSON.

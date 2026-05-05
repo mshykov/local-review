@@ -57,11 +57,40 @@ func runDoctor(out io.Writer) error {
 	fmt.Fprintln(w, "Checking LLM installations and authentication...")
 	fmt.Fprintln(w)
 
-	llms := cli.DetectAll()
+	// Mirror the runner: honor cfg.LLMs[*].CLIPath overrides so doctor
+	// and runtime see the same binaries. Without this a user with a
+	// custom cli_path would see ✗ in doctor but a successful run, or
+	// vice versa.
+	overrides := map[string]string{}
+	customEnvVars := map[string]string{}
+	cfg, cfgErr := loadConfig()
+	if cfgErr != nil {
+		// Surface the failure inline. doctor's whole job is "tell me
+		// what state the user's setup is in"; silently falling back to
+		// defaults here would print cli_path / api_key_env diagnostics
+		// based on built-ins exactly when the user is debugging why
+		// their config isn't taking effect.
+		fmt.Fprintf(w, "WARNING: failed to load config: %v\n", cfgErr)
+		fmt.Fprintln(w, "         Falling back to compiled-in defaults; cli_path / api_key_env shown below may not reflect your config.")
+		fmt.Fprintln(w)
+	} else {
+		for name, c := range cfg.LLMs {
+			if c.CLIPath != "" {
+				overrides[name] = c.CLIPath
+			}
+			// Honor cfg.LLMs[*].APIKeyEnv so a user with a key under,
+			// say, MY_GEMINI_KEY sees ✓ ready instead of "not authed".
+			// Empty falls through to the canonical default per LLM.
+			if c.APIKeyEnv != "" {
+				customEnvVars[name] = c.APIKeyEnv
+			}
+		}
+	}
+	llms := cli.DetectAllWithOverrides(overrides)
 
 	readyCount := 0
 	for _, llm := range llms {
-		status, auth := classify(llm)
+		status, auth := classify(llm, customEnvVars[llm.Name])
 		if status == statusReady {
 			readyCount++
 		}
@@ -107,14 +136,19 @@ const (
 
 // classify returns both the bucket and the underlying authStatus so
 // the caller can render either without re-running auth checks.
-func classify(llm cli.LLM) (llmStatus, authStatus) {
+//
+// customEnvVar — when non-empty — replaces the canonical env var name
+// in the auth check (e.g., a config with `api_key_env: MY_GEMINI_KEY`
+// makes us look at $MY_GEMINI_KEY instead of $GEMINI_API_KEY). Empty
+// keeps the canonical default.
+func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 	if !llm.Available {
 		if llm.Path != "" {
 			return statusBrokenInstall, authStatus{}
 		}
 		return statusNotInstalled, authStatus{}
 	}
-	auth := checkAuth(llm.Name)
+	auth := checkAuth(llm.Name, customEnvVar)
 	if !auth.authenticated {
 		return statusNotAuthed, auth
 	}
@@ -196,17 +230,27 @@ type authStatus struct {
 //   - Most CLIs themselves apply the same rule when picking credentials.
 //   - Without this, doctor would lie when a user with a stale OAuth
 //     login exports a fresh API key for testing.
-func checkAuth(name string) authStatus {
+func checkAuth(name, customEnvVar string) authStatus {
 	switch name {
 	case "claude":
-		return checkClaudeAuth()
+		return checkClaudeAuth(customEnvVar)
 	case "gemini":
-		return checkGeminiAuth()
+		return checkGeminiAuth(customEnvVar)
 	case "codex":
-		return checkCodexAuth()
+		return checkCodexAuth(customEnvVar)
 	default:
 		return authStatus{}
 	}
+}
+
+// resolveEnvVar returns customEnvVar when non-empty, otherwise the
+// canonical default for the named LLM. Centralised so the three
+// per-LLM check functions don't each repeat the fallback logic.
+func resolveEnvVar(name, customEnvVar string) string {
+	if customEnvVar != "" {
+		return customEnvVar
+	}
+	return cli.CanonicalAPIKeyEnv[name]
 }
 
 // authHomeDir returns the directory where each CLI stores its auth.
@@ -223,11 +267,12 @@ func authHomeDir() string {
 	return ""
 }
 
-func checkClaudeAuth() authStatus {
-	if os.Getenv("ANTHROPIC_API_KEY") != "" {
+func checkClaudeAuth(customEnvVar string) authStatus {
+	envVar := resolveEnvVar("claude", customEnvVar)
+	if os.Getenv(envVar) != "" {
 		return authStatus{
 			authenticated: true,
-			detail:        "ANTHROPIC_API_KEY env var set",
+			detail:        envVar + " env var set",
 		}
 	}
 	// Claude Code stores tokens in macOS Keychain (or equivalent on
@@ -246,7 +291,7 @@ func checkClaudeAuth() authStatus {
 	}
 	return authStatus{
 		authenticated: false,
-		hint:          "run 'claude login' (free, uses your claude.ai account) — or export ANTHROPIC_API_KEY=...",
+		hint:          fmt.Sprintf("run 'claude login' (free, uses your claude.ai account) — or export %s=...", envVar),
 	}
 }
 
@@ -272,11 +317,12 @@ func hasRecentClaudeSession(sessionsDir string) bool {
 	return false
 }
 
-func checkGeminiAuth() authStatus {
-	if os.Getenv("GEMINI_API_KEY") != "" {
+func checkGeminiAuth(customEnvVar string) authStatus {
+	envVar := resolveEnvVar("gemini", customEnvVar)
+	if os.Getenv(envVar) != "" {
 		return authStatus{
 			authenticated: true,
-			detail:        "GEMINI_API_KEY env var set",
+			detail:        envVar + " env var set",
 		}
 	}
 	// Gemini CLI stores OAuth state in ~/.gemini/google_accounts.json
@@ -297,15 +343,16 @@ func checkGeminiAuth() authStatus {
 	}
 	return authStatus{
 		authenticated: false,
-		hint:          "export GEMINI_API_KEY=... (free at https://aistudio.google.com/apikey) — or run 'gemini /auth' for Google OAuth",
+		hint:          fmt.Sprintf("export %s=... (free at https://aistudio.google.com/apikey) — or run 'gemini /auth' for Google OAuth", envVar),
 	}
 }
 
-func checkCodexAuth() authStatus {
-	if os.Getenv("OPENAI_API_KEY") != "" {
+func checkCodexAuth(customEnvVar string) authStatus {
+	envVar := resolveEnvVar("codex", customEnvVar)
+	if os.Getenv(envVar) != "" {
 		return authStatus{
 			authenticated: true,
-			detail:        "OPENAI_API_KEY env var set",
+			detail:        envVar + " env var set",
 		}
 	}
 	// Codex stores an explicit auth_mode field in ~/.codex/auth.json.
@@ -352,6 +399,6 @@ func checkCodexAuth() authStatus {
 	}
 	return authStatus{
 		authenticated: false,
-		hint:          "run 'codex login' (ChatGPT Plus, $20/mo) — or export OPENAI_API_KEY=... (pay-per-token, usually cheaper)",
+		hint:          fmt.Sprintf("run 'codex login' (ChatGPT Plus, $20/mo) — or export %s=... (pay-per-token, usually cheaper)", envVar),
 	}
 }

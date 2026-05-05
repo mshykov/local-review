@@ -7,9 +7,11 @@
 package git
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -59,7 +61,19 @@ func Extract(mode Mode, ref string) ([]Diff, error) {
 		return nil, fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, stderr.String())
 	}
 
-	return parseUnifiedDiff(stdout.String()), nil
+	// Stream-parse stdout via bytes.NewReader → bufio.Scanner so we
+	// don't double-buffer the diff (string copy + strings.Split slice).
+	// Large monorepo branch diffs hit 10s of MB; the legacy version
+	// held 3-4 copies of that in flight.
+	diffs, err := parseUnifiedDiff(bytes.NewReader(stdout.Bytes()))
+	if err != nil {
+		// Fail closed: a scanner error means we have only the prefix
+		// of the diff, and the unscanned tail might contain blocking
+		// changes. Returning a partial slice + nil err would let the
+		// gate exit 0 on a materially incomplete review.
+		return nil, fmt.Errorf("parse diff: %w", err)
+	}
+	return diffs, nil
 }
 
 func argsFor(mode Mode, ref string) ([]string, error) {
@@ -74,34 +88,88 @@ func argsFor(mode Mode, ref string) ([]string, error) {
 		if ref == "" {
 			ref = "HEAD"
 		}
+		if err := ValidateRef(ref); err != nil {
+			return nil, err
+		}
 		// `show` by itself includes the commit message. We just want the diff.
 		return []string{"show", ctx, "--format=", ref}, nil
 	case ModeBranch:
 		if ref == "" {
 			ref = "main"
 		}
+		if err := ValidateRef(ref); err != nil {
+			return nil, err
+		}
 		// Three-dot: diff from common ancestor to current HEAD.
+		// Note: we can't use `--` to separate the ref from positional
+		// args here because `<ref>...HEAD` is itself a single ref-spec
+		// argument, not a path. ValidateRef above is the defense.
 		return []string{"diff", ctx, ref + "...HEAD"}, nil
 	default:
 		return nil, fmt.Errorf("unknown mode %d", mode)
 	}
 }
 
+// ValidateRef rejects user-supplied git refs that could be parsed by
+// git as command-line flags rather than refs. A ref starting with `-`
+// (e.g., `--output=/tmp/xyz`, `-c core.editor=...`) would be treated
+// as a flag in `git diff <ref>...HEAD` or `git show <ref>` despite
+// looking like a positional argument, so we refuse anything that
+// shape rather than relying on a `--` separator that doesn't apply
+// uniformly across git subcommands.
+//
+// We also reject refs containing newlines or NUL bytes because they
+// can't survive a shell pipeline correctly and almost always indicate
+// caller bugs (or attempted injection from a wrapping script).
+func ValidateRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("ref is empty")
+	}
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("invalid ref %q: refs starting with '-' are rejected to prevent flag injection", ref)
+	}
+	if strings.ContainsAny(ref, "\x00\n\r") {
+		return fmt.Errorf("invalid ref %q: contains control characters", ref)
+	}
+	return nil
+}
+
 // parseUnifiedDiff walks `git diff` output and groups hunks by file.
 // We don't need a fully-featured patch library — just enough to feed
 // content + line numbers to the LLM.
-func parseUnifiedDiff(s string) []Diff {
-	// Normalize CRLF so trailing \r doesn't end up in paths/hunks.
-	s = strings.ReplaceAll(s, "\r\n", "\n")
+//
+// Streams via bufio.Reader so a large diff doesn't double-buffer
+// (legacy: stdout.String() + strings.Split slice). Each hunk's body
+// builds in a strings.Builder so even a single huge hunk doesn't go
+// quadratic on the content concatenation.
+//
+// We use Reader.ReadString('\n') rather than Scanner because Scanner
+// caps line size (we'd previously bumped to 4 MB, but a single
+// minified-bundle line in a vendored blob can easily exceed that and
+// would trip ErrTooLong, aborting the entire review even if globs
+// would have excluded that file). Reader has no per-line limit —
+// memory grows with the longest single line, which is the same
+// memory the input string already used in the legacy path.
+//
+// Returns an error when read itself fails (underlying I/O error).
+// Caller MUST treat that as fail-closed: a partial diff would let the
+// review gate exit 0 on what's materially an incomplete read of the
+// change set.
+func parseUnifiedDiff(r io.Reader) ([]Diff, error) {
+	br := bufio.NewReader(r)
+
 	var diffs []Diff
 	var cur *Diff
 	var hunk *Hunk
+	var hunkBody strings.Builder
 
 	flushHunk := func() {
 		if cur != nil && hunk != nil {
+			hunk.Content = hunkBody.String()
 			cur.Hunks = append(cur.Hunks, *hunk)
 		}
 		hunk = nil
+		hunkBody.Reset()
 	}
 	flushFile := func() {
 		flushHunk()
@@ -111,23 +179,65 @@ func parseUnifiedDiff(s string) []Diff {
 		cur = nil
 	}
 
-	for _, line := range strings.Split(s, "\n") {
-		switch {
-		case strings.HasPrefix(line, "diff --git"):
-			flushFile()
-			cur = &Diff{}
-		case strings.HasPrefix(line, "+++ b/"):
-			if cur != nil {
-				cur.Path = strings.TrimPrefix(line, "+++ b/")
+	// Case order matters here — once we're inside a hunk (post-@@),
+	// every line is content even if it happens to start with `--- a/`
+	// or `+++ b/`. A deleted SQL comment `-- a/users` renders as
+	// `--- a/users` in the diff (the leading `-` is the diff prefix),
+	// and the previous case order matched that as a file header,
+	// silently overwriting cur.Path AND swallowing the line from the
+	// hunk content. Putting `hunk != nil` ahead of the header cases
+	// makes header recognition pre-@@ only.
+	for {
+		raw, readErr := br.ReadString('\n')
+		// ReadString returns the partial line + io.EOF when input
+		// ends mid-line (no trailing newline). Process the line we
+		// have, then break on EOF; only non-EOF errors are fatal.
+		if len(raw) > 0 {
+			// Strip trailing \n then \r so CRLF input doesn't leak
+			// \r into paths or hunk content. (Same job the old
+			// strings.ReplaceAll did, done per-line during streaming.)
+			line := strings.TrimRight(strings.TrimSuffix(raw, "\n"), "\r")
+			switch {
+			case strings.HasPrefix(line, "diff --git"):
+				flushFile()
+				cur = &Diff{}
+			case strings.HasPrefix(line, "@@"):
+				flushHunk()
+				hunk = &Hunk{Header: line, NewFrom: parseNewFrom(line)}
+			case hunk != nil:
+				// Inside a hunk → all lines are content, regardless of
+				// what they look like. See the "Case order matters" comment
+				// above for why this can't move below the header cases.
+				hunkBody.WriteString(line)
+				hunkBody.WriteByte('\n')
+			case strings.HasPrefix(line, "--- a/"):
+				// Capture the original path as a fallback for deletions —
+				// `+++ /dev/null` is the standard `git diff` shape for a
+				// deleted file, so reading +++ alone would attribute every
+				// deletion to "/dev/null" and silently break filtering,
+				// finding attribution, and any path-based downstream logic.
+				if cur != nil {
+					cur.Path = strings.TrimPrefix(line, "--- a/")
+				}
+			case strings.HasPrefix(line, "+++ b/"):
+				if cur != nil {
+					cur.Path = strings.TrimPrefix(line, "+++ b/")
+				}
+			case strings.HasPrefix(line, "+++ ") && cur != nil && cur.Path == "":
+				// Fallback for unusual paths (e.g. patches with non-standard
+				// prefixes). Skip the "+++ /dev/null" deletion shape — we
+				// already captured the original path from --- above.
+				suffix := strings.TrimPrefix(line, "+++ ")
+				if suffix != "/dev/null" {
+					cur.Path = suffix
+				}
 			}
-		case strings.HasPrefix(line, "+++ ") && cur != nil && cur.Path == "":
-			// Fallback for unusual paths
-			cur.Path = strings.TrimPrefix(line, "+++ ")
-		case strings.HasPrefix(line, "@@"):
-			flushHunk()
-			hunk = &Hunk{Header: line, NewFrom: parseNewFrom(line)}
-		case hunk != nil:
-			hunk.Content += line + "\n"
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("scan diff: %w", readErr)
 		}
 	}
 	flushFile()
@@ -139,7 +249,7 @@ func parseUnifiedDiff(s string) []Diff {
 			out = append(out, d)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // parseNewFrom extracts the "+N" line number from a hunk header
@@ -228,12 +338,19 @@ func SanitizeCommit(commit string) string {
 }
 
 // ResolveRef resolves a git ref (branch name, tag, short hash) to a full commit hash.
-// Returns the first 7 characters of the commit hash, or empty string if resolution fails or times out.
+// Returns the first 7 characters of the commit hash, or empty string
+// if resolution fails / times out / the ref is rejected by ValidateRef
+// (refs starting with `-` would otherwise be parsed by git as flags).
 func ResolveRef(ref string) string {
+	if err := ValidateRef(ref); err != nil {
+		return ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", ref)
+	// `--` after the flags ensures the ref is treated as a positional
+	// argument even if a future caller bypasses ValidateRef.
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", "--", ref)
 	output, err := cmd.Output()
 	if err != nil {
 		return ""

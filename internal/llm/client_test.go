@@ -242,6 +242,100 @@ func TestComplete_EmptyChoicesReturnsError(t *testing.T) {
 	}
 }
 
+func TestComplete_LocalURLOmitsAuthorizationHeaderOnEmptyKey(t *testing.T) {
+	// Pre-fix: even with an empty key (the local-URL bypass), we
+	// still set `Authorization: Bearer ` on the outgoing request.
+	// Some local OpenAI-compat servers (Ollama, vLLM) reject or
+	// log-spam on an empty bearer token; the absent-header form is
+	// what they expect for unauthenticated mode.
+	m := newMockServer(t, okResponse("ok"))
+	c := New(m.server.URL, "", "LOCAL_REVIEW_API_KEY", "ollama-model", 5)
+	if _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := m.lastRequest.Header.Get("Authorization"); got != "" {
+		t.Errorf("Authorization header should be absent on empty key, got %q", got)
+	}
+}
+
+func TestComplete_NonEmptyKeyStillSetsAuthorizationHeader(t *testing.T) {
+	// Sanity: the header conditional must not regress the normal path.
+	m := newMockServer(t, okResponse("ok"))
+	c := New(m.server.URL, "sk-real", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
+	if _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got, want := m.lastRequest.Header.Get("Authorization"), "Bearer sk-real"; got != want {
+		t.Errorf("Authorization: want %q, got %q", want, got)
+	}
+}
+
+func TestComplete_LocalURLSkipsKeyRequirement(t *testing.T) {
+	// Ollama / vLLM at localhost don't authenticate; the init wizard's
+	// Ollama preset deliberately omits api_key_env. Pre-fix we still
+	// rejected with "no API key" for those URLs. Now: localhost-shaped
+	// base_url + empty key proceeds to the actual call (which the test
+	// mock satisfies).
+	m := newMockServer(t, okResponse("ok-local"))
+	// Replace the mock URL's host with 127.0.0.1 explicitly to exercise
+	// the local-host detector. httptest already binds there.
+	c := New(m.server.URL, "", "LOCAL_REVIEW_API_KEY", "ollama-model", 5)
+	got, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	if err != nil {
+		t.Fatalf("local URL with empty key should succeed, got %v", err)
+	}
+	if got != "ok-local" {
+		t.Errorf("response: got %q, want ok-local", got)
+	}
+}
+
+func TestIsLocalURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"http://localhost:11434/v1", true},
+		{"http://127.0.0.1:8080/v1", true},
+		{"http://127.99.0.1/v1", true},
+		{"http://[::1]:8000/v1", true},
+		{"http://0.0.0.0:11434/v1", true},
+		{"https://api.openai.com/v1", false},
+		{"https://api.anthropic.com/v1", false},
+		{"http://10.0.0.5:8080/v1", false}, // private but not loopback
+		{"http://192.168.1.10/v1", false},
+		{"", false},
+		{"::not a url::", false},
+	}
+	for _, tc := range cases {
+		if got := isLocalURL(tc.in); got != tc.want {
+			t.Errorf("isLocalURL(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestComplete_RejectsOversizedResponse(t *testing.T) {
+	// A spoofed/runaway provider must not OOM the CLI by streaming
+	// unbounded bytes. The cap is 10 MB; write 12 MB and confirm we
+	// get a clear error instead of silently buffering 12 MB of garbage.
+	m := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// 12 MB of `x` — well past the 10 MB cap.
+		// errcheck/linter cleanliness: the write may short-circuit when
+		// the client side detects the cap and closes mid-stream, which
+		// is the whole point of this test. Discard the return.
+		_, _ = w.Write(make([]byte, 12*1024*1024))
+	})
+	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 30)
+
+	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	if err == nil {
+		t.Fatal("expected oversize error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeded") {
+		t.Errorf("error should mention size cap, got: %v", err)
+	}
+}
+
 func TestComplete_MalformedJSONResponse(t *testing.T) {
 	m := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

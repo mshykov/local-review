@@ -12,8 +12,10 @@ import (
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/git"
+	"github.com/mshykov/local-review/internal/lang"
 	"github.com/mshykov/local-review/internal/multi"
 	"github.com/mshykov/local-review/internal/output"
+	"github.com/mshykov/local-review/internal/prompts"
 	"github.com/mshykov/local-review/internal/review"
 )
 
@@ -26,10 +28,25 @@ var errBlockingFindings = errors.New("blocking findings present")
 // selectAgents with a real cli.DetectAll() + classify() call; tests
 // drive selectAgents directly with synthetic input.
 func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDisabled []string) {
-	detected := cli.DetectAll()
+	// Honor cfg.LLMs[*].CLIPath when set — corporate / nix-store installs
+	// at non-standard paths can override the default binary name.
+	overrides := make(map[string]string, len(cfg.LLMs))
+	for name, c := range cfg.LLMs {
+		if c.CLIPath != "" {
+			overrides[name] = c.CLIPath
+		}
+	}
+	detected := cli.DetectAllWithOverrides(overrides)
 	ready := make(map[string]bool, len(detected))
 	for _, llm := range detected {
-		status, _ := classify(llm)
+		// Mirror doctor: honor cfg.LLMs[*].APIKeyEnv so a user with
+		// a key under a non-canonical env var gets ✓ ready instead
+		// of being silently filtered out.
+		var customEnvVar string
+		if c, ok := cfg.LLMs[llm.Name]; ok {
+			customEnvVar = c.APIKeyEnv
+		}
+		status, _ := classify(llm, customEnvVar)
 		ready[llm.Name] = status == statusReady
 	}
 	return selectAgents(detected, ready, cfg, sf)
@@ -53,7 +70,7 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 			if !ready[llm.Name] {
 				continue
 			}
-			active = append(active, withTimeout(llm, cfg))
+			active = append(active, applyConfig(llm, cfg))
 		}
 		return active, nil
 	}
@@ -66,7 +83,7 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 			configDisabled = append(configDisabled, llm.Name)
 			continue
 		}
-		active = append(active, withTimeout(llm, cfg))
+		active = append(active, applyConfig(llm, cfg))
 	}
 	return active, configDisabled
 }
@@ -86,9 +103,28 @@ func parseOnlyList(s string) map[string]bool {
 	return out
 }
 
-func withTimeout(llm cli.LLM, cfg config.Config) cli.LLM {
-	if c, ok := cfg.LLMs[llm.Name]; ok && c.TimeoutSec > 0 {
-		llm.TimeoutSec = c.TimeoutSec
+// applyConfig threads per-agent config (model, timeout) onto the
+// detected LLM struct so it reaches the invoker — without this the
+// Detector returns name+path+version only and per-agent --*-model /
+// timeout config is silently dropped on the floor.
+//
+// Renamed from withTimeout to reflect the broader scope; the function
+// now owns "everything from cfg.LLMs[llm.Name] that the invoker needs".
+func applyConfig(llm cli.LLM, cfg config.Config) cli.LLM {
+	if c, ok := cfg.LLMs[llm.Name]; ok {
+		if c.TimeoutSec > 0 {
+			llm.TimeoutSec = c.TimeoutSec
+		}
+		if c.Model != "" {
+			llm.Model = c.Model
+		}
+		// APIKey is already resolved from c.APIKeyEnv by
+		// config.resolveAPIKeys() during Load(), so the value is
+		// either the user's custom-env-var key or empty (in which
+		// case the CLI's own auth flow takes over).
+		if c.APIKey != "" {
+			llm.APIKey = c.APIKey
+		}
 	}
 	if llm.TimeoutSec == 0 {
 		llm.TimeoutSec = 120
@@ -113,11 +149,30 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	if err != nil {
 		return fmt.Errorf("extract diff: %w", err)
 	}
+	// Apply review.include/review.exclude before fan-out. The single-
+	// LLM fallback already does this in internal/review/review.go; the
+	// multi-LLM path skipped it pre-v0.5.x, so users with tuned glob
+	// configs (e.g. exclude: ["**/generated/**"]) silently saw the LLM
+	// review their auto-generated files.
+	diffs = review.FilterDiffs(diffs, cfg.Review.IncludeGlobs, cfg.Review.ExcludeGlobs)
 	if len(diffs) == 0 {
 		fmt.Println("No changes to review.")
 		return nil
 	}
 	diffStr := formatDiffForLLM(diffs)
+
+	// Pick the language pack the same way the single-LLM path does
+	// (review.go:43-50). Pre-v0.6.x the multi-LLM path skipped this
+	// entirely — every agent ran with a generic 4-bullet prompt while
+	// the README claimed language-specific packs were applied. Now
+	// each agent gets the same Go/TS/Python/Rust pack the single-LLM
+	// path uses, with a markdown-output override appended (see
+	// multiLLMOutputOverride in cli/invoker.go) so the merger can
+	// consolidate prose across reviewers.
+	systemPrompt, err := selectPromptPack(cfg, diffs)
+	if err != nil {
+		return err
+	}
 
 	commit, branch, err := resolveCommitBranch(mode, ref)
 	if err != nil {
@@ -128,7 +183,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)
 
-	results, err := orch.RunParallel(ctx, diffStr, commit, branch)
+	results, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
 	if err != nil {
 		return fmt.Errorf("run reviews: %w", err)
 	}
@@ -163,40 +218,111 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	}
 
 	// Per-LLM reviews succeeded but the merge step didn't produce
-	// content (mergeLLM unavailable, merger error, save failed, etc.).
-	// Without a merged report the blocking-finding gate can't run, and
-	// returning nil here would silently exit 0 — a pre-commit hook would
-	// treat the commit as clean even though no gate ever fired. Return
-	// a regular error so the caller exits non-zero (per project policy:
-	// non-zero from tool-failure paths is fail-open in hooks, but the
-	// user sees the message and knows the gate didn't run).
-	if mergedContent == "" {
+	// content (mergeLLM unavailable, merger error, save failed, or the
+	// merger returned only whitespace). Without a merged report the
+	// blocking-finding gate can't run, and returning nil would silently
+	// exit 0 — a pre-commit hook would treat the commit as clean even
+	// though no gate ever fired. TrimSpace (not just == "") catches the
+	// "merger returned `\n`" variant that codex flagged as bypassing the
+	// v0.5.1 fix.
+	if strings.TrimSpace(mergedContent) == "" {
 		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s but the blocking-finding gate did not run", cfg.Storage.BasePath)
 	}
 
-	// Restore the pre-commit gate broken by the v0.5 multi-default flip.
-	// Single-LLM has structured findings → exits 2 cleanly. Multi-LLM
-	// merger returns markdown, so we look for non-empty severity
-	// sections to decide whether to fail the commit. Returning the
-	// sentinel (rather than os.Exit) lets cobra and main() unwind defers.
-	if mergedHasBlocking(mergedContent) {
+	// Two independent signals trip the gate (any one is enough). False
+	// positives are preferred over false negatives — over-blocking is
+	// a re-run, under-blocking is a shipped bug.
+	//
+	//  1. The merged markdown — what the merger LLM concluded after
+	//     seeing the (possibly-truncated) per-LLM reviews.
+	//  2. Each per-LLM review's full Output — defends against the
+	//     8 KB merger-input truncation hiding blocking findings past
+	//     the cut. The merger only sees the first 8 KB of each
+	//     reviewer; without this independent check, a verbose
+	//     reviewer that puts a critical finding past byte 8000 would
+	//     produce a false-clean exit. The on-disk per-LLM file has
+	//     always had the full output; this just scans it before we
+	//     decide.
+	//
+	// Returning the sentinel (rather than os.Exit) lets cobra and
+	// main() unwind defers.
+	if mergedHasBlocking(mergedContent) || anyPerLLMHasBlocking(results) {
 		return errBlockingFindings
 	}
 	return nil
 }
 
-// mergedHasBlocking returns true when the merged markdown report has a
-// "## Critical Issues" or "## Major Issues" section with at least one
-// finding (i.e., not just the placeholder *(None)* marker the merge
-// prompt template emits for empty buckets). Used to keep `local-review
-// staged` exiting 2 in a pre-commit hook even though the multi-LLM
-// merger returns prose, not structured findings.
+// anyPerLLMHasBlocking runs the same heuristic mergedHasBlocking uses
+// against each per-LLM Output, BEFORE the 8 KB truncation that
+// BuildMergeInput applies. If any reviewer raised a Critical / Major
+// finding (or BLOCK MERGE / REQUEST CHANGES verdict), the gate fires
+// even if the truncated merger input dropped it.
+func anyPerLLMHasBlocking(results []multi.ReviewResult) bool {
+	for _, r := range results {
+		if r.Output == "" {
+			continue
+		}
+		if mergedHasBlocking(r.Output) {
+			return true
+		}
+	}
+	return false
+}
+
+// mergedHasBlocking returns true when the merged markdown report
+// indicates blocking findings. We use two independent signals so that
+// LLM drift on one shape doesn't silently disable the gate:
+//
+//  1. The Recommendation line in the Summary block. The merge prompt
+//     pins this to "BLOCK MERGE" / "REQUEST CHANGES" / "APPROVE" — both
+//     of the first two count as blocking. Strongest signal because
+//     it's an explicit decision the merger has already made.
+//  2. Any non-placeholder content under a Critical / Major section
+//     heading (with a few common heading variants). Backstop for the
+//     case where the LLM forgets the Recommendation line but still
+//     enumerates findings.
+//
+// Either signal independently trips the gate. False positives are
+// preferred to false negatives — this is a security gate, the cost
+// of over-blocking is a re-run, the cost of under-blocking is a
+// shipped bug.
 func mergedHasBlocking(markdown string) bool {
 	if markdown == "" {
 		return false
 	}
-	return sectionHasContent(markdown, "Critical Issues") ||
-		sectionHasContent(markdown, "Major Issues")
+	if recommendationIsBlocking(markdown) {
+		return true
+	}
+	for _, name := range []string{
+		"Critical Issues", "Critical issues", "CRITICAL ISSUES", "Critical",
+		"Major Issues", "Major issues", "MAJOR ISSUES", "Major",
+	} {
+		if sectionHasContent(markdown, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// recommendationRE matches the "**Recommendation**: <verdict>" line
+// the merge prompt emits in the Summary block. Pre-compiled at
+// package level so anyPerLLMHasBlocking + mergedHasBlocking don't
+// pay regexp.MustCompile on every per-LLM output (one call per
+// reviewer, but adds up in tests and on big PRs).
+var recommendationRE = regexp.MustCompile(`(?im)^\s*-?\s*\**Recommendation\**\s*:\s*(.+?)\s*$`)
+
+// recommendationIsBlocking parses the "**Recommendation**: <verdict>"
+// line the merge prompt emits in the Summary block. Returns true when
+// the verdict is BLOCK MERGE or REQUEST CHANGES (case-insensitive).
+// APPROVE / unrecognized verdicts return false — the section-content
+// backstop in mergedHasBlocking still runs.
+func recommendationIsBlocking(markdown string) bool {
+	m := recommendationRE.FindStringSubmatch(markdown)
+	if m == nil {
+		return false
+	}
+	verdict := strings.ToUpper(strings.Trim(m[1], "* `"))
+	return strings.Contains(verdict, "BLOCK MERGE") || strings.Contains(verdict, "REQUEST CHANGES")
 }
 
 // sectionHasContent returns true when a "## <name>" heading has any
@@ -326,14 +452,17 @@ func resolveCommitBranch(mode git.Mode, ref string) (string, string, error) {
 	branch := git.CurrentBranch()
 
 	if mode == git.ModeCommit && ref != "" {
-		commit = ref
-		if len(commit) < 40 {
-			resolved := git.ResolveRef(ref)
-			if resolved == "" {
-				return "", "", fmt.Errorf("failed to resolve ref '%s' to commit hash", ref)
-			}
-			commit = resolved
+		// Always resolve, even for full 40-char SHAs — `git rev-parse
+		// --short` normalizes everything (branch name, tag, short hash,
+		// full hash) to the same canonical short form, so the same
+		// commit can't end up under two different storage keys when
+		// the user invokes `local-review commit abc1234` once and
+		// `local-review commit <full-40-char-sha>` another time.
+		resolved := git.ResolveRef(ref)
+		if resolved == "" {
+			return "", "", fmt.Errorf("failed to resolve ref '%s' to commit hash", ref)
 		}
+		commit = resolved
 	}
 
 	if commit == "HEAD" {
@@ -395,7 +524,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	}
 
 	mergeInput := multi.BuildMergeInput(results, cfg.Merge.ConsensusThreshold)
-	// pickAgents → withTimeout already enforces non-zero TimeoutSec on
+	// pickAgents → applyConfig already enforces non-zero TimeoutSec on
 	// every active LLM. Belt-and-suspenders: keep the explicit fallback
 	// so a future caller that bypasses pickAgents can't silently end up
 	// with `time.Duration(0)` = no timeout = a hung merge LLM hanging
@@ -457,7 +586,9 @@ func runSingleLLMFallback(ctx context.Context, cfg config.Config, sf *sharedFlag
 			return err
 		}
 	} else {
-		output.WriteText(os.Stdout, rep)
+		if err := output.WriteText(os.Stdout, rep); err != nil {
+			return err
+		}
 	}
 
 	if hasBlocking(rep) {
@@ -551,4 +682,26 @@ func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred
 		}
 	}
 	return nil
+}
+
+// selectPromptPack picks the language pack for this multi-LLM run.
+// Mirrors the single-LLM logic in internal/review/review.go: an
+// explicit review.prompt_pack in config wins, otherwise auto-detect
+// from the dominant language across the diff paths. The returned
+// string is the embedded pack content; the markdown-output override
+// is added by each invoker in internal/cli/invoker.go.
+func selectPromptPack(cfg config.Config, diffs []git.Diff) (string, error) {
+	packID := cfg.Review.PromptPack
+	if packID == "" {
+		paths := make([]string, len(diffs))
+		for i, d := range diffs {
+			paths[i] = d.Path
+		}
+		packID = lang.Dominant(paths)
+	}
+	pack, err := prompts.Get(packID)
+	if err != nil {
+		return "", fmt.Errorf("load prompt pack %q: %w", packID, err)
+	}
+	return pack, nil
 }

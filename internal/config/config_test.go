@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -141,11 +143,10 @@ func TestMergeReplaces_V01(t *testing.T) {
 		LLMs: map[string]LLMConfig{
 			"claude": {
 				Enabled: boolPtr(false), // disable claude
-				Mode:    "api",
+				Model:   "claude-3-haiku",
 			},
 			"custom": {
 				Enabled:    boolPtr(true),
-				Mode:       "cli",
 				CLIPath:    "custom-llm",
 				TimeoutSec: 60,
 			},
@@ -164,8 +165,8 @@ func TestMergeReplaces_V01(t *testing.T) {
 	if dst.LLMs["claude"].Enabled != nil && *dst.LLMs["claude"].Enabled {
 		t.Error("claude should be disabled after merge")
 	}
-	if dst.LLMs["claude"].Mode != "api" {
-		t.Errorf("claude mode = %q, want api", dst.LLMs["claude"].Mode)
+	if dst.LLMs["claude"].Model != "claude-3-haiku" {
+		t.Errorf("claude model = %q, want claude-3-haiku", dst.LLMs["claude"].Model)
 	}
 
 	// Check that custom LLM was added
@@ -208,7 +209,6 @@ llms:
   claude:
     enabled: false
   gemini:
-    mode: api
     model: gemini-1.5-flash
 merge:
   preferred_llm: gemini
@@ -227,9 +227,6 @@ storage:
 	// Check that LLMs were merged
 	if cfg.LLMs["claude"].Enabled != nil && *cfg.LLMs["claude"].Enabled {
 		t.Error("claude should be disabled")
-	}
-	if cfg.LLMs["gemini"].Mode != "api" {
-		t.Errorf("gemini mode = %q, want api", cfg.LLMs["gemini"].Mode)
 	}
 	if cfg.LLMs["gemini"].Model != "gemini-1.5-flash" {
 		t.Errorf("gemini model = %q", cfg.LLMs["gemini"].Model)
@@ -280,14 +277,129 @@ func TestValidate_InvalidPreferredLLM(t *testing.T) {
 	}
 }
 
-func TestValidate_InvalidMode(t *testing.T) {
+func TestValidate_StrayModeFieldIsIgnored(t *testing.T) {
+	// `mode:` was removed from LLMConfig in v0.5.x — it shipped in the
+	// v0.1 example but was never wired through to the orchestrator.
+	// Existing user YAML configs with `mode: cli|api|whatever` lines
+	// must keep loading: yaml.v3 silently drops unknown fields, and
+	// Validate must not refuse to start because of this legacy line.
 	cfg := Defaults()
-	claude := cfg.LLMs["claude"]
-	claude.Mode = "invalid"
-	cfg.LLMs["claude"] = claude
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Error("expected error for invalid mode")
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate failed on default config: %v", err)
 	}
+}
+
+// TestMergeCoversAllExportedFields enforces the maintenance contract
+// documented above merge(): every exported field on Config and its
+// nested structs must be wired into the overlay logic.
+//
+// Strategy: synthesize a `src` Config where every exported field has
+// a non-zero sentinel, merge onto a zeroed `dst`, then walk the result
+// via reflection and fail loudly on any field that's still its zero
+// value. Catches the "added field, forgot overlay branch" footgun the
+// reviewer flagged — `LLMConfig.Mode` shipped that way for several
+// minor releases until v0.5.x. The test costs nothing at runtime;
+// drift is caught the moment a new field lands.
+func TestMergeCoversAllExportedFields(t *testing.T) {
+	src := nonZeroConfig()
+	var dst Config
+	merge(&dst, src)
+
+	missing := findZeroFields(reflect.ValueOf(dst), "")
+	// merge() actually DOES copy the deprecated inline APIKey field
+	// for v0.4.x backward compat — a user with `api_key:` in their
+	// YAML still works, and warnDeprecatedAPIKeys nudges them toward
+	// env vars via stderr instead of silently dropping their key.
+	// So nothing is filtered out; if any exported field is missing,
+	// merge() needs an overlay branch.
+	if len(missing) > 0 {
+		t.Errorf("merge() didn't propagate these fields:\n  %s\n\n"+
+			"Add an overlay branch in merge() for each one. See the\n"+
+			"MAINTENANCE CONTRACT comment above merge().",
+			strings.Join(missing, "\n  "))
+	}
+}
+
+// nonZeroConfig returns a Config where every exported (non-deprecated)
+// field is set to a unique non-zero value. Sentinel values aren't
+// meaningful — we only assert presence after merge.
+func nonZeroConfig() Config {
+	enabled := true
+	dedup := true
+	return Config{
+		Provider: Provider{
+			BaseURL:    "https://example.test/v1",
+			Model:      "test-model",
+			APIKey:     "sk-test", // merge() does copy this for v0.4.x compat; warnDeprecatedAPIKeys nudges
+			APIKeyEnv:  "TEST_KEY",
+			TimeoutSec: 99,
+		},
+		Review: Review{
+			MinSeverity:  "major",
+			MaxFindings:  42,
+			IncludeGlobs: []string{"**/*.go"},
+			ExcludeGlobs: []string{"**/vendor/**"},
+			PromptPack:   "go",
+		},
+		Org: Org{
+			ConfigURL: "https://internal.test/lr.yml",
+		},
+		LLMs: map[string]LLMConfig{
+			"claude": {
+				Enabled:    &enabled,
+				CLIPath:    "/opt/test/claude",
+				Model:      "claude-test",
+				APIKeyEnv:  "TEST_ANTHROPIC",
+				APIKey:     "sk-test", // merge() copies for v0.4.x compat; deprecated, warnings nudge to env
+				TimeoutSec: 240,
+			},
+		},
+		Merge: MergeConfig{
+			PreferredLLM:       "claude",
+			Deduplicate:        &dedup,
+			ConsensusThreshold: 7,
+		},
+		Storage: StorageConfig{
+			BasePath: "/tmp/test-reviews",
+		},
+	}
+}
+
+// findZeroFields walks v's exported fields and returns dotted paths of
+// any that are still their zero value. Used to detect merge() drift.
+func findZeroFields(v reflect.Value, prefix string) []string {
+	var out []string
+	switch v.Kind() {
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			fv := v.Field(i)
+			ft := t.Field(i)
+			if !ft.IsExported() {
+				continue
+			}
+			path := prefix + ft.Name
+			out = append(out, findZeroFields(fv, path+".")...)
+		}
+	case reflect.Map:
+		if v.Len() == 0 {
+			out = append(out, strings.TrimSuffix(prefix, "."))
+			return out
+		}
+		// Recurse into one entry — sufficient to catch "the inner struct
+		// type isn't fully merged"; we don't need to walk every key.
+		for _, k := range v.MapKeys() {
+			out = append(out, findZeroFields(v.MapIndex(k), prefix+k.String()+".")...)
+			break
+		}
+	case reflect.Pointer:
+		if v.IsNil() {
+			out = append(out, strings.TrimSuffix(prefix, "."))
+		}
+	default:
+		if v.IsZero() {
+			out = append(out, strings.TrimSuffix(prefix, "."))
+		}
+	}
+	return out
 }

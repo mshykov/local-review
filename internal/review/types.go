@@ -36,7 +36,12 @@ func (s Severity) String() string {
 }
 
 // ParseSeverity converts a string ("nit", "info", "warning", "major",
-// "critical") to a Severity. Unknown values default to warning.
+// "critical") to a Severity. Unknown values default to **major** —
+// fail-closed for the pre-commit gate. Previously unknown values
+// defaulted to warning, which silently demoted LLM-typo'd severities
+// like "criticl" or "sev-high" out of the blocking range. The gate is
+// safety-critical, so we'd rather over-block on a malformed finding
+// than under-block on a real one.
 func ParseSeverity(s string) Severity {
 	switch s {
 	case "nit":
@@ -50,7 +55,7 @@ func ParseSeverity(s string) Severity {
 	case "critical":
 		return SeverityCritical
 	default:
-		return SeverityWarning
+		return SeverityMajor
 	}
 }
 

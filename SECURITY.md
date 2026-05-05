@@ -2,10 +2,22 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.4.x   | :white_check_mark: |
-| < 0.4   | :x:                |
+| Version | Supported                            |
+| ------- | ------------------------------------ |
+| 0.6.x   | ✅ active line — fixes shipped        |
+| 0.5.x   | ⚠️ exception-only — see policy below |
+| < 0.5   | ❌ unsupported                        |
+
+**Active line (0.6.x):** every reported vulnerability gets a fix in a
+patch release; the "Security Update Process" below applies as written.
+
+**Exception-only (0.5.x):** a fix is *not* guaranteed. The maintainer
+may backport at their discretion when the impact is severe (remote
+code execution, credential disclosure, supply-chain compromise) AND
+the patch is small. Anything else: upgrade to 0.6.x.
+
+**Unsupported:** report against the last active line. We won't
+investigate or patch.
 
 ## Reporting a Vulnerability
 

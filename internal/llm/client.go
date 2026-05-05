@@ -11,9 +11,42 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+// isLocalURL returns true when raw is a URL whose host points at the
+// local machine (localhost, 127.0.0.0/8, ::1, 0.0.0.0). Used to skip
+// the API-key requirement for Ollama / vLLM-style local-only setups
+// where the provider doesn't authenticate. Any non-local URL falls
+// through to the regular auth check.
+func isLocalURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	switch host {
+	case "localhost", "127.0.0.1", "0.0.0.0", "::1":
+		return true
+	}
+	// Also catch any 127.x.x.x — kept narrow on purpose; refusing
+	// to extend to RFC1918 ranges because a corporate API gateway
+	// at 10.0.0.5 still authenticates and shouldn't bypass the check.
+	return strings.HasPrefix(host, "127.")
+}
+
+// maxResponseBytes caps how much we'll read from a chat-completions
+// response. A typical review response is well under 100 KB; 10 MB is
+// generous headroom for an unusually verbose model and small enough
+// to crash the CLI with a clear error rather than exhaust RAM if a
+// provider streams unbounded data, hangs mid-transmission, or is
+// spoofed by a man-in-the-middle on the configured base URL.
+const maxResponseBytes = 10 * 1024 * 1024
 
 // Client wraps a base URL + API key. Construct once, reuse.
 type Client struct {
@@ -73,7 +106,13 @@ type response struct {
 // providers respect this; for those that don't, the system prompt
 // should still steer the model to JSON.
 func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (string, error) {
-	if c.APIKey == "" {
+	if c.APIKey == "" && !isLocalURL(c.BaseURL) {
+		// Local-review init's "Ollama" preset writes a config with no
+		// api_key_env line because Ollama doesn't authenticate. A blank
+		// LOCAL_REVIEW_API_KEY (the legacy default) used to crash the
+		// review here despite the provider needing no key. Skip the
+		// check when base_url points at localhost/127.0.0.1/::1/0.0.0.0;
+		// any non-local URL still requires a key.
 		envName := c.APIKeyEnv
 		if envName == "" {
 			envName = "LOCAL_REVIEW_API_KEY"
@@ -100,7 +139,14 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 		return "", fmt.Errorf("new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	if c.APIKey != "" {
+		// Only set Authorization when we actually have a key. Sending
+		// `Authorization: Bearer ` with an empty token breaks some
+		// local OpenAI-compatible servers (Ollama, vLLM) that expect
+		// the header to be absent in unauthenticated mode. The empty-
+		// key case is reachable via the isLocalURL bypass above.
+		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
 
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
@@ -108,9 +154,15 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	// LimitReader at maxResponseBytes+1 so we can distinguish "exactly
+	// at the cap" from "ran past the cap" — if we read >max bytes the
+	// provider returned more than we'll trust.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read response: %w", err)
+	}
+	if int64(len(respBody)) > maxResponseBytes {
+		return "", fmt.Errorf("llm %s: response exceeded %d-byte cap (possible runaway provider or spoofed endpoint)", c.BaseURL, maxResponseBytes)
 	}
 
 	if resp.StatusCode >= 400 {

@@ -12,7 +12,12 @@ func TestDetect(t *testing.T) {
 		"lib.rs":          Rust,
 		"unknown.xyz":     Default,
 		"no-extension":    Default,
-		"path/to/file.js": JavaScript,
+		// .js intentionally maps to TypeScript — see the comment on the
+		// (removed) JavaScript constant in detect.go for reasoning.
+		"path/to/file.js":  TypeScript,
+		"path/to/file.jsx": TypeScript,
+		"path/to/file.mjs": TypeScript,
+		"path/to/file.cjs": TypeScript,
 	}
 	for path, want := range cases {
 		if got := Detect(path); got != want {

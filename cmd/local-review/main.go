@@ -25,22 +25,23 @@ import (
 	"github.com/mshykov/local-review/internal/git"
 )
 
-// banner is the figlet Block-font "LOCAL-REVIEW" art shown atop --help.
-// It's ~120 columns wide and only renders in helpHeader() when stdout
-// is a real TTY ≥ 100 cols; CI logs and narrow tmux panes get a clean
-// text-only header instead.
+// banner is the figlet small-font "LOCAL-REVIEW" art shown atop --help.
+// Small font fits in ~70 columns vs the original block font's ~120, so
+// it stays readable on narrow tmux panes, the `git commit` editor, and
+// most CI logs without wrapping. helpHeader() still suppresses it for
+// non-TTY stdout (pipes/files) so machine-readable callers get clean
+// text.
 const banner = `
-  _|          _|_|      _|_|_|    _|_|    _|              _|_|_|    _|_|_|_|  _|      _|  _|_|_|  _|_|_|_|  _|          _|
-  _|        _|    _|  _|        _|    _|  _|              _|    _|  _|        _|      _|    _|    _|        _|          _|
-  _|        _|    _|  _|        _|_|_|_|  _|  _|_|_|_|_|  _|_|_|    _|_|_|    _|      _|    _|    _|_|_|    _|    _|    _|
-  _|        _|    _|  _|        _|    _|  _|              _|    _|  _|          _|  _|      _|    _|          _|  _|  _|
-  _|_|_|_|    _|_|      _|_|_|  _|    _|  _|_|_|_|        _|    _|  _|_|_|_|      _|      _|_|_|  _|_|_|_|      _|  _|
+   _    ___   ___   _   _       ___ _____   _____ _____      __
+  | |  / _ \ / __| /_\ | |  ___| _ \ __\ \ / /_ _| __\ \    / /
+  | |_| (_) | (__ / _ \| |_|___|   / _| \ V / | || _| \ \/\/ /
+  |____\___/ \___/_/ \_\____|  |_|_\___| \_/ |___|___| \_/\_/
 `
 
 // helpHeader returns the banner when stdout is a wide-enough terminal,
-// or an empty string otherwise. Cobra hard-wraps Long descriptions, so
-// the ~120-col banner becomes unreadable noise on narrower terminals
-// (CI logs, the editor that opens for `git commit`, narrow tmux panes).
+// or an empty string otherwise. The new small-font banner is ~70 cols
+// (was ~120 with block font), so the gate relaxes from 100 → 70 — most
+// terminals comfortably fit it.
 //
 // We use term.GetSize on the stdout fd. $COLUMNS isn't reliable here —
 // shells don't export it to child processes by default, so falling
@@ -51,7 +52,7 @@ func helpHeader() string {
 		return ""
 	}
 	w, _, err := term.GetSize(fd)
-	if err != nil || w < 100 {
+	if err != nil || w < 70 {
 		return ""
 	}
 	return banner + "\n"
@@ -132,7 +133,7 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.AddCommand(commitCmd(&sf))
 	root.AddCommand(branchCmd(&sf))
 	root.AddCommand(versionCmd())
-	root.AddCommand(configCmd())
+	root.AddCommand(configCmd(&sf))
 	root.AddCommand(doctorCmd())
 	root.AddCommand(initCmd())
 
@@ -238,6 +239,15 @@ func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref s
 
 	active, configDisabled := pickAgents(cfg, sf)
 	if len(active) == 0 {
+		// `--only` is an explicit allow-list. If the user typed
+		// `--only clude` (typo) or named an unauthenticated agent, the
+		// safe behavior is to error rather than silently fall back to
+		// the configured single-LLM provider — that would send the
+		// diff to a different vendor than the one explicitly named,
+		// which is a privacy / cost / surprise footgun.
+		if sf.only != "" {
+			return fmt.Errorf("--only %q matched no ready LLMs (run `local-review doctor` to see what's authenticated; refusing to fall back to single-LLM since --only is an explicit allow-list)", sf.only)
+		}
 		if len(configDisabled) > 0 {
 			fmt.Fprintf(os.Stderr, "All authenticated LLM CLIs are disabled in config: %v\n", configDisabled)
 			fmt.Fprintln(os.Stderr, "Pass --only <agent> to override config, or run `local-review doctor` for status.")
@@ -275,6 +285,14 @@ func applyFlagsToConfig(cfg *config.Config, sf *sharedFlags) {
 	}
 	if sf.codexModel != "" {
 		setLLMModel(cfg, "codex", sf.codexModel)
+	}
+
+	// --merge-with overrides merge.preferred_llm. Without this branch,
+	// runtime merge selection honored the flag but `local-review config
+	// --merge-with claude` still printed `merge.preferred_llm: auto`,
+	// which made the preview misleading.
+	if sf.mergeWith != "" {
+		cfg.Merge.PreferredLLM = sf.mergeWith
 	}
 }
 
