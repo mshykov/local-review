@@ -72,6 +72,16 @@ func (c *CodexInvoker) RunPrompt(ctx context.Context, prompt string) (string, er
 // runExec is the shared `codex exec --output-last-message` driver for
 // Review and RunPrompt. errLabel customises the error prefix so callers
 // can tell "review failed" from "merge failed" in logs.
+//
+// Why a temp file: `codex exec` prints session metadata
+// ("session id: ...", "tokens used", banner output) intermixed with
+// the assistant's reply on stdout. There's no flag for "raw last
+// message to stdout"; --output-last-message is the only documented
+// non-prose path and writes to a file. Parsing the prose stdout is
+// fragile (codex's banner format has changed across minor versions),
+// so we accept the disk I/O — one temp file per review, deleted via
+// defer — as the price of a stable contract. If codex ever ships a
+// stdout-only flag, drop the file.
 func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (string, error) {
 	tmp, err := os.CreateTemp("", "codex-out-*.txt")
 	if err != nil {
