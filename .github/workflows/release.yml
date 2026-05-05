@@ -115,32 +115,49 @@ jobs:
           # expose isResolved. Each reviewThread groups one or more
           # comments under a resolution state — the conversation as
           # a whole is what gets "resolved" in the UI.
-          threads=$(gh api graphql \
-            -F owner="$owner" -F name="$name" -F num="$pr_number" \
-            -f query='
-              query($owner: String!, $name: String!, $num: Int!) {
-                repository(owner: $owner, name: $name) {
-                  pullRequest(number: $num) {
-                    reviewThreads(first: 100) {
-                      nodes {
-                        isResolved
-                        comments(first: 1) {
-                          nodes { author { login } }
+          #
+          # Pagination matters: a single page returns up to 100 threads.
+          # If hasNextPage is true we'd silently miss unresolved Copilot
+          # threads beyond the first page. Loop until exhausted; only
+          # then trust the totals. Match any bot login containing
+          # "copilot" (case-insensitive) — GitHub has shipped Copilot
+          # review under several bot identities (copilot-pull-request-
+          # reviewer[bot], github-copilot[bot], plain Copilot), and we'd
+          # rather match too broadly than refuse to release because of
+          # a bot rename.
+          total=0
+          unresolved=0
+          cursor=""
+          while :; do
+            page=$(gh api graphql \
+              -F owner="$owner" -F name="$name" -F num="$pr_number" -F cursor="$cursor" \
+              -f query='
+                query($owner: String!, $name: String!, $num: Int!, $cursor: String) {
+                  repository(owner: $owner, name: $name) {
+                    pullRequest(number: $num) {
+                      reviewThreads(first: 100, after: $cursor) {
+                        pageInfo { hasNextPage endCursor }
+                        nodes {
+                          isResolved
+                          comments(first: 1) {
+                            nodes { author { login } }
+                          }
                         }
                       }
                     }
                   }
-                }
-              }')
-
-          # Match any bot login containing "copilot" (case-insensitive).
-          # GitHub has shipped Copilot review under several bot identities
-          # over time — copilot-pull-request-reviewer[bot], github-copilot[bot],
-          # plain Copilot — and we'd rather match too broadly than refuse
-          # to release because of a bot rename.
-          copilot_filter='[.data.repository.pullRequest.reviewThreads.nodes[] | select(.comments.nodes[0].author.login | test("copilot"; "i"))]'
-          total=$(echo "$threads" | jq "$copilot_filter | length")
-          unresolved=$(echo "$threads" | jq "$copilot_filter | map(select(.isResolved == false)) | length")
+                }')
+            copilot_filter='[.data.repository.pullRequest.reviewThreads.nodes[] | select(.comments.nodes[0].author.login | test("copilot"; "i"))]'
+            page_total=$(echo "$page" | jq "$copilot_filter | length")
+            page_unresolved=$(echo "$page" | jq "$copilot_filter | map(select(.isResolved == false)) | length")
+            total=$((total + page_total))
+            unresolved=$((unresolved + page_unresolved))
+            has_next=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+            if [ "$has_next" != "true" ]; then
+              break
+            fi
+            cursor=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
+          done
 
           if [ "$total" = "0" ]; then
             echo "::error::Release blocked — no Copilot review found on PR #${pr_number}."
