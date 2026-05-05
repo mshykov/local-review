@@ -174,6 +174,33 @@ func TestMatchesAny_CharacterClass(t *testing.T) {
 	}
 }
 
+func TestFilter_AllInvalidIncludesFailClosed(t *testing.T) {
+	// Copilot caught this: when `include:` is set but every pattern
+	// fails to compile, compileGlobs returns an empty slice. Pre-fix
+	// the loop saw len(includeRE) == 0 and treated it as "no include
+	// filter set", silently *expanding* the review to all files —
+	// the opposite of what the user asked for. Now: include was
+	// requested but matched nothing → no files match (fail closed).
+	//
+	// `[!]` is the easiest reproducible invalid case: globToRegex
+	// emits regex `[^]`, which Go's regexp.Compile rejects with
+	// "missing closing ]". A user typing this as their only include
+	// rule must NOT accidentally get every file reviewed.
+	diffs := []git.Diff{
+		{Path: "src/foo.go"},
+		{Path: "src/bar.ts"},
+	}
+	out := filter(diffs, []string{"[!]"}, nil)
+	if len(out) != 0 {
+		t.Errorf("filter with all-invalid include should match nothing (fail-closed), got %d files", len(out))
+	}
+	// Sanity: a *valid* include still returns the matching subset.
+	out = filter(diffs, []string{"src/*.go"}, nil)
+	if len(out) != 1 || out[0].Path != "src/foo.go" {
+		t.Errorf("valid include should match correct subset, got %v", out)
+	}
+}
+
 // Pin that compileGlobs is called O(globs) times, not O(globs * files).
 // This is a performance contract: filter() must amortize regex
 // compilation across the per-file loop, not pay it inside the loop.

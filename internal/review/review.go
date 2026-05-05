@@ -262,12 +262,20 @@ func FilterDiffs(diffs []git.Diff, include, exclude []string) []git.Diff {
 // loop. Pre-fix matchGlob did regexp.Compile inside the inner loop —
 // for a 500-file repo with 5 globs that's 2,500 compiles. Now it's
 // at most len(include)+len(exclude).
+//
+// Include semantics deliberately fail closed: if `include` was
+// non-empty but every pattern failed to compile, we drop everything.
+// The legacy matchGlob path also fail-closed (compile error → no
+// match → file excluded by the include test). Without this guard a
+// user typo'ing the only include rule would silently *expand* the
+// review to every file in the diff.
 func filter(diffs []git.Diff, include, exclude []string) []git.Diff {
 	includeRE := compileGlobs(include)
 	excludeRE := compileGlobs(exclude)
+	includeRequested := len(include) > 0
 	out := diffs[:0]
 	for _, d := range diffs {
-		if len(includeRE) > 0 && !matchesAnyCompiled(d.Path, includeRE) {
+		if includeRequested && !matchesAnyCompiled(d.Path, includeRE) {
 			continue
 		}
 		if matchesAnyCompiled(d.Path, excludeRE) {
