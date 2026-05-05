@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -285,4 +287,126 @@ func TestValidate_StrayModeFieldIsIgnored(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("Validate failed on default config: %v", err)
 	}
+}
+
+// TestMergeCoversAllExportedFields enforces the maintenance contract
+// documented above merge(): every exported field on Config and its
+// nested structs must be wired into the overlay logic.
+//
+// Strategy: synthesize a `src` Config where every exported field has
+// a non-zero sentinel, merge onto a zeroed `dst`, then walk the result
+// via reflection and fail loudly on any field that's still its zero
+// value. Catches the "added field, forgot overlay branch" footgun the
+// reviewer flagged — `LLMConfig.Mode` shipped that way for several
+// minor releases until v0.5.x. The test costs nothing at runtime;
+// drift is caught the moment a new field lands.
+func TestMergeCoversAllExportedFields(t *testing.T) {
+	src := nonZeroConfig()
+	var dst Config
+	merge(&dst, src)
+
+	missing := findZeroFields(reflect.ValueOf(dst), "")
+	// Filter out fields we deliberately don't merge: the deprecated
+	// inline APIKey on Provider/LLMConfig (security warning emits a
+	// stderr nudge instead — copying it through merge would entrench
+	// the anti-pattern) and CLIPath on LLMConfig because Defaults
+	// already populates it (merge is overlay-only when src is non-zero).
+	var actual []string
+	for _, f := range missing {
+		if f == "Provider.APIKey" || strings.HasSuffix(f, ".APIKey") {
+			continue
+		}
+		actual = append(actual, f)
+	}
+
+	if len(actual) > 0 {
+		t.Errorf("merge() didn't propagate these fields:\n  %s\n\n"+
+			"Add an overlay branch in merge() for each one. See the\n"+
+			"MAINTENANCE CONTRACT comment above merge().",
+			strings.Join(actual, "\n  "))
+	}
+}
+
+// nonZeroConfig returns a Config where every exported (non-deprecated)
+// field is set to a unique non-zero value. Sentinel values aren't
+// meaningful — we only assert presence after merge.
+func nonZeroConfig() Config {
+	enabled := true
+	dedup := true
+	return Config{
+		Provider: Provider{
+			BaseURL:    "https://example.test/v1",
+			Model:      "test-model",
+			APIKey:     "sk-test", // deliberately set; merge() skips, contract OK
+			APIKeyEnv:  "TEST_KEY",
+			TimeoutSec: 99,
+		},
+		Review: Review{
+			MinSeverity:  "major",
+			MaxFindings:  42,
+			IncludeGlobs: []string{"**/*.go"},
+			ExcludeGlobs: []string{"**/vendor/**"},
+			PromptPack:   "go",
+		},
+		Org: Org{
+			ConfigURL: "https://internal.test/lr.yml",
+		},
+		LLMs: map[string]LLMConfig{
+			"claude": {
+				Enabled:    &enabled,
+				CLIPath:    "/opt/test/claude",
+				Model:      "claude-test",
+				APIKeyEnv:  "TEST_ANTHROPIC",
+				APIKey:     "sk-test", // deliberately set; merge() skips
+				TimeoutSec: 240,
+			},
+		},
+		Merge: MergeConfig{
+			PreferredLLM:       "claude",
+			Deduplicate:        &dedup,
+			ConsensusThreshold: 7,
+		},
+		Storage: StorageConfig{
+			BasePath: "/tmp/test-reviews",
+		},
+	}
+}
+
+// findZeroFields walks v's exported fields and returns dotted paths of
+// any that are still their zero value. Used to detect merge() drift.
+func findZeroFields(v reflect.Value, prefix string) []string {
+	var out []string
+	switch v.Kind() {
+	case reflect.Struct:
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			fv := v.Field(i)
+			ft := t.Field(i)
+			if !ft.IsExported() {
+				continue
+			}
+			path := prefix + ft.Name
+			out = append(out, findZeroFields(fv, path+".")...)
+		}
+	case reflect.Map:
+		if v.Len() == 0 {
+			out = append(out, strings.TrimSuffix(prefix, "."))
+			return out
+		}
+		// Recurse into one entry — sufficient to catch "the inner struct
+		// type isn't fully merged"; we don't need to walk every key.
+		for _, k := range v.MapKeys() {
+			out = append(out, findZeroFields(v.MapIndex(k), prefix+k.String()+".")...)
+			break
+		}
+	case reflect.Pointer:
+		if v.IsNil() {
+			out = append(out, strings.TrimSuffix(prefix, "."))
+		}
+	default:
+		if v.IsZero() {
+			out = append(out, strings.TrimSuffix(prefix, "."))
+		}
+	}
+	return out
 }

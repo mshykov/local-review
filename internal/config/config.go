@@ -214,6 +214,24 @@ func mergeFrom(dst *Config, path string) error {
 // merge does a shallow overlay: any non-zero field in src replaces dst.
 // Slices are replaced wholesale (not appended) so users can override
 // defaults like ExcludeGlobs cleanly.
+//
+// ⚠ MAINTENANCE CONTRACT ⚠
+//
+// This function manually walks every Config field. A reflection-based
+// merger (mergo, etc.) would be terser but the project deliberately
+// avoids vendor SDKs / heavy reflection to keep the binary small and
+// the cascade behavior auditable. The cost is: when you add a field
+// to Config / Provider / Review / LLMConfig / MergeConfig / StorageConfig,
+// you MUST add a corresponding overlay branch here, or user overrides
+// for that field will silently no-op.
+//
+// History: this contract was violated in v0.1 — `LLMConfig.Mode` was
+// added to the schema but never wired through, leaving the documented
+// `mode: api` config inert until v0.5.x.
+//
+// TestMergeCoversAllExportedFields (config_test.go) uses reflection to
+// fail at test time when a new exported field is added without an
+// overlay branch here. Don't bypass the test — extend merge() instead.
 func merge(dst *Config, src Config) {
 	// v0: Provider settings
 	if src.Provider.BaseURL != "" {
