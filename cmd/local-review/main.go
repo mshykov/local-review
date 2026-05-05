@@ -239,6 +239,15 @@ func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref s
 
 	active, configDisabled := pickAgents(cfg, sf)
 	if len(active) == 0 {
+		// `--only` is an explicit allow-list. If the user typed
+		// `--only clude` (typo) or named an unauthenticated agent, the
+		// safe behavior is to error rather than silently fall back to
+		// the configured single-LLM provider — that would send the
+		// diff to a different vendor than the one explicitly named,
+		// which is a privacy / cost / surprise footgun.
+		if sf.only != "" {
+			return fmt.Errorf("--only %q matched no ready LLMs (run `local-review doctor` to see what's authenticated; refusing to fall back to single-LLM since --only is an explicit allow-list)", sf.only)
+		}
 		if len(configDisabled) > 0 {
 			fmt.Fprintf(os.Stderr, "All authenticated LLM CLIs are disabled in config: %v\n", configDisabled)
 			fmt.Fprintln(os.Stderr, "Pass --only <agent> to override config, or run `local-review doctor` for status.")
