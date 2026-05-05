@@ -100,7 +100,14 @@ func buildUserMessage(diffs []git.Diff) string {
 }
 
 // parseFindings extracts the LLM's JSON. Tolerates surrounding prose
-// or markdown fences (some providers re-wrap in ```json```).
+// or markdown fences (some providers re-wrap in ```json```), and
+// multi-block output where the LLM shows an example object first and
+// the actual answer second ("Here's an example {...}. My result: {...}").
+//
+// The previous "first-{ to last-}" heuristic concatenated example +
+// prose + answer into one substring and then failed to unmarshal,
+// producing a confusing parse error on what should have been a clean
+// review response.
 func parseFindings(raw string) ([]Finding, error) {
 	body := strings.TrimSpace(raw)
 	body = strings.TrimPrefix(body, "```json")
@@ -108,32 +115,103 @@ func parseFindings(raw string) ([]Finding, error) {
 	body = strings.TrimSuffix(body, "```")
 	body = strings.TrimSpace(body)
 
-	first := strings.Index(body, "{")
-	last := strings.LastIndex(body, "}")
-	if first < 0 || last <= first {
+	candidates := topLevelJSONObjects(body)
+	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no JSON object found in response")
 	}
-	body = body[first : last+1]
 
-	var envelope struct {
-		Findings []rawFinding `json:"findings"`
+	// Try the LAST candidate first. LLMs that emit an example block
+	// followed by the real answer always put the answer last, so this
+	// keeps the happy path one unmarshal call. Fall back through the
+	// earlier candidates so degraded outputs still parse.
+	//
+	// We probe each candidate with a `map[string]json.RawMessage` first
+	// to confirm it has a "findings" key — Go's json.Unmarshal silently
+	// ignores unknown fields, so a stray `{"note": "..."}` block at the
+	// end would otherwise look like a valid empty-findings envelope and
+	// shadow the real one earlier in the response.
+	var lastErr error
+	for i := len(candidates) - 1; i >= 0; i-- {
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(candidates[i]), &probe); err != nil {
+			lastErr = err
+			continue
+		}
+		raw, ok := probe["findings"]
+		if !ok {
+			continue
+		}
+		var findings []rawFinding
+		if err := json.Unmarshal(raw, &findings); err != nil {
+			lastErr = err
+			continue
+		}
+		out := make([]Finding, 0, len(findings))
+		for _, f := range findings {
+			out = append(out, Finding{
+				File:     f.File,
+				Line:     f.Line,
+				Severity: ParseSeverity(f.Severity),
+				Title:    f.Title,
+				Body:     f.Body,
+				Tag:      f.Tag,
+			})
+		}
+		return out, nil
 	}
-	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
-		return nil, err
+	if lastErr != nil {
+		return nil, lastErr
 	}
+	return nil, fmt.Errorf("no JSON object with a `findings` key found in response")
+}
 
-	out := make([]Finding, 0, len(envelope.Findings))
-	for _, f := range envelope.Findings {
-		out = append(out, Finding{
-			File:     f.File,
-			Line:     f.Line,
-			Severity: ParseSeverity(f.Severity),
-			Title:    f.Title,
-			Body:     f.Body,
-			Tag:      f.Tag,
-		})
+// topLevelJSONObjects scans s and returns every balanced top-level
+// `{...}` substring in order of appearance. Tracks string-literal
+// state (with backslash escaping) so braces inside JSON strings
+// don't mis-balance the scanner. Square brackets aren't tracked
+// because the LLM envelope is always an object.
+func topLevelJSONObjects(s string) []string {
+	var out []string
+	depth := 0
+	start := -1
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString {
+			switch c {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth == 0 {
+				// Stray closing brace — ignore, no balanced object opens here.
+				continue
+			}
+			depth--
+			if depth == 0 && start >= 0 {
+				out = append(out, s[start:i+1])
+				start = -1
+			}
+		}
 	}
-	return out, nil
+	return out
 }
 
 type rawFinding struct {
