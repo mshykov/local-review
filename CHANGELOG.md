@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-05
+
+### Fixed
+- **Pre-commit gate could exit 0 when the merge step failed.** If per-LLM reviews succeeded but the LLM-powered merge step failed (merger CLI down, save failed, etc.), `mergeAndPrint` returned an empty string, `mergedHasBlocking("")` was false, and `runMultiLLMReview` returned `nil` — meaning the command exited 0 even though no gate ever ran. A pre-commit hook would treat the commit as clean. Now: empty merged content returns a tool-failure error (exit 1, fail-open per project policy) so the user sees that the gate didn't run.
+- **Multi-LLM path refused to run in detached HEAD.** `git rev-parse --abbrev-ref HEAD` returns `"HEAD"` in detached state (not an error), so `resolveCommitBranch` either errored out or stored every detached review under one `HEAD/` directory — colliding all CI runs, `git checkout <tag>` reviews, and bisect sessions together. The v0 single-LLM path worked there; v0.5.0 regressed it. Now: detached HEAD gets a synthetic `detached-<short-sha>` branch name so storage stays organized and the gate runs normally.
+
 ## [0.5.0] - 2026-05-05
 
 ### Added

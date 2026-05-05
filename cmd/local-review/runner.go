@@ -162,6 +162,18 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		fmt.Printf("Merged report: %s\n", mergedPath)
 	}
 
+	// Per-LLM reviews succeeded but the merge step didn't produce
+	// content (mergeLLM unavailable, merger error, save failed, etc.).
+	// Without a merged report the blocking-finding gate can't run, and
+	// returning nil here would silently exit 0 — a pre-commit hook would
+	// treat the commit as clean even though no gate ever fired. Return
+	// a regular error so the caller exits non-zero (per project policy:
+	// non-zero from tool-failure paths is fail-open in hooks, but the
+	// user sees the message and knows the gate didn't run).
+	if mergedContent == "" {
+		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s but the blocking-finding gate did not run", cfg.Storage.BasePath)
+	}
+
 	// Restore the pre-commit gate broken by the v0.5 multi-default flip.
 	// Single-LLM has structured findings → exits 2 cleanly. Multi-LLM
 	// merger returns markdown, so we look for non-empty severity
@@ -303,8 +315,12 @@ func pluralS(n int) string {
 }
 
 // resolveCommitBranch resolves the commit hash and branch name for the
-// current invocation. Mirrors the validation the old multi command did
-// to catch detached-HEAD and unresolvable-ref cases.
+// current invocation. In detached-HEAD environments (CI checkouts,
+// `git checkout <tag>`, bisect) git returns "HEAD" as the branch name
+// — we fall back to a commit-derived synthetic branch ("detached-<sha>")
+// instead of failing, so multi-LLM still works there. The previous
+// behavior errored out, regressing the v0 single-LLM path that worked
+// fine in detached HEAD.
 func resolveCommitBranch(mode git.Mode, ref string) (string, string, error) {
 	commit := git.CurrentCommit()
 	branch := git.CurrentBranch()
@@ -323,13 +339,31 @@ func resolveCommitBranch(mode git.Mode, ref string) (string, string, error) {
 	if commit == "HEAD" {
 		return "", "", fmt.Errorf("failed to get current commit (git rev-parse failed)")
 	}
-	if branch == "unknown" {
-		return "", "", fmt.Errorf("failed to get current branch (detached HEAD or git error)")
-	}
 	if s := git.SanitizeCommit(commit); s == "" || len(s) < 6 {
 		return "", "", fmt.Errorf("invalid commit hash '%s' (sanitized to '%s')", commit, s)
 	}
+
+	// Detached HEAD ('HEAD') or git failure ('unknown'). Don't refuse
+	// to run — synthesize a stable per-commit name so storage stays
+	// organized and reviews from different detached commits don't
+	// collide under one "HEAD" or "unknown" directory.
+	branch = syntheticDetachedBranch(branch, commit)
+
 	return commit, branch, nil
+}
+
+// syntheticDetachedBranch returns a per-commit fallback name when git
+// reports a detached state ("HEAD") or a hard failure ("unknown").
+// Real branch names pass through unchanged.
+func syntheticDetachedBranch(branch, commit string) string {
+	if branch != "HEAD" && branch != "unknown" {
+		return branch
+	}
+	short := commit
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	return "detached-" + short
 }
 
 // mergeAndPrint runs the merge LLM, saves the merged report, and prints
