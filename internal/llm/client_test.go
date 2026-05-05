@@ -15,43 +15,70 @@ import (
 )
 
 func TestNew_DefaultTimeout(t *testing.T) {
-	c := New("https://api.example.com", "sk-x", "gpt-4", 0)
+	c := New("https://api.example.com", "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 0)
 	if c.HTTP.Timeout != 60*time.Second {
 		t.Errorf("default timeout: want 60s, got %v", c.HTTP.Timeout)
 	}
 
-	c = New("https://api.example.com", "sk-x", "gpt-4", -5)
+	c = New("https://api.example.com", "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", -5)
 	if c.HTTP.Timeout != 60*time.Second {
 		t.Errorf("negative timeout should fall back to 60s, got %v", c.HTTP.Timeout)
 	}
 }
 
 func TestNew_CustomTimeout(t *testing.T) {
-	c := New("https://api.example.com", "sk-x", "gpt-4", 30)
+	c := New("https://api.example.com", "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 30)
 	if c.HTTP.Timeout != 30*time.Second {
 		t.Errorf("custom timeout: want 30s, got %v", c.HTTP.Timeout)
 	}
 }
 
 func TestNew_StripsTrailingSlashFromBaseURL(t *testing.T) {
-	c := New("https://api.example.com/v1/", "sk-x", "gpt-4", 0)
+	c := New("https://api.example.com/v1/", "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 0)
 	if c.BaseURL != "https://api.example.com/v1" {
 		t.Errorf("trailing slash not stripped: got %q", c.BaseURL)
 	}
-	c = New("https://api.example.com/v1", "sk-x", "gpt-4", 0)
+	c = New("https://api.example.com/v1", "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 0)
 	if c.BaseURL != "https://api.example.com/v1" {
 		t.Errorf("clean URL altered: got %q", c.BaseURL)
 	}
 }
 
 func TestComplete_NoAPIKeyReturnsError(t *testing.T) {
-	c := New("https://api.example.com", "", "gpt-4", 0)
+	// The error must (a) name the configured env var so users see the
+	// right knob to set, and (b) point at `multi` mode as an alternative
+	// for users who only have CLI auth.
+	c := New("https://api.example.com", "", "OPENAI_API_KEY", "gpt-4", 0)
 	_, err := c.Complete(context.Background(), nil, false)
 	if err == nil {
 		t.Fatal("expected error for missing API key, got nil")
 	}
-	if !strings.Contains(err.Error(), "no API key") {
-		t.Errorf("unexpected error: %v", err)
+	msg := err.Error()
+	if !strings.Contains(msg, "no API key") {
+		t.Errorf("missing 'no API key' phrase: %v", err)
+	}
+	if !strings.Contains(msg, "OPENAI_API_KEY") {
+		t.Errorf("error should name the configured env var, got: %v", err)
+	}
+	if !strings.Contains(msg, "local-review init") {
+		t.Errorf("error should suggest `local-review init`, got: %v", err)
+	}
+	if !strings.Contains(msg, "local-review multi") {
+		t.Errorf("error should suggest `local-review multi` as alternative, got: %v", err)
+	}
+}
+
+func TestComplete_NoAPIKeyFallsBackToLegacyEnvName(t *testing.T) {
+	// When APIKeyEnv is empty (e.g., older callers or buggy config),
+	// the error should fall back to the legacy default rather than
+	// printing "$" with no name.
+	c := New("https://api.example.com", "", "", "gpt-4", 0)
+	_, err := c.Complete(context.Background(), nil, false)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "LOCAL_REVIEW_API_KEY") {
+		t.Errorf("empty APIKeyEnv should fall back to LOCAL_REVIEW_API_KEY, got: %v", err)
 	}
 }
 
@@ -92,7 +119,7 @@ func okResponse(content string) http.HandlerFunc {
 
 func TestComplete_SendsExpectedRequestShape(t *testing.T) {
 	m := newMockServer(t, okResponse("hello"))
-	c := New(m.server.URL, "sk-test", "gpt-4o-mini", 5)
+	c := New(m.server.URL, "sk-test", "LOCAL_REVIEW_API_KEY", "gpt-4o-mini", 5)
 
 	got, err := c.Complete(context.Background(), []Message{
 		{Role: "system", Content: "you are a reviewer"},
@@ -142,7 +169,7 @@ func TestComplete_SendsExpectedRequestShape(t *testing.T) {
 
 func TestComplete_JSONModeIncludesResponseFormat(t *testing.T) {
 	m := newMockServer(t, okResponse("{}"))
-	c := New(m.server.URL, "sk-test", "gpt-4o-mini", 5)
+	c := New(m.server.URL, "sk-test", "LOCAL_REVIEW_API_KEY", "gpt-4o-mini", 5)
 
 	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, true)
 	if err != nil {
@@ -168,7 +195,7 @@ func TestComplete_4xxWithJSONErrorEnvelope(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":{"message":"invalid api key","type":"auth_error"}}`))
 	})
-	c := New(m.server.URL, "sk-bad", "gpt-4", 5)
+	c := New(m.server.URL, "sk-bad", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 
 	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
@@ -187,7 +214,7 @@ func TestComplete_4xxWithNonJSONBody(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 		_, _ = w.Write([]byte("upstream timeout"))
 	})
-	c := New(m.server.URL, "sk-x", "gpt-4", 5)
+	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 
 	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
@@ -204,7 +231,7 @@ func TestComplete_EmptyChoicesReturnsError(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[]}`))
 	})
-	c := New(m.server.URL, "sk-x", "gpt-4", 5)
+	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 
 	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
@@ -220,7 +247,7 @@ func TestComplete_MalformedJSONResponse(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`not-json`))
 	})
-	c := New(m.server.URL, "sk-x", "gpt-4", 5)
+	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 
 	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
@@ -240,7 +267,7 @@ func TestComplete_RespectsContextCancellation(t *testing.T) {
 			_, _ = w.Write([]byte(`{}`))
 		}
 	})
-	c := New(m.server.URL, "sk-x", "gpt-4", 30)
+	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 30)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -269,7 +296,7 @@ func (e *errRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 }
 
 func TestComplete_NetworkErrorIncludesURL(t *testing.T) {
-	c := New("http://127.0.0.1:9999", "sk-x", "gpt-4", 5)
+	c := New("http://127.0.0.1:9999", "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 	// Inject a stub transport so the failure is deterministic and does not
 	// depend on whether port 9999 happens to be unbound in the test environment.
 	c.HTTP.Transport = &errRoundTripper{err: errors.New("connection refused")}
@@ -285,7 +312,7 @@ func TestComplete_NetworkErrorIncludesURL(t *testing.T) {
 
 func TestComplete_BodyContainsMessages(t *testing.T) {
 	m := newMockServer(t, okResponse("ok"))
-	c := New(m.server.URL, "sk-x", "gpt-4", 5)
+	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 
 	msgs := []Message{
 		{Role: "system", Content: "be terse"},
