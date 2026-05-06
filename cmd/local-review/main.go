@@ -25,23 +25,23 @@ import (
 	"github.com/mshykov/local-review/internal/git"
 )
 
+// bannerMinWidth is the minimum terminal column count at which the banner
+// renders without line-wrapping. Matches the width of the banner's longest line.
+const bannerMinWidth = 70
+
 // banner is the figlet small-font "LOCAL-REVIEW" art shown atop --help.
 // Small font fits in ~70 columns vs the original block font's ~120, so
-// it stays readable on narrow tmux panes, the `git commit` editor, and
-// most CI logs without wrapping. helpHeader() suppresses it for
-// non-TTY stdout (pipes/files) so machine-readable callers get clean
-// text, and gates on terminal width so it doesn't garble narrow
-// terminals.
-const banner = `
-   _    ___   ___   _   _       ___ _____   _____ _____      __
+// it stays readable on narrow tmux panes and the `git commit` editor.
+// helpHeader() suppresses it for non-TTY stdout (pipes/files) so
+// machine-readable callers get clean text, and gates on terminal width
+// so it doesn't garble narrow terminals.
+const banner = `   _    ___   ___   _   _       ___ _____   _____ _____      __
   | |  / _ \ / __| /_\ | |  ___| _ \ __\ \ / /_ _| __\ \    / /
   | |_| (_) | (__ / _ \| |_|___|   / _| \ V / | || _| \ \/\/ /
-  |____\___/ \___/_/ \_\____|  |_|_\___| \_/ |___|___| \_/\_/
-`
+  |____\___/ \___/_/ \_\____|  |_|_\___| \_/ |___|___| \_/\_/`
 
 // helpHeader returns the banner when stdout is a wide-enough terminal,
-// or an empty string otherwise. The small-font banner is ~70 cols, so
-// the gate is set at 70.
+// or an empty string otherwise.
 //
 // We use term.GetSize on the stdout fd. $COLUMNS isn't reliable here —
 // shells don't export it to child processes by default, so falling
@@ -52,10 +52,12 @@ func helpHeader() string {
 		return ""
 	}
 	w, _, err := term.GetSize(fd)
-	if err != nil || w < 70 {
+	if err != nil || w < bannerMinWidth {
 		return ""
 	}
-	return banner + "\n"
+	// Two newlines: one ends the last banner line, the second
+	// provides a blank-line gap before the Long description text.
+	return banner + "\n\n"
 }
 
 // sharedFlags collects every flag accepted by the review-shape commands.
