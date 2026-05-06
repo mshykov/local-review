@@ -247,10 +247,30 @@
       background: #a0aec0;
     }
 
+    /* Inline <code> default: dark slate on white. The original rule
+       used the light terminal-green (#68d391) which was unreadable
+       on white card backgrounds (e.g. inside the scope block). The
+       terminal-block override below restores the green-on-dark look
+       for <pre><code> command snippets. */
     code {
       font-family: 'JetBrains Mono', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
       font-size: 0.92em;
+      color: #1e293b;
+    }
+
+    pre code {
       color: #68d391;
+      font-size: inherit;
+    }
+
+    /* Subtle slate pill for inline code on the scope cards so it
+       reads as "code" without the legibility issue. Scoped narrowly
+       so the dark Quick Start section's inline-styled <code> tags
+       (color: #a0aec0 on #2d3748) keep their look. */
+    .scope-col code {
+      background: #f1f5f9;
+      padding: 1px 5px;
+      border-radius: 3px;
     }
 
     /* Compact GitHub-style copy button — same size on mobile and desktop */
@@ -401,7 +421,21 @@
       border-radius: 8px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.1);
       text-align: center;
+      /* Flex column with centred main axis so the shorter cards
+         (Claude, Gemini) vertically centre their content within the
+         row's stretched height instead of leaving whitespace at the
+         bottom relative to the taller Codex card. */
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
     }
+
+    /* Inline pills (FREE / $ OpenAI) are spans whose flex behavior
+       defaults to stretch — that yanks them edge-to-edge in a flex
+       column. Pin them back to intrinsic width so they still look
+       like pills. */
+    .llm-card .badge { align-self: center; }
 
     .llm-card.free {
       border: 2px solid #48bb78;
@@ -528,11 +562,12 @@
       color: #2d3748;
     }
 
-    /* Match the saturation/weight of the red on the right column.
-       #2f855a was a light leaf-green that read as washed out next to
-       #c53030; #22543d (same tone as the FREE badge text) lands closer
-       to the red's visual weight. */
-    .scope-col.is h3 { color: #22543d; }
+    /* Match the saturation of the red on the right column. #2f855a
+       was a light leaf-green that read as washed out; #22543d was
+       darker but muted; #15803d (Tailwind green-700) has comparable
+       saturation to red-700, so the two headings carry equal visual
+       weight on white. */
+    .scope-col.is h3 { color: #15803d; }
     .scope-col.isnt h3 { color: #c53030; }
 
     .scope-col ul {
@@ -754,9 +789,12 @@
         </div>
         <div class="llm-card paid">
           <h3>Codex</h3>
-          <p>ChatGPT Plus subscription <strong>or</strong> OpenAI API key</p>
-          <span class="badge badge-paid">Paid</span>
-          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Disabled by default. API key path is pay-per-token (usually cheapest for occasional review).</p>
+          <p>ChatGPT Plus or OpenAI API key</p>
+          <span class="badge badge-paid">$ OpenAI</span>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Disabled by default</p>
+          <p style="margin-top: 8px; font-size: 0.75em; color: #888; font-style: italic;">
+            You pay OpenAI. <strong>local-review</strong> is 100% free.
+          </p>
         </div>
       </div>
     </div>
