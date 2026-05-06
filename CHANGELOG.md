@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-05-06
+
+### Fixed
+- **Failure lines now include actionable hints, not opaque error text.** Pre-fix, a SIGKILL'd CLI rendered as `[1/3] claude ✗ (claude review failed: signal: killed (output: ))` — three problems on one line: redundant `claude review failed:` prefix, empty-output noise (`(output: )`), and zero indication of *what to fix*. Real-user feedback was "I have all setup done, but it doesn't work — that's why users delete tools like this." Now: failures are classified by `internal/cli/ClassifyExit` into a one-line summary that always ends with an actionable next step. Examples:
+  - `[1/3] claude ✗ killed — likely out of memory or a hard timeout; try \`local-review commit HEAD\` for a smaller diff, or \`--only\` to skip claude`
+  - `[1/3] claude ✗ timeout — try \`local-review commit HEAD\` for a smaller diff, or raise llms.claude.timeout_sec in .local-review.yml`
+  - `[1/3] claude ✗ exit status 1: error: API key not valid. Please pass a valid API key.`
+
+### Changed
+- **Roster format**: configured-model agents render as `<agent>_<model>` (e.g. `claude_claude-sonnet-4-6`) so users see "what model is running" at a glance. Agents without a pinned model render as `claude (CLI v2.1.131) — using vendor's default model; pin via \`llms.claude.model:\``, replacing the previous `model: CLI default` which user feedback flagged as a non-answer. `local-review doctor` mirrors the same wording.
+- **Per-LLM directory path printed after the agent block**, so users know where raw saved reviews live without grepping the storage convention. Format: `Per-LLM reviews → .local-review/reviews/<branch>/`. Routed to stderr when at least one agent failed (so it stands out as a debugging hint), stdout otherwise.
+- **Merge prompt Summary uses "Findings flagged by both reviewers" when ReviewCount==2**, instead of the abstract "2+ reviewers agree" which read as broken arithmetic to users seeing `0` next to a `REQUEST CHANGES` recommendation. N≥3 keeps the threshold-based wording since it's no longer trivially derivable from the reviewer count.
+- **Merge prompt drops the redundant `Reviewers: <names>` line from the Summary block** — the same names appear in the agent roster ~30 lines earlier.
+
+## [0.6.2] - 2026-05-06
+
+### Changed
+- **`--help` figlet banner restored.** v0.6.1 swapped the 4-line figlet for a single-line title; user feedback was that the flat line read as a regression after several releases of the figlet. Restored the small-font figlet (~70 cols) and the `term.GetSize ≥70` width gate. Non-TTY stdout still suppresses.
+- **Landing page polish**: Codex card body trimmed to match Claude / Gemini in length so the three cards have equal height; cards' content vertically centered (flex column + `justify-content: center`); scope-block "What it is" heading bumped from `#22543d` → `#15803d` to match the right column's red `#c53030` weight; inline `<code>` no longer renders as light-green-on-white (default → dark slate, scoped slate-100 pill on `.scope-col`, terminal-block green preserved on `pre code`); Codex pill renamed `Paid` → `$ OpenAI` with a 0.75em italic caveat inside the card ("You pay OpenAI. **local-review** is 100% free") so visitors don't think we charge.
+- **Prompt-pack default rules expanded** to close ~30% coverage gap vs `mgreiler/code-review-checklist`. New top-level sections: Error handling and logging; Backward compatibility and dependencies; Usability and accessibility; Ethics and fairness; Specialist review needed? Plus SOLID names under Maintainability, comment hygiene checks, file/package-location smell, code-that-is-hard-to-test smell. Updated JSON `tag` enum to match.
+
+### Fixed
+- **Banner cleanup from review-round refinements**: extracted magic `70` to a `bannerMinWidth` constant so a future banner swap updates one place; stripped the implicit leading newline from the `banner` literal so whitespace is owned by `helpHeader()` explicitly; updated the comment that claimed the banner "stays readable in CI logs" — CI logs are non-TTY and the banner is correctly suppressed there.
+
 ## [0.6.1] - 2026-05-06
 
 ### Changed

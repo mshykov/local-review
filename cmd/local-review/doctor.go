@@ -182,11 +182,12 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 		if configuredModel != "" {
 			fmt.Fprintf(out, "    model:         %s\n", configuredModel)
 		} else {
-			// No pinned model — the invoker won't pass --model and the
-			// vendor CLI picks its own current default. Surface this so
-			// users debugging "why did claude run model X" can tell
-			// "didn't pin one" apart from "config didn't load."
-			fmt.Fprintf(out, "    model:         (CLI default)\n")
+			// No pinned model — invoker doesn't pass --model and the
+			// vendor CLI picks its own default. Surface this with a
+			// pin-instruction so users debugging "why did claude run
+			// model X" know how to take control. Pre-fix said "(CLI
+			// default)" which was reported as a non-answer.
+			fmt.Fprintf(out, "    model:         vendor's default — pin via `llms.%s.model:` to override\n", llm.Name)
 		}
 
 	case statusNotAuthed:
