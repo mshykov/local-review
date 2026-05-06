@@ -79,31 +79,56 @@ func (m *Merger) Merge(ctx context.Context, input MergeInput) (string, error) {
 // fenceOpener matches the leading ```markdown / ```md / bare ```
 // fence the merger LLM sometimes wraps its full report in. Anchored
 // to start-of-string + optional whitespace so it can't match an
-// interior code block by accident.
-var fenceOpener = regexp.MustCompile("^\\s*```(?:markdown|md)?\\s*\\n")
+// interior code block by accident. `\r?\n` tolerates CRLF line
+// endings — windows builds and some CLIs emit them.
+var fenceOpener = regexp.MustCompile("^\\s*```(?:markdown|md)?\\s*\\r?\\n")
 
 // fenceCloser matches the closing ``` at end-of-string. Optional
-// trailing whitespace tolerates the LLM ending with `\n` or `\n\n`.
-var fenceCloser = regexp.MustCompile("\\n?\\s*```\\s*$")
+// trailing whitespace tolerates the LLM ending with `\n`, `\n\n`,
+// or `\r\n`.
+var fenceCloser = regexp.MustCompile("\\r?\\n?\\s*```\\s*$")
+
+// fenceCounter counts triple-backtick fences at line starts. Used to
+// decide whether stripping the outer pair would corrupt inner code
+// blocks (an unbalanced count means the wrapper is truncated, not
+// complete).
+var fenceCounter = regexp.MustCompile("(?m)^\\s*```")
 
 // stripFenceWrapper removes a single outer ```markdown / ```md fence
 // when the LLM's full output is wrapped in one. Inner code blocks in
-// the report are unaffected: the regexes are anchored to the string
-// boundaries, so a report with embedded ```python blocks survives
-// intact.
+// the report are unaffected.
 //
-// Both opener AND closer must match before we strip. A partial wrapper
-// (e.g., the LLM hit max-tokens mid-output and the trailing ``` is
-// missing) is left alone so we don't half-strip and produce a
-// frankenformatted report — better to show the leading fence verbatim
-// than to silently drop content.
+// Three guards fire in order:
+//
+//  1. Both opener AND closer regexes must match (anchored to string
+//     boundaries). A partial wrapper is left alone.
+//  2. The total fence count must be even. A complete report with the
+//     outer wrapper has an even count (outer pair + each inner pair);
+//     an odd count means a truncated wrapper, where what looks like
+//     the closer is actually an inner block's closer that we'd
+//     corrupt by stripping. Pre-guard, a report ending mid-Python-
+//     block with `\n```\n` would lose its inner closer.
+//  3. After stripping, the remainder must have a balanced (even)
+//     fence count. Defense in depth — if the regex matched something
+//     other than what step 2's parity check assumes, we leave the
+//     input alone.
+//
+// On any guard failure we return the input unchanged: better to show
+// a leading ```markdown line verbatim than to silently mangle
+// content.
 func stripFenceWrapper(s string) string {
 	if !fenceOpener.MatchString(s) || !fenceCloser.MatchString(s) {
 		return s
 	}
-	s = fenceOpener.ReplaceAllString(s, "")
-	s = fenceCloser.ReplaceAllString(s, "")
-	return strings.TrimRight(s, "\n")
+	if len(fenceCounter.FindAllString(s, -1))%2 != 0 {
+		return s
+	}
+	stripped := fenceOpener.ReplaceAllString(s, "")
+	stripped = fenceCloser.ReplaceAllString(stripped, "")
+	if len(fenceCounter.FindAllString(stripped, -1))%2 != 0 {
+		return s
+	}
+	return strings.TrimRight(stripped, "\r\n")
 }
 
 // MaxReviewBytesForMerge caps how much of any single per-LLM review

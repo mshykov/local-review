@@ -142,6 +142,32 @@ func TestStripFenceWrapper(t *testing.T) {
 			in:   "```markdown\n# Report (truncated, no closing fence)",
 			want: "```markdown\n# Report (truncated, no closing fence)",
 		},
+		{
+			// Critical case from Copilot review: LLM hits max-tokens
+			// mid-output. Opener fired, content cuts off inside a
+			// Python block; the LAST line happens to be ``` (closing
+			// the inner block, not the outer wrapper). Naive strip
+			// would corrupt the markdown by removing the inner closer.
+			// Parity guard refuses.
+			name: "truncated content ending with inner block closer — pass through",
+			in:   "```markdown\n# Report\n\nFix:\n```python\nx = 1\n```",
+			want: "```markdown\n# Report\n\nFix:\n```python\nx = 1\n```",
+		},
+		{
+			// CRLF line endings (Windows binaries / some CLIs) must
+			// not defeat the strip — pre-fix the opener regex required
+			// `\n` and \r\n input would print the literal fence.
+			name: "CRLF wrapped — strip",
+			in:   "```markdown\r\n# Report\r\n```",
+			want: "# Report",
+		},
+		{
+			// CRLF with inner block — outer pair stripped, inner
+			// block preserved (CRLF intact inside).
+			name: "CRLF with inner block — strip outer only",
+			in:   "```markdown\r\n# Report\r\n```python\r\nx=1\r\n```\r\n```",
+			want: "# Report\r\n```python\r\nx=1\r\n```",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

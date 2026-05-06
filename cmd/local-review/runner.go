@@ -203,12 +203,38 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	fmt.Println()
 
 	successCount := multi.CountSuccessful(results)
+	mergeable := multi.CountWithOutput(results)
 	metadata := buildMetadata(commit, branch, results, startTime)
 
-	if successCount == 0 {
+	// Short-circuit on "nothing for the merger to consume." Pre-fix
+	// this checked successCount (Error == nil), which let two cases
+	// slip past:
+	//
+	//   1. SaveReview-failed-with-output: Error is set but Output is
+	//      populated. successCount drops to 0 even though the merger
+	//      could still consolidate the in-memory output. Pre-fix we
+	//      aborted with "all N reviews failed" — wrong, the reviews
+	//      ran, only persistence failed.
+	//   2. CLI-exited-zero-with-empty-output: Error is nil but Output
+	//      is "". successCount stays positive but BuildMergeInput
+	//      drops the empty entry, so the merger ran on 0 reviews and
+	//      classifyRunMode fell through to runModeMerge — both giving
+	//      the user a "Merged review" framing for what was actually
+	//      nothing.
+	//
+	// CountWithOutput matches what the merger actually consumes, so
+	// "0 mergeable" is the correct threshold for "stop here." When
+	// successCount disagrees (case 1: 0 successCount but mergeable),
+	// the merge proceeds and the gate runs. When mergeable is 0 we
+	// pick the right error message based on whether anyone "succeeded"
+	// in the loose Error == nil sense.
+	if mergeable == 0 {
 		metadata.Merge.Status = "skipped"
 		_, _ = storage.SaveMetadata(branch, commit, metadata)
-		return fmt.Errorf("all %d LLM reviews failed", len(results))
+		if successCount == 0 {
+			return fmt.Errorf("all %d LLM reviews failed", len(results))
+		}
+		return fmt.Errorf("all %d LLM reviews returned empty output (no findings to merge)", len(results))
 	}
 
 	mergedPath, mergedContent := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
@@ -223,8 +249,8 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		// matching what the merger actually consumes). Using
 		// `len - CountSuccessful` here would drift for the empty-Output-but-
 		// Error-nil and non-empty-Output-but-Error-set cases the classifier
-		// already handles.
-		mergeable := multi.CountWithOutput(results)
+		// already handles. `mergeable` is computed once at the top of this
+		// function and reused here so we don't traverse results twice.
 		switch classifyRunMode(results) {
 		case runModeDegraded:
 			fmt.Printf("Single-LLM report (%d of %d agents produced no output): %s\n", len(results)-mergeable, len(results), mergedPath)
