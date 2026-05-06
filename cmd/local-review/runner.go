@@ -277,18 +277,6 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		}
 	}
 
-	// Per-LLM reviews succeeded but the merge step didn't produce
-	// content (mergeLLM unavailable, merger error, save failed, or the
-	// merger returned only whitespace). Without a merged report the
-	// blocking-finding gate can't run, and returning nil would silently
-	// exit 0 — a pre-commit hook would treat the commit as clean even
-	// though no gate ever fired. TrimSpace (not just == "") catches the
-	// "merger returned `\n`" variant that codex flagged as bypassing the
-	// v0.5.1 fix.
-	if strings.TrimSpace(mergedContent) == "" {
-		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s but the blocking-finding gate did not run", cfg.Storage.BasePath)
-	}
-
 	// Two independent signals trip the gate (any one is enough). False
 	// positives are preferred over false negatives — over-blocking is
 	// a re-run, under-blocking is a shipped bug.
@@ -297,16 +285,34 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	//     seeing the (possibly-truncated) per-LLM reviews.
 	//  2. Each per-LLM review's full Output — defends against the
 	//     8 KB merger-input truncation hiding blocking findings past
-	//     the cut. The merger only sees the first 8 KB of each
-	//     reviewer; without this independent check, a verbose
-	//     reviewer that puts a critical finding past byte 8000 would
-	//     produce a false-clean exit. The on-disk per-LLM file has
-	//     always had the full output; this just scans it before we
-	//     decide.
+	//     the cut, AND against merger failures (merger.Merge error,
+	//     SaveMerged error, mergeLLM unavailable, whitespace-only
+	//     output) where signal #1 is unavailable. The on-disk per-LLM
+	//     file has always had the full output; this just scans it
+	//     before we decide.
 	//
-	// Returning the sentinel (rather than os.Exit) lets cobra and
-	// main() unwind defers.
-	if mergedHasBlocking(mergedContent) || anyPerLLMHasBlocking(results) {
+	// Compute the per-LLM signal first so a merge-step failure with
+	// blocking per-LLM findings still trips the gate. Pre-fix the
+	// empty-merged-content guard short-circuited before this scan
+	// could run, so a merger timeout or rate-limit collapsed an
+	// exit-2 into exit 1 — and the documented pre-commit hook treats
+	// tool failures (exit 1) as "let the commit through." Returning
+	// the sentinel (rather than os.Exit) lets cobra and main()
+	// unwind defers.
+	perLLMBlocking := anyPerLLMHasBlocking(results)
+
+	if strings.TrimSpace(mergedContent) == "" {
+		// Merge step produced nothing (mergeLLM unavailable, merger
+		// error, save failed, whitespace-only). Per-LLM reviews are
+		// saved on disk and we still scanned them above.
+		if perLLMBlocking {
+			fmt.Fprintln(os.Stderr, "Warning: merge step produced no output, but per-LLM reviews flagged blocking findings — gate firing on the per-LLM signal.")
+			return errBlockingFindings
+		}
+		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s and showed no blocking findings, but the merged report is unavailable", cfg.Storage.BasePath)
+	}
+
+	if mergedHasBlocking(mergedContent) || perLLMBlocking {
 		return errBlockingFindings
 	}
 	return nil

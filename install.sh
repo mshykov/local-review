@@ -77,16 +77,21 @@ if curl -fsSL "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
     echo "   refusing to install — manifest is malformed or built for a different asset set" >&2
     exit 1
   fi
+  # Use `printf '%s\n'` rather than `echo` to feed the verifier:
+  # POSIX `echo` semantics differ across shells (some interpret backslash
+  # escapes by default, busybox's accepts -e/-n flags), so a manifest
+  # line with backslashes or one starting with `-` could be mangled or
+  # consumed as flags. printf '%s\n' is uniformly literal.
   if command -v sha256sum >/dev/null 2>&1; then
     # GNU coreutils (Linux, Homebrew on macOS).
-    if ! echo "$manifest_line" | sha256sum -c -; then
+    if ! printf '%s\n' "$manifest_line" | sha256sum -c -; then
       echo "❌ checksum mismatch for ${asset}" >&2
       echo "   refusing to install — possible tampering or corrupted download" >&2
       exit 1
     fi
   elif command -v shasum >/dev/null 2>&1; then
     # macOS default: shasum -a 256 -c reads <hash>  <file> lines.
-    if ! echo "$manifest_line" | shasum -a 256 -c -; then
+    if ! printf '%s\n' "$manifest_line" | shasum -a 256 -c -; then
       echo "❌ checksum mismatch for ${asset}" >&2
       echo "   refusing to install — possible tampering or corrupted download" >&2
       exit 1
@@ -103,12 +108,12 @@ else
   # explicitly only when they know they're installing a legacy
   # release that genuinely doesn't ship a manifest.
   if [ "${INSTALL_REVIEW_SKIP_VERIFICATION:-}" = "1" ]; then
-    echo "⚠️  no checksums.txt for ${VERSION} — skipping integrity check" >&2
+    echo "⚠️  ${checksums} unavailable for ${VERSION} — skipping integrity check" >&2
     echo "   (INSTALL_REVIEW_SKIP_VERIFICATION=1 — only safe for releases <v0.6.0)" >&2
     cd "$tmp"
   else
     echo "❌ failed to fetch ${checksums_url}" >&2
-    echo "   refusing to install — the manifest may be unavailable due to a network issue or a release packaging error" >&2
+    echo "   refusing to install — the checksum manifest may be unavailable due to a network issue or a release packaging error" >&2
     echo "   if you're installing a release older than v0.6.0 (which doesn't ship a manifest), re-run with:" >&2
     echo "     curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | INSTALL_REVIEW_SKIP_VERIFICATION=1 sh" >&2
     exit 1
