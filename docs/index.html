@@ -528,7 +528,11 @@
       color: #2d3748;
     }
 
-    .scope-col.is h3 { color: #2f855a; }
+    /* Match the saturation/weight of the red on the right column.
+       #2f855a was a light leaf-green that read as washed out next to
+       #c53030; #22543d (same tone as the FREE-pill text) lands closer
+       to the red's visual weight. */
+    .scope-col.is h3 { color: #22543d; }
     .scope-col.isnt h3 { color: #c53030; }
 
     .scope-col ul {
@@ -751,7 +755,7 @@
         <div class="llm-card paid">
           <h3>Codex</h3>
           <p>ChatGPT Plus subscription <strong>or</strong> OpenAI API key</p>
-          <span class="badge badge-paid">Paid (either way)</span>
+          <span class="badge badge-paid">Paid</span>
           <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Disabled by default. API key path is pay-per-token (usually cheapest for occasional review).</p>
         </div>
       </div>
