@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Failure lines now include actionable hints, not opaque error text.** Pre-fix, a SIGKILL'd CLI rendered as `[1/3] claude ✗ (claude review failed: signal: killed (output: ))` — three problems on one line: redundant `claude review failed:` prefix, empty-output noise (`(output: )`), and zero indication of *what to fix*. Real-user feedback was "I have all setup done, but it doesn't work — that's why users delete tools like this." Now: failures are classified by `internal/cli/ClassifyExit` into a one-line summary that always ends with an actionable next step. Examples:
-  - `[1/3] claude ✗ killed — likely out of memory or a hard timeout; try \`local-review commit HEAD\` for a smaller diff, or \`--only\` to skip claude`
+  - `[1/3] claude ✗ killed — likely out of memory or a hard timeout for claude; try a smaller diff: \`local-review commit HEAD\` (last commit), \`local-review staged\` (staged only), or pin a smaller-context model via \`llms.claude.model:\``
   - `[1/3] claude ✗ timeout — try \`local-review commit HEAD\` for a smaller diff, or raise llms.claude.timeout_sec in .local-review.yml`
   - `[1/3] claude ✗ exit status 1: error: API key not valid. Please pass a valid API key.`
 
