@@ -166,11 +166,12 @@ func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 
 // printLLMRow emits one CLI's full diagnostic block. configuredModel
 // is the cfg.LLMs[name].Model value (or empty); for ready rows we
-// always print a model line — either the pinned value or "(CLI default)"
-// — so users can tell "I didn't pin one" apart from "config didn't
-// load" at a glance. For not-authed rows we still elide when no model
-// is pinned, since the row's primary signal is the auth fix and the
-// "(CLI default)" line would be noise.
+// always print a model line — either the pinned value or a "vendor's
+// default" notice with a pin instruction — so users can tell "I
+// didn't pin one" apart from "config didn't load" at a glance, AND
+// know how to take control. For not-authed rows we still elide when
+// no model is pinned, since the row's primary signal is the auth fix
+// and the model line would be noise.
 func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string) {
 	displayName := getDisplayName(llm.Name)
 
