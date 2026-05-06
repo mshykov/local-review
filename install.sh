@@ -59,16 +59,28 @@ curl -fsSL "$url" -o "${tmp}/${asset}"
 echo "Downloading ${checksums_url}"
 if curl -fsSL "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
   cd "$tmp"
+  # Extract the manifest line for this exact asset before piping. POSIX
+  # sh has no `pipefail`, so `grep <asset> | sha256sum -c -` would have
+  # exited 0 even when grep matched nothing — sha256sum -c on empty
+  # stdin returns 0, so a malformed / wrong manifest would skip
+  # verification and proceed to extract a possibly-tampered tarball.
+  # Capturing first lets us fail loud when the asset isn't listed.
+  manifest_line=$(grep " ${asset}\$" "$checksums" || true)
+  if [ -z "$manifest_line" ]; then
+    echo "❌ ${asset} not listed in ${checksums}" >&2
+    echo "   refusing to install — manifest is malformed or built for a different asset set" >&2
+    exit 1
+  fi
   if command -v sha256sum >/dev/null 2>&1; then
     # GNU coreutils (Linux, Homebrew on macOS).
-    if ! grep " ${asset}\$" "$checksums" | sha256sum -c -; then
+    if ! echo "$manifest_line" | sha256sum -c -; then
       echo "❌ checksum mismatch for ${asset}" >&2
       echo "   refusing to install — possible tampering or corrupted download" >&2
       exit 1
     fi
   elif command -v shasum >/dev/null 2>&1; then
     # macOS default: shasum -a 256 -c reads <hash>  <file> lines.
-    if ! grep " ${asset}\$" "$checksums" | shasum -a 256 -c -; then
+    if ! echo "$manifest_line" | shasum -a 256 -c -; then
       echo "❌ checksum mismatch for ${asset}" >&2
       echo "   refusing to install — possible tampering or corrupted download" >&2
       exit 1

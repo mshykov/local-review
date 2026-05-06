@@ -532,6 +532,96 @@ func TestClassifyRunMode(t *testing.T) {
 	}
 }
 
+func TestSelectMergeLLM(t *testing.T) {
+	// Helpers
+	saveFailErr := errors.New("save review: disk full")
+	hardFailErr := errors.New("claude review failed: signal: killed")
+
+	cases := []struct {
+		name      string
+		results   []multi.ReviewResult
+		available []cli.LLM
+		preferred string
+		want      string // expected LLM name, "" = nil
+	}{
+		{
+			// Pre-fix bug: when SaveReview fails for everyone but
+			// content was produced, selectMergeLLM returned nil and
+			// the gate skipped — pre-commit hooks treat a tool error
+			// (not exit 2) as "let the commit through." This pins the
+			// fix: any agent with non-blank Output is eligible.
+			name: "all saves failed but content exists — still picks an LLM",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Output: "# Review\n## Major\n- bug", Error: saveFailErr},
+				{LLM: "gemini", Output: "# Review", Error: saveFailErr},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "gemini"}},
+			preferred: "auto",
+			want:      "claude", // auto-priority: claude > codex > gemini
+		},
+		{
+			name: "hard failure (no Output) is excluded, partner runs the merge",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Error: hardFailErr},
+				{LLM: "gemini", Output: "# Review"},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "gemini"}},
+			preferred: "auto",
+			want:      "gemini",
+		},
+		{
+			// Whitespace-only Output is also excluded (matches
+			// HasMergeableOutput / CountWithOutput's predicate).
+			name: "whitespace-only output excluded; codex picks up",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Output: "  \n\t"},
+				{LLM: "codex", Output: "# Review"},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "codex"}},
+			preferred: "auto",
+			want:      "codex",
+		},
+		{
+			name: "preferred override honored when eligible",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Output: "# A"},
+				{LLM: "gemini", Output: "# B"},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "gemini"}},
+			preferred: "gemini",
+			want:      "gemini",
+		},
+		{
+			name: "preferred override falls back to auto when not eligible",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Output: "# A"},
+				{LLM: "gemini", Error: hardFailErr},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "gemini"}},
+			preferred: "gemini",
+			want:      "claude",
+		},
+		{
+			name:      "no eligible reviewers — returns nil",
+			results:   []multi.ReviewResult{{LLM: "claude", Error: hardFailErr}},
+			available: []cli.LLM{{Name: "claude"}},
+			preferred: "auto",
+			want:      "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := selectMergeLLM(tc.results, tc.available, tc.preferred)
+			switch {
+			case got == nil && tc.want != "":
+				t.Errorf("got nil, want %s", tc.want)
+			case got != nil && got.Name != tc.want:
+				t.Errorf("got %s, want %s", got.Name, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateMergeWith(t *testing.T) {
 	active := []cli.LLM{{Name: "claude"}, {Name: "gemini"}}
 	cases := []struct {

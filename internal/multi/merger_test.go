@@ -60,6 +60,59 @@ func TestBuildMergeInput_SkipsEmptyOutputs(t *testing.T) {
 	}
 }
 
+func TestBuildMergeInput_SkipsWhitespaceOnlyOutputs(t *testing.T) {
+	// A CLI exiting zero with "\n" or " \t\n" is not actually a review.
+	// Pre-fix the bare `r.Output != ""` check let these through, and
+	// the merger ran on effectively empty input — producing a
+	// "successfully formatted" report from nothing. After the
+	// HasMergeableOutput unification this drops them on the floor
+	// alongside the truly empty case.
+	results := []ReviewResult{
+		{LLM: "claude", Output: "real finding"},
+		{LLM: "gemini", Output: "\n"},
+		{LLM: "codex", Output: "  \t\n  "},
+	}
+	in := BuildMergeInput(results, 2)
+	if len(in.Reviews) != 1 {
+		t.Errorf("want 1 review (whitespace dropped), got %d (%v)", len(in.Reviews), in.LLMNames)
+	}
+	if in.LLMNames != "claude" {
+		t.Errorf("LLMNames = %q, want %q", in.LLMNames, "claude")
+	}
+}
+
+func TestCountWithOutput_TrimsWhitespace(t *testing.T) {
+	results := []ReviewResult{
+		{LLM: "claude", Output: "real finding"},
+		{LLM: "gemini", Output: "   "},
+		{LLM: "codex", Output: ""},
+	}
+	if got := CountWithOutput(results); got != 1 {
+		t.Errorf("CountWithOutput = %d, want 1 (only claude has non-blank output)", got)
+	}
+}
+
+func TestHasMergeableOutput(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{"empty", "", false},
+		{"whitespace only", "  \n\t  ", false},
+		{"single newline", "\n", false},
+		{"real content", "# Review", true},
+		{"content with leading/trailing whitespace", "\n  # Review  \n", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HasMergeableOutput(ReviewResult{Output: tc.out}); got != tc.want {
+				t.Errorf("HasMergeableOutput(%q) = %v, want %v", tc.out, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildMergeInput_ClampsThresholdToReviewerCount(t *testing.T) {
 	// User configures consensus_threshold: 3 (default) but only 2
 	// agents actually produce output. The merge prompt must not ask

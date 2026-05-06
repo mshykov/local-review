@@ -3,6 +3,7 @@ package multi
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -115,15 +116,20 @@ func CountSuccessful(results []ReviewResult) int {
 	return count
 }
 
-// CountWithOutput returns the number of reviews with non-empty Output (matches BuildMergeInput's filter).
+// CountWithOutput returns the number of reviews with non-blank Output (matches BuildMergeInput's filter).
 func CountWithOutput(results []ReviewResult) int {
 	count := 0
 	for _, r := range results {
-		if r.Output != "" {
+		if HasMergeableOutput(r) {
 			count++
 		}
 	}
 	return count
+}
+
+// HasMergeableOutput reports whether r has non-whitespace Output (single source of truth across CountWithOutput, BuildMergeInput, selectMergeLLM).
+func HasMergeableOutput(r ReviewResult) bool {
+	return strings.TrimSpace(r.Output) != ""
 }
 
 // GetSuccessful returns only successful review results.

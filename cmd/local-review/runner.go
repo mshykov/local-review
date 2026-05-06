@@ -231,10 +231,20 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	if mergeable == 0 {
 		metadata.Merge.Status = "skipped"
 		_, _ = storage.SaveMetadata(branch, commit, metadata)
-		if successCount == 0 {
+		failed := len(results) - successCount
+		empty := successCount // succeeded (Error nil) but no Output; classifier already counted these as non-mergeable
+		switch {
+		case failed == len(results):
 			return fmt.Errorf("all %d LLM reviews failed", len(results))
+		case empty == len(results):
+			return fmt.Errorf("all %d LLM reviews returned empty output (no findings to merge)", len(results))
+		default:
+			// Mixed: some agents crashed, others exited zero with blank
+			// output. Pre-fix this case printed "all returned empty
+			// output" which misled users into debugging the wrong
+			// problem (an empty-output bug vs a crash).
+			return fmt.Errorf("no LLM produced output: %d failed, %d returned empty (nothing to merge)", failed, empty)
 		}
-		return fmt.Errorf("all %d LLM reviews returned empty output (no findings to merge)", len(results))
 	}
 
 	mergedPath, mergedContent := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
@@ -774,33 +784,42 @@ func buildMetadata(commit, branch string, results []multi.ReviewResult, startTim
 }
 
 // selectMergeLLM picks which agent merges findings. Priority:
-// caller-preferred → auto (claude > codex > gemini) → first successful.
+// caller-preferred → auto (claude > codex > gemini) → first eligible.
+//
+// Eligibility is "produced mergeable output" (matching CountWithOutput),
+// not "Error == nil". Pre-fix a SaveReview-failed-with-output run
+// (Error != nil, Output != "") was excluded from merger candidates, so
+// when *all* saves failed selectMergeLLM returned nil and the gate
+// skipped — a tool error instead of exit 2, which pre-commit hooks
+// silently ignore. The merge step itself only needs the LLM's CLI to
+// work for the merge prompt; whether an earlier per-LLM SaveReview
+// happened to succeed is unrelated.
 func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred string) *cli.LLM {
-	successful := make(map[string]cli.LLM)
+	eligible := make(map[string]cli.LLM)
 	for _, llm := range available {
 		for _, r := range results {
-			if r.LLM == llm.Name && r.Error == nil {
-				successful[llm.Name] = llm
+			if r.LLM == llm.Name && multi.HasMergeableOutput(r) {
+				eligible[llm.Name] = llm
 				break
 			}
 		}
 	}
-	if len(successful) == 0 {
+	if len(eligible) == 0 {
 		return nil
 	}
 	if preferred != "" && preferred != "auto" {
-		if llm, ok := successful[preferred]; ok {
+		if llm, ok := eligible[preferred]; ok {
 			return &llm
 		}
 	}
 	for _, name := range []string{"claude", "codex", "gemini"} {
-		if llm, ok := successful[name]; ok {
+		if llm, ok := eligible[name]; ok {
 			return &llm
 		}
 	}
 	for _, r := range results {
-		if r.Error == nil {
-			if llm, ok := successful[r.LLM]; ok {
+		if multi.HasMergeableOutput(r) {
+			if llm, ok := eligible[r.LLM]; ok {
 				return &llm
 			}
 		}

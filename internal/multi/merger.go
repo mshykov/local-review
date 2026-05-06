@@ -160,8 +160,11 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 	var llmNames []string
 
 	for _, r := range results {
-		// Include any review with output, regardless of save errors
-		if r.Output != "" {
+		// Include any review with non-blank output, regardless of save
+		// errors. HasMergeableOutput trims whitespace so a CLI exiting
+		// zero with "\n" doesn't feed an effectively empty review into
+		// the merger.
+		if HasMergeableOutput(r) {
 			reviews = append(reviews, ReviewContent{
 				LLM:     r.LLM,
 				Content: truncateForMerge(r.Output),
