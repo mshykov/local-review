@@ -143,7 +143,17 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	if err := validateMergeWith(sf, active); err != nil {
 		return err
 	}
-	printAgentRoster(active, configDisabled, cfg)
+
+	// Resolve commit + branch up front so the opening roster line can
+	// show "Reviewing <branch> (<sha>) with N LLMs..." — printing the
+	// roster before resolution would force a generic header and the
+	// user would have to scroll past N pages of findings to learn what
+	// they actually reviewed.
+	commit, branch, err := resolveCommitBranch(mode, ref)
+	if err != nil {
+		return err
+	}
+	printAgentRoster(active, configDisabled, cfg, branch, commit)
 
 	diffs, err := git.Extract(mode, ref)
 	if err != nil {
@@ -170,11 +180,6 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// multiLLMOutputOverride in cli/invoker.go) so the merger can
 	// consolidate prose across reviewers.
 	systemPrompt, err := selectPromptPack(cfg, diffs)
-	if err != nil {
-		return err
-	}
-
-	commit, branch, err := resolveCommitBranch(mode, ref)
 	if err != nil {
 		return err
 	}
@@ -212,7 +217,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	}
 
 	fmt.Println()
-	fmt.Printf("✓ %d/%d LLMs succeeded\n", successCount, len(results))
+	fmt.Printf("✓ %d/%d LLMs succeeded · total %s\n", successCount, len(results), time.Since(startTime).Round(time.Second))
 	if mergedPath != "" {
 		// "produced output" mirrors the classifier's basis (CountWithOutput,
 		// matching what the merger actually consumes). Using
@@ -419,11 +424,24 @@ func validateMergeWith(sf *sharedFlags, active []cli.LLM) error {
 	return fmt.Errorf("--merge-with %q not in active set %v", sf.mergeWith, names)
 }
 
-// printAgentRoster prints "Running review with N agents" plus one line
-// per agent showing model name and CLI version, plus a discoverability
-// hint when an authed agent is disabled in config.
-func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Config) {
-	fmt.Printf("Running review with %d LLM%s...\n", len(active), pluralS(len(active)))
+// printAgentRoster prints "Reviewing <branch> (<short-sha>) with N agents"
+// plus one line per agent showing model name and CLI version, plus a
+// discoverability hint when an authed agent is disabled in config.
+//
+// Including branch and commit on the first line tells the user *what*
+// they're reviewing without scrolling — important when the same shell
+// is jumping between checkouts and `local-review review` is the first
+// thing they see after a `git switch`.
+func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Config, branch, commit string) {
+	short := commit
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	if branch != "" && short != "" {
+		fmt.Printf("Reviewing %s (%s) with %d LLM%s...\n", branch, short, len(active), pluralS(len(active)))
+	} else {
+		fmt.Printf("Running review with %d LLM%s...\n", len(active), pluralS(len(active)))
+	}
 	for _, llm := range active {
 		model := modelFor(llm.Name, cfg)
 		if model != "" {

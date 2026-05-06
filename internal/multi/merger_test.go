@@ -59,3 +59,96 @@ func TestBuildMergeInput_SkipsEmptyOutputs(t *testing.T) {
 		t.Errorf("LLMNames = %q, want %q", in.LLMNames, "claude, codex")
 	}
 }
+
+func TestBuildMergeInput_ClampsThresholdToReviewerCount(t *testing.T) {
+	// User configures consensus_threshold: 3 (default) but only 2
+	// agents actually produce output. The merge prompt must not ask
+	// the LLM for "3+ reviewers agree" — that's impossible by design
+	// and the LLM apologizes for it in its own summary line, which
+	// reads as a broken template.
+	results := []ReviewResult{
+		{LLM: "claude", Output: "x"},
+		{LLM: "gemini", Output: "y"},
+	}
+	in := BuildMergeInput(results, 3)
+	if in.ConsensusThreshold != 2 {
+		t.Errorf("threshold not clamped: got %d, want 2 (reviewer count)", in.ConsensusThreshold)
+	}
+	// And: when the configured threshold is already ≤ reviewer count,
+	// it passes through unchanged.
+	in2 := BuildMergeInput(results, 2)
+	if in2.ConsensusThreshold != 2 {
+		t.Errorf("threshold mutated when within bounds: got %d, want 2", in2.ConsensusThreshold)
+	}
+	// Edge: a single-survivor degraded run (1 output, threshold 3).
+	// Clamp to 1 — the merge prompt becomes "1+ reviewers" which is
+	// vacuous but not actively misleading.
+	in3 := BuildMergeInput([]ReviewResult{{LLM: "claude", Output: "x"}}, 3)
+	if in3.ConsensusThreshold != 1 {
+		t.Errorf("solo run: threshold = %d, want 1", in3.ConsensusThreshold)
+	}
+	// Edge: zero outputs. Clamp would underflow / produce 0; keep
+	// the configured threshold so we don't divide-by-zero downstream
+	// (the caller short-circuits before reaching the merger anyway).
+	in4 := BuildMergeInput(nil, 3)
+	if in4.ConsensusThreshold != 3 {
+		t.Errorf("empty input: threshold = %d, want 3 (passthrough)", in4.ConsensusThreshold)
+	}
+}
+
+func TestStripFenceWrapper(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "wrapped in ```markdown fence — strip",
+			in:   "```markdown\n# Report\n## Summary\n```",
+			want: "# Report\n## Summary",
+		},
+		{
+			name: "wrapped in ```md fence — strip",
+			in:   "```md\n# Report\n```",
+			want: "# Report",
+		},
+		{
+			name: "wrapped in bare ``` fence — strip",
+			in:   "```\n# Report\n```",
+			want: "# Report",
+		},
+		{
+			name: "no fence — pass through",
+			in:   "# Report\n\nbody.",
+			want: "# Report\n\nbody.",
+		},
+		{
+			name: "inner ```python block must survive when no outer wrapper",
+			in:   "# Report\n```python\nx = 1\n```\n",
+			want: "# Report\n```python\nx = 1\n```\n",
+		},
+		{
+			name: "outer ```markdown wrapper with inner ```python — only outer stripped",
+			in:   "```markdown\n# Report\n```python\nx = 1\n```\n```",
+			want: "# Report\n```python\nx = 1\n```",
+		},
+		{
+			name: "fence with surrounding whitespace",
+			in:   "  \n```markdown\n# Report\n```\n  ",
+			want: "# Report",
+		},
+		{
+			name: "unbalanced opener but no closer — pass through unchanged",
+			in:   "```markdown\n# Report (truncated, no closing fence)",
+			want: "```markdown\n# Report (truncated, no closing fence)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := stripFenceWrapper(tc.in)
+			if got != tc.want {
+				t.Errorf("got:\n%q\nwant:\n%q", got, tc.want)
+			}
+		})
+	}
+}

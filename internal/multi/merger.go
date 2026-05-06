@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -68,7 +69,41 @@ func (m *Merger) Merge(ctx context.Context, input MergeInput) (string, error) {
 		return "", fmt.Errorf("merge review: %w", err)
 	}
 
-	return merged, nil
+	// Some merger LLMs ignore "Return ONLY the merged markdown report"
+	// and wrap their output in a ```markdown ... ``` fence. Without
+	// this strip, every multi-LLM run prints literal triple-backticks
+	// to the terminal AND saves them to disk in <commit>_merged.md.
+	return stripFenceWrapper(merged), nil
+}
+
+// fenceOpener matches the leading ```markdown / ```md / bare ```
+// fence the merger LLM sometimes wraps its full report in. Anchored
+// to start-of-string + optional whitespace so it can't match an
+// interior code block by accident.
+var fenceOpener = regexp.MustCompile("^\\s*```(?:markdown|md)?\\s*\\n")
+
+// fenceCloser matches the closing ``` at end-of-string. Optional
+// trailing whitespace tolerates the LLM ending with `\n` or `\n\n`.
+var fenceCloser = regexp.MustCompile("\\n?\\s*```\\s*$")
+
+// stripFenceWrapper removes a single outer ```markdown / ```md fence
+// when the LLM's full output is wrapped in one. Inner code blocks in
+// the report are unaffected: the regexes are anchored to the string
+// boundaries, so a report with embedded ```python blocks survives
+// intact.
+//
+// Both opener AND closer must match before we strip. A partial wrapper
+// (e.g., the LLM hit max-tokens mid-output and the trailing ``` is
+// missing) is left alone so we don't half-strip and produce a
+// frankenformatted report — better to show the leading fence verbatim
+// than to silently drop content.
+func stripFenceWrapper(s string) string {
+	if !fenceOpener.MatchString(s) || !fenceCloser.MatchString(s) {
+		return s
+	}
+	s = fenceOpener.ReplaceAllString(s, "")
+	s = fenceCloser.ReplaceAllString(s, "")
+	return strings.TrimRight(s, "\n")
 }
 
 // MaxReviewBytesForMerge caps how much of any single per-LLM review
@@ -89,6 +124,12 @@ const MaxReviewBytesForMerge = 8 * 1024
 // Per-review output is truncated to MaxReviewBytesForMerge with a
 // trailing notice so the merger can still pick up an explicit signal
 // that some content was clipped.
+//
+// ConsensusThreshold is clamped to the actual reviewer count so the
+// merge prompt never asks for "3+ reviewers agree" when only 2 ran —
+// the LLM was apologising for the impossible-by-design ask in its own
+// summary line ("0 (only 2 reviewers, but 3 issues have 2/2 consensus)"),
+// which read as a broken template.
 func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput {
 	var reviews []ReviewContent
 	var llmNames []string
@@ -104,10 +145,15 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 		}
 	}
 
+	effectiveThreshold := consensusThreshold
+	if n := len(reviews); n > 0 && effectiveThreshold > n {
+		effectiveThreshold = n
+	}
+
 	return MergeInput{
 		ReviewCount:        len(reviews),
 		LLMNames:           strings.Join(llmNames, ", "),
-		ConsensusThreshold: consensusThreshold,
+		ConsensusThreshold: effectiveThreshold,
 		Reviews:            reviews,
 	}
 }
