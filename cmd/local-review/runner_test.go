@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"reflect"
 	"sort"
 	"strings"
@@ -466,8 +467,20 @@ func TestSyntheticDetachedBranch(t *testing.T) {
 }
 
 func TestClassifyRunMode(t *testing.T) {
+	// Use a generic stub error here, not errBlockingFindings — that
+	// sentinel represents the post-merge gate, not an orchestrator-level
+	// agent failure, and conflating the two would muddy what this test
+	// is actually checking.
+	agentFailed := errors.New("agent failed")
+
 	ok := func(name string) multi.ReviewResult { return multi.ReviewResult{LLM: name, Output: "ok"} }
-	fail := func(name string) multi.ReviewResult { return multi.ReviewResult{LLM: name, Error: errBlockingFindings} }
+	fail := func(name string) multi.ReviewResult { return multi.ReviewResult{LLM: name, Error: agentFailed} }
+	// SaveReview-failed-after-success: orchestrator sets Error but
+	// Output is still set, and the merger will still consume the
+	// review. Classifier must count this as mergeable.
+	saveFailed := func(name string) multi.ReviewResult {
+		return multi.ReviewResult{LLM: name, Output: "ok", Error: errors.New("save review: disk full")}
+	}
 
 	cases := []struct {
 		name    string
@@ -498,6 +511,16 @@ func TestClassifyRunMode(t *testing.T) {
 			name:    "user picked --only claude — solo, expected",
 			results: []multi.ReviewResult{ok("claude")},
 			want:    runModeSolo,
+		},
+		{
+			name:    "two outputs, one of them save-failed — still a merge (merger sees both)",
+			results: []multi.ReviewResult{ok("claude"), saveFailed("gemini"), fail("codex")},
+			want:    runModeMerge,
+		},
+		{
+			name:    "all outputs save-failed but content is there — still a merge",
+			results: []multi.ReviewResult{saveFailed("claude"), saveFailed("gemini")},
+			want:    runModeMerge,
 		},
 	}
 	for _, tc := range cases {

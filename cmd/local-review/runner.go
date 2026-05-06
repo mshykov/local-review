@@ -515,18 +515,26 @@ const (
 )
 
 // classifyRunMode picks the framing for the merge step based on how
-// many agents survived. The merger still runs in every case (it's what
-// produces the structured Recommendation line the gate reads), but the
-// user-facing language is different so nobody mistakes a single-LLM
-// fallback for cross-model consensus. Zero-success runs never reach
-// here — the caller short-circuits with an "all LLMs failed" error.
+// many agents produced output the merger will actually see. We count
+// non-empty Output (matching BuildMergeInput's filter), not Error == nil:
+// a run where the LLM succeeded but SaveReview failed has Error != nil
+// yet Output != "", and the merger will still consume that review, so
+// the framing should reflect that. Pre-fix we used CountSuccessful and
+// would mis-flag such a run as "Degraded, only 1 of 3 succeeded" while
+// the merger was happily consolidating all 3 outputs.
+//
+// The merger still runs in every case (it's what produces the structured
+// Recommendation line the gate reads), but the user-facing language is
+// different so nobody mistakes a single-LLM fallback for cross-model
+// consensus. Zero-output runs never reach here — the caller short-
+// circuits with an "all LLMs failed" error.
 func classifyRunMode(results []multi.ReviewResult) runMode {
-	successful := multi.CountSuccessful(results)
+	mergeable := multi.CountWithOutput(results)
 	total := len(results)
 	switch {
-	case successful == 1 && total > 1:
+	case mergeable == 1 && total > 1:
 		return runModeDegraded
-	case successful == 1 && total == 1:
+	case mergeable == 1 && total == 1:
 		return runModeSolo
 	default:
 		return runModeMerge
@@ -543,7 +551,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 
 	switch mode {
 	case runModeDegraded:
-		fmt.Fprintf(os.Stderr, "⚠ Only %d of %d LLMs succeeded — output is single-source, no cross-model consensus.\n", multi.CountSuccessful(results), len(results))
+		fmt.Fprintf(os.Stderr, "⚠ Only %d of %d LLMs produced output — review is single-source, no cross-model consensus.\n", multi.CountWithOutput(results), len(results))
 		fmt.Println("Reformatting single review...")
 	case runModeSolo:
 		fmt.Println("Formatting review...")
@@ -561,7 +569,14 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 		metadata.Merge.Status = "skipped"
 		return "", ""
 	}
-	fmt.Printf("Using %s for merge...\n", mergeLLM.Name)
+	switch mode {
+	case runModeDegraded:
+		fmt.Printf("Using %s to reformat the surviving review...\n", mergeLLM.Name)
+	case runModeSolo:
+		fmt.Printf("Using %s to format the review...\n", mergeLLM.Name)
+	default:
+		fmt.Printf("Using %s for merge...\n", mergeLLM.Name)
+	}
 
 	merger, err := multi.NewMerger(*mergeLLM)
 	if err != nil {
