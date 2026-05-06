@@ -347,6 +347,16 @@ Glob filtering (include/exclude) uses a custom `**` glob matcher (review.go:matc
 - **Tests required** — new logic needs a unit test
 - **One-line doc comments** — exported functions/types only
 
+## Recurring failure patterns (review retrospective)
+
+`cmd/local-review/runner.go` + `cmd/local-review/doctor.go` account for ~40% of all reviewer findings across v0.4.0–v0.6.1. Both are orchestration files where multiple concepts meet. Following the rules below avoids re-living the same review iteration cycle.
+
+1. **Migrating a shared helper or contract? Grep all callers in the same commit.** Doc comments, sibling sites, README quotes, CHANGELOG, prompt templates. Drift across files is the #1 reviewer-flagged class of defect on this codebase (the `CountSuccessful` → `CountWithOutput` migration drifted across 5 review rounds before all sites aligned).
+2. **Doc comments and cobra `Long:` strings describe the *current* behavior, not yesterday's.** A comment claiming a function is "optional" while the function always fires is a bug. Update the comment in the same edit that changes the behavior.
+3. **Default to fail-closed.** `TrimSpace` for emptiness checks; check `grep` exit code separately from `sha256sum`; honor `pageInfo.hasNextPage`; refuse on invalid input rather than silently passing it through. When in doubt, return an error and let the caller decide.
+4. **Writing a v2 code path next to a v1 path? Enumerate v1's invariants explicitly and re-exercise each in v2.** Filters, severity caps, prompt-pack selection, JSON output, glob behavior — none of these carry over implicitly. PR #34 (v0.5.0 multi-LLM rewrite) shipped 5 separate "v2 dropped this" findings.
+5. **User-visible strings drift fast.** When changing a CLI output line, error message, or warning, grep the repo for the prior wording — CHANGELOG, README, prompt templates, help text, and tests likely all need to update with it.
+
 ## Pre-push Workflow (dogfooding)
 
 **Before pushing any branch to GitHub, run a self-review with the project's own tool.**
