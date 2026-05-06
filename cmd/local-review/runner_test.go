@@ -465,6 +465,50 @@ func TestSyntheticDetachedBranch(t *testing.T) {
 	}
 }
 
+func TestClassifyRunMode(t *testing.T) {
+	ok := func(name string) multi.ReviewResult { return multi.ReviewResult{LLM: name, Output: "ok"} }
+	fail := func(name string) multi.ReviewResult { return multi.ReviewResult{LLM: name, Error: errBlockingFindings} }
+
+	cases := []struct {
+		name    string
+		results []multi.ReviewResult
+		want    runMode
+	}{
+		{
+			name:    "two of three succeed — still a real merge",
+			results: []multi.ReviewResult{ok("claude"), ok("gemini"), fail("codex")},
+			want:    runModeMerge,
+		},
+		{
+			name:    "all three succeed — real merge",
+			results: []multi.ReviewResult{ok("claude"), ok("gemini"), ok("codex")},
+			want:    runModeMerge,
+		},
+		{
+			name:    "one of three succeed — degraded, no consensus",
+			results: []multi.ReviewResult{ok("claude"), fail("gemini"), fail("codex")},
+			want:    runModeDegraded,
+		},
+		{
+			name:    "one of two succeed — degraded",
+			results: []multi.ReviewResult{ok("claude"), fail("gemini")},
+			want:    runModeDegraded,
+		},
+		{
+			name:    "user picked --only claude — solo, expected",
+			results: []multi.ReviewResult{ok("claude")},
+			want:    runModeSolo,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyRunMode(tc.results); got != tc.want {
+				t.Errorf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateMergeWith(t *testing.T) {
 	active := []cli.LLM{{Name: "claude"}, {Name: "gemini"}}
 	cases := []struct {

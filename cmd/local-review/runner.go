@@ -214,7 +214,14 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	fmt.Println()
 	fmt.Printf("✓ %d/%d LLMs succeeded\n", successCount, len(results))
 	if mergedPath != "" {
-		fmt.Printf("Merged report: %s\n", mergedPath)
+		switch classifyRunMode(results) {
+		case runModeDegraded:
+			fmt.Printf("Single-LLM report (%d of %d agents failed): %s\n", len(results)-successCount, len(results), mergedPath)
+		case runModeSolo:
+			fmt.Printf("Report: %s\n", mergedPath)
+		default:
+			fmt.Printf("Merged report: %s\n", mergedPath)
+		}
 	}
 
 	// Per-LLM reviews succeeded but the merge step didn't produce
@@ -495,13 +502,54 @@ func syntheticDetachedBranch(branch, commit string) string {
 	return "detached-" + short
 }
 
+// runMode classifies a multi-LLM review by how many agents produced
+// output. The framing ("Merged review" vs "Single-LLM result") and the
+// degraded-run warning hinge on this distinction — see classifyRunMode
+// for the rules.
+type runMode int
+
+const (
+	runModeMerge    runMode = iota // ≥2 successes; a real cross-model merge
+	runModeDegraded                // exactly 1 success out of ≥2; agents failed, no consensus
+	runModeSolo                    // exactly 1 success out of 1; user chose --only, expected
+)
+
+// classifyRunMode picks the framing for the merge step based on how
+// many agents survived. The merger still runs in every case (it's what
+// produces the structured Recommendation line the gate reads), but the
+// user-facing language is different so nobody mistakes a single-LLM
+// fallback for cross-model consensus. Zero-success runs never reach
+// here — the caller short-circuits with an "all LLMs failed" error.
+func classifyRunMode(results []multi.ReviewResult) runMode {
+	successful := multi.CountSuccessful(results)
+	total := len(results)
+	switch {
+	case successful == 1 && total > 1:
+		return runModeDegraded
+	case successful == 1 && total == 1:
+		return runModeSolo
+	default:
+		return runModeMerge
+	}
+}
+
 // mergeAndPrint runs the merge LLM, saves the merged report, and prints
 // it to stdout so users see findings without `cat`-ing a file. Returns
 // the saved path and the merged content; both are "" on skip/failure.
 // The content is returned so the caller can run the blocking-finding
 // gate without re-reading from disk.
 func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) (string, string) {
-	fmt.Println("Merging reviews...")
+	mode := classifyRunMode(results)
+
+	switch mode {
+	case runModeDegraded:
+		fmt.Fprintf(os.Stderr, "⚠ Only %d of %d LLMs succeeded — output is single-source, no cross-model consensus.\n", multi.CountSuccessful(results), len(results))
+		fmt.Println("Reformatting single review...")
+	case runModeSolo:
+		fmt.Println("Formatting review...")
+	default:
+		fmt.Println("Merging reviews...")
+	}
 
 	preferred := cfg.Merge.PreferredLLM
 	if sf.mergeWith != "" {
@@ -561,7 +609,14 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	metadata.Merge.Status = "success"
 	metadata.Merge.DurationMs = mergeDuration.Milliseconds()
 
-	fmt.Printf("✓ Merged review (%.1fs)\n\n", mergeDuration.Seconds())
+	switch mode {
+	case runModeDegraded:
+		fmt.Printf("✓ Reformatted (%.1fs) — single-LLM, no merge\n\n", mergeDuration.Seconds())
+	case runModeSolo:
+		fmt.Printf("✓ Formatted review (%.1fs)\n\n", mergeDuration.Seconds())
+	default:
+		fmt.Printf("✓ Merged review (%.1fs)\n\n", mergeDuration.Seconds())
+	}
 
 	// Print the merged review inline so users see findings without cat.
 	fmt.Println("─── Findings ───")

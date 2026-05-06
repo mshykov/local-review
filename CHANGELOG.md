@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-06
+
+### Changed
+- **`--help` no longer leads with a 5-line figlet banner.** Replaced with a single-line title so the `git commit` editor and CI logs don't get a wall of ASCII art every time. Subcommands now group as Review / Setup / Other (canonical `review` first, not alphabetised behind `branch`).
+
+### Fixed
+- **Single-LLM-survivor runs are no longer mis-framed as "Merged review".** When a multi-LLM run starts with N≥2 agents but only 1 succeeds, the output is single-source — there is no cross-model consensus. The CLI now prints a `⚠ Only X of N LLMs succeeded` warning, calls the post-step "Reformatting" instead of "Merging", and labels the saved file as a "Single-LLM report". Solo runs invoked via `--only <agent>` are also relabeled to drop the misleading "Merged" framing. The merge step still runs (it produces the structured Recommendation line the pre-commit gate reads); only the user-facing language changes.
+
+### Docs
+- **README and landing page gain a "What it is, what it isn't" block** at the top, before the feature list. Heads off the recurring confusions that surfaced in launch feedback (vs Claude's `/simplify`, "is it really local?", SaaS vs CLI, LLM vs linter).
+
 ## [0.6.0] - 2026-05-05
 
 ### Added
