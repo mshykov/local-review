@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // stderrTailMaxLen caps how much stderr we surface inline in the
@@ -68,7 +69,16 @@ func ClassifyExit(ctx context.Context, err error, combinedOutput []byte, agent s
 		stderr := strings.TrimSpace(string(combinedOutput))
 		if stderr != "" {
 			if len(stderr) > stderrTailMaxLen {
-				stderr = "…" + stderr[len(stderr)-stderrTailMaxLen:]
+				// Walk the cut forward to a UTF-8 rune boundary.
+				// Pre-fix this byte slice could split a multi-byte
+				// codepoint (Cyrillic, CJK, emoji) and emit invalid
+				// UTF-8 in the failure line — exactly when the user
+				// is already debugging a non-ASCII error message.
+				cut := len(stderr) - stderrTailMaxLen
+				for cut < len(stderr) && !utf8.RuneStart(stderr[cut]) {
+					cut++
+				}
+				stderr = "…" + stderr[cut:]
 			}
 			return fmt.Sprintf("%s: %s", errMsg, stderr)
 		}
