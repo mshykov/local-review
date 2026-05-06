@@ -6,11 +6,17 @@ name: Release
 # Triggered by:
 #   - Push to main, only when the merged PR has a `release` label.
 #     The bump type is read from `major`/`minor`/`patch` labels (default: patch).
-#     ALSO requires a complete Copilot review on the PR with every
-#     Copilot conversation resolved — see the "Verify Copilot review"
-#     step below.
+#     The "all conversations resolved" requirement is enforced *pre-merge*
+#     by the branch-protection ruleset on `main` ("Require conversation
+#     resolution before merging"), so by the time this workflow runs on
+#     a release-labeled merge, threads are already resolved. Pre-v0.6.4
+#     this workflow had its own post-merge "Verify Copilot review" step
+#     that duplicated the check; it was removed because it ran too late
+#     (after merge) and required a Copilot review that GitHub doesn't
+#     always schedule, producing manual-dispatch ceremonies on every
+#     release. The branch protection rule covers the same intent
+#     correctly.
 #   - Manual workflow_dispatch with an explicit version (e.g. v0.1.5).
-#     Bypasses the Copilot gate; the maintainer is taking responsibility.
 #
 # Why combined: GitHub doesn't let GITHUB_TOKEN-pushed events trigger other
 # workflows. Splitting tag/build/publish across multiple workflows broke that
@@ -89,156 +95,6 @@ jobs:
             echo "PR #$pr_number has no 'release' label — skipping"
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Verify Copilot review (release-labeled PRs only)
-        # Manual workflow_dispatch is the maintainer's escape hatch — they
-        # set the version explicitly and bypass this gate. Push-triggered
-        # releases (the 99% path) MUST have a complete Copilot review with
-        # every Copilot thread resolved.
-        if: steps.gate.outputs.should_release == 'true' && inputs.version == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          COMMIT_SHA: ${{ github.sha }}
-        run: |
-          pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
-            --jq '.[0].number' 2>/dev/null || echo "")
-          if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
-            echo "ERROR: 'release' label set but no PR found for commit ${COMMIT_SHA}"
-            exit 1
-          fi
-
-          owner="${REPO%%/*}"
-          name="${REPO##*/}"
-
-          # GraphQL because the REST review-comments endpoint doesn't
-          # expose isResolved. Each reviewThread groups one or more
-          # comments under a resolution state — the conversation as
-          # a whole is what gets "resolved" in the UI.
-          #
-          # Pagination matters: a single page returns up to 100 threads.
-          # If hasNextPage is true we'd silently miss unresolved Copilot
-          # threads beyond the first page. Loop until exhausted; only
-          # then trust the totals. Match any bot login containing
-          # "copilot" (case-insensitive) — GitHub has shipped Copilot
-          # review under several bot identities (copilot-pull-request-
-          # reviewer[bot], github-copilot[bot], plain Copilot), and we'd
-          # rather match too broadly than refuse to release because of
-          # a bot rename.
-          total=0
-          unresolved=0
-          cursor=""
-          while :; do
-            # Build the gh-api invocation. The first iteration must NOT
-            # send a cursor at all — passing `cursor=""` makes the
-            # graphql variable an empty string instead of null, which
-            # GitHub's API rejects (it expects either a real cursor or
-            # the variable absent / null). Build the args slice
-            # accordingly.
-            if [ -z "$cursor" ]; then
-              page=$(gh api graphql \
-                -F owner="$owner" -F name="$name" -F num="$pr_number" \
-                -f query='
-                  query($owner: String!, $name: String!, $num: Int!) {
-                    repository(owner: $owner, name: $name) {
-                      pullRequest(number: $num) {
-                        reviewThreads(first: 100) {
-                          pageInfo { hasNextPage endCursor }
-                          nodes {
-                            isResolved
-                            comments(first: 1) {
-                              nodes { author { login } }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }')
-            else
-              page=$(gh api graphql \
-                -F owner="$owner" -F name="$name" -F num="$pr_number" -F cursor="$cursor" \
-                -f query='
-                  query($owner: String!, $name: String!, $num: Int!, $cursor: String) {
-                    repository(owner: $owner, name: $name) {
-                      pullRequest(number: $num) {
-                        reviewThreads(first: 100, after: $cursor) {
-                          pageInfo { hasNextPage endCursor }
-                          nodes {
-                            isResolved
-                            comments(first: 1) {
-                              nodes { author { login } }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }')
-            fi
-            # Null-safe author check: a thread whose first comment has
-            # no author (deleted bot account, or a comment-less thread
-            # GitHub returned for some reason) makes `.login | test()`
-            # crash the entire release job. Coalesce to "" first so the
-            # filter just doesn't match those threads.
-            copilot_filter='[.data.repository.pullRequest.reviewThreads.nodes[] | select(((.comments.nodes[0].author.login // "") | test("copilot"; "i")))]'
-            page_total=$(echo "$page" | jq "$copilot_filter | length")
-            page_unresolved=$(echo "$page" | jq "$copilot_filter | map(select(.isResolved == false)) | length")
-            total=$((total + page_total))
-            unresolved=$((unresolved + page_unresolved))
-            has_next=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
-            if [ "$has_next" != "true" ]; then
-              break
-            fi
-            cursor=$(echo "$page" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor')
-          done
-
-          # A submitted PR review can exist without any reviewThreads
-          # (Copilot left only a body comment, no inline file comments).
-          # If we keyed "did Copilot review?" off threads alone, that
-          # case would falsely block the release. Cross-check against
-          # the PullRequest.reviews connection — any review object
-          # authored by a *copilot bot is evidence enough that Copilot
-          # ran, even when threads is 0.
-          reviews_resp=$(gh api graphql \
-            -F owner="$owner" -F name="$name" -F num="$pr_number" \
-            -f query='
-              query($owner: String!, $name: String!, $num: Int!) {
-                repository(owner: $owner, name: $name) {
-                  pullRequest(number: $num) {
-                    reviews(first: 100) {
-                      nodes {
-                        author { login }
-                        state
-                      }
-                    }
-                  }
-                }
-              }')
-          # State filter: a "Copilot reviewed this" claim only counts
-          # for reviews that actually shipped a verdict. Drop:
-          #   - PENDING  : draft, never submitted (doesn't represent any opinion)
-          #   - DISMISSED: was a review, then explicitly invalidated (stale)
-          # Keep:
-          #   - APPROVED, CHANGES_REQUESTED, COMMENTED — all real submissions
-          #     that produced thread state and/or verdicts the maintainer can
-          #     act on. The unresolved-thread check downstream still catches
-          #     the case where Copilot raised concerns and they weren't
-          #     addressed.
-          reviews_count=$(echo "$reviews_resp" | jq '[.data.repository.pullRequest.reviews.nodes[] | select(((.author.login // "") | test("copilot"; "i"))) | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "COMMENTED")] | length')
-
-          if [ "$total" = "0" ] && [ "$reviews_count" = "0" ]; then
-            echo "::error::Release blocked — no Copilot review or review thread found on PR #${pr_number}."
-            echo "Either wait for Copilot to complete its review and re-tag, or trigger this"
-            echo "workflow manually via workflow_dispatch with an explicit version."
-            exit 1
-          fi
-          if [ "$unresolved" -gt 0 ]; then
-            echo "::error::Release blocked — Copilot has ${unresolved} unresolved review thread(s) on PR #${pr_number}."
-            echo "Resolve each Copilot conversation in the GitHub UI before this release can ship,"
-            echo "or trigger the release manually via workflow_dispatch (after fixing the underlying issues)."
-            exit 1
-          fi
-
-          echo "Copilot review on PR #${pr_number}: ${total} thread(s), all resolved — proceeding"
 
       - name: Determine version
         id: bump
