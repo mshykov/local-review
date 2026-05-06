@@ -178,6 +178,12 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 		fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
 		if configuredModel != "" {
 			fmt.Fprintf(out, "    model:         %s\n", configuredModel)
+		} else {
+			// No pinned model — the invoker won't pass --model and the
+			// vendor CLI picks its own current default. Surface this so
+			// users debugging "why did claude run model X" can tell
+			// "didn't pin one" apart from "config didn't load."
+			fmt.Fprintf(out, "    model:         (CLI default)\n")
 		}
 
 	case statusNotAuthed:

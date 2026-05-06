@@ -447,7 +447,11 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 		if model != "" {
 			fmt.Printf("  • %s %s (CLI v%s)\n", llm.Name, model, llm.Version)
 		} else {
-			fmt.Printf("  • %s (CLI v%s)\n", llm.Name, llm.Version)
+			// No model pinned in config → the invoker won't pass
+			// --model, so the vendor CLI uses its own current default.
+			// Mark this explicitly so the user can tell "I didn't
+			// configure this" apart from "the tool didn't detect it."
+			fmt.Printf("  • %s (CLI v%s, model: CLI default)\n", llm.Name, llm.Version)
 		}
 	}
 	if len(configDisabled) > 0 {

@@ -18,6 +18,28 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaults_MultiLLMModelsAreEmpty(t *testing.T) {
+	// Multi-LLM defaults intentionally leave Model unset so each vendor
+	// CLI uses its own current stable. Pinning model IDs in our defaults
+	// (claude-3-5-sonnet-20241022, gemini-1.5-pro, gpt-4) was a v0.1
+	// decision that aged into 12-24-month staleness by v0.6.x, with no
+	// release cadence that justified the maintenance churn of bumping
+	// them. If a future contributor adds a hardcoded model here, they
+	// should make a deliberate call about how it'll be kept fresh; this
+	// test fails loudly so the question gets asked.
+	d := Defaults()
+	for _, name := range []string{"claude", "gemini", "codex"} {
+		llm, ok := d.LLMs[name]
+		if !ok {
+			t.Errorf("default LLM %q missing", name)
+			continue
+		}
+		if llm.Model != "" {
+			t.Errorf("default LLM %q has hardcoded Model=%q — should be empty so the CLI picks its own current default; if you really want a pinned ID, document the rotation cadence and update this test", name, llm.Model)
+		}
+	}
+}
+
 func TestMergeReplaces(t *testing.T) {
 	dst := Defaults()
 	src := Config{
