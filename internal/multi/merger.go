@@ -5,8 +5,10 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"regexp"
 	"strings"
 	"text/template"
+	"unicode/utf8"
 
 	"github.com/mshykov/local-review/internal/cli"
 )
@@ -68,7 +70,66 @@ func (m *Merger) Merge(ctx context.Context, input MergeInput) (string, error) {
 		return "", fmt.Errorf("merge review: %w", err)
 	}
 
-	return merged, nil
+	// Some merger LLMs ignore "Return ONLY the merged markdown report"
+	// and wrap their output in a ```markdown ... ``` fence. Without
+	// this strip, every multi-LLM run prints literal triple-backticks
+	// to the terminal AND saves them to disk in <commit>_merged.md.
+	return stripFenceWrapper(merged), nil
+}
+
+// fenceOpener matches the leading ```markdown / ```md / bare ```
+// fence the merger LLM sometimes wraps its full report in. Anchored
+// to start-of-string + optional whitespace so it can't match an
+// interior code block by accident. `\r?\n` tolerates CRLF line
+// endings — windows builds and some CLIs emit them.
+var fenceOpener = regexp.MustCompile("^\\s*```(?:markdown|md)?\\s*\\r?\\n")
+
+// fenceCloser matches the closing ``` at end-of-string. Optional
+// trailing whitespace tolerates the LLM ending with `\n`, `\n\n`,
+// or `\r\n`.
+var fenceCloser = regexp.MustCompile("\\r?\\n?\\s*```\\s*$")
+
+// fenceCounter counts triple-backtick fences at line starts. Used to
+// decide whether stripping the outer pair would corrupt inner code
+// blocks (an unbalanced count means the wrapper is truncated, not
+// complete).
+var fenceCounter = regexp.MustCompile("(?m)^\\s*```")
+
+// stripFenceWrapper removes a single outer ```markdown / ```md fence
+// when the LLM's full output is wrapped in one. Inner code blocks in
+// the report are unaffected.
+//
+// Three guards fire in order:
+//
+//  1. Both opener AND closer regexes must match (anchored to string
+//     boundaries). A partial wrapper is left alone.
+//  2. The total fence count must be even. A complete report with the
+//     outer wrapper has an even count (outer pair + each inner pair);
+//     an odd count means a truncated wrapper, where what looks like
+//     the closer is actually an inner block's closer that we'd
+//     corrupt by stripping. Pre-guard, a report ending mid-Python-
+//     block with `\n```\n` would lose its inner closer.
+//  3. After stripping, the remainder must have a balanced (even)
+//     fence count. Defense in depth — if the regex matched something
+//     other than what step 2's parity check assumes, we leave the
+//     input alone.
+//
+// On any guard failure we return the input unchanged: better to show
+// a leading ```markdown line verbatim than to silently mangle
+// content.
+func stripFenceWrapper(s string) string {
+	if !fenceOpener.MatchString(s) || !fenceCloser.MatchString(s) {
+		return s
+	}
+	if len(fenceCounter.FindAllString(s, -1))%2 != 0 {
+		return s
+	}
+	stripped := fenceOpener.ReplaceAllString(s, "")
+	stripped = fenceCloser.ReplaceAllString(stripped, "")
+	if len(fenceCounter.FindAllString(stripped, -1))%2 != 0 {
+		return s
+	}
+	return strings.TrimRight(stripped, "\r\n")
 }
 
 // MaxReviewBytesForMerge caps how much of any single per-LLM review
@@ -89,13 +150,22 @@ const MaxReviewBytesForMerge = 8 * 1024
 // Per-review output is truncated to MaxReviewBytesForMerge with a
 // trailing notice so the merger can still pick up an explicit signal
 // that some content was clipped.
+//
+// ConsensusThreshold is clamped to the actual reviewer count so the
+// merge prompt never asks for "3+ reviewers agree" when only 2 ran —
+// the LLM was apologising for the impossible-by-design ask in its own
+// summary line ("0 (only 2 reviewers, but 3 issues have 2/2 consensus)"),
+// which read as a broken template.
 func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput {
 	var reviews []ReviewContent
 	var llmNames []string
 
 	for _, r := range results {
-		// Include any review with output, regardless of save errors
-		if r.Output != "" {
+		// Include any review with non-blank output, regardless of save
+		// errors. HasMergeableOutput trims whitespace so a CLI exiting
+		// zero with "\n" doesn't feed an effectively empty review into
+		// the merger.
+		if HasMergeableOutput(r) {
 			reviews = append(reviews, ReviewContent{
 				LLM:     r.LLM,
 				Content: truncateForMerge(r.Output),
@@ -104,10 +174,27 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 		}
 	}
 
+	// Clamp the threshold into [1, reviewerCount]. Two failure modes
+	// guard:
+	//
+	//   - User config sets `consensus_threshold: 0` (or negative). Without
+	//     the floor, the prompt would say "0+ reviewers agree" / "-1+
+	//     reviewers agree" — meaningless instructions to the merger.
+	//   - User config leaves the default (3) but only 2 agents produce
+	//     output. The ceiling drops the prompt's threshold to 2 so it
+	//     doesn't ask the impossible.
+	effectiveThreshold := consensusThreshold
+	if effectiveThreshold < 1 {
+		effectiveThreshold = 1
+	}
+	if n := len(reviews); n > 0 && effectiveThreshold > n {
+		effectiveThreshold = n
+	}
+
 	return MergeInput{
 		ReviewCount:        len(reviews),
 		LLMNames:           strings.Join(llmNames, ", "),
-		ConsensusThreshold: consensusThreshold,
+		ConsensusThreshold: effectiveThreshold,
 		Reviews:            reviews,
 	}
 }
@@ -117,6 +204,11 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 // when within the cap; otherwise truncates and appends an explicit
 // "[…truncated]" marker so a reader (human or LLM) can tell that
 // findings may continue in the saved per-LLM file.
+//
+// The cut point is walked back to a UTF-8 rune boundary. Pre-fix the
+// raw byte slice could split a multi-byte code point (Cyrillic, CJK,
+// emoji) and feed invalid UTF-8 into the merger prompt, degrading or
+// breaking the merge step on non-ASCII reviews.
 func truncateForMerge(s string) string {
 	if len(s) <= MaxReviewBytesForMerge {
 		return s
@@ -125,6 +217,13 @@ func truncateForMerge(s string) string {
 	cut := MaxReviewBytesForMerge - len(marker)
 	if cut < 0 {
 		cut = 0
+	}
+	// Walk back until we land on a UTF-8 start byte (or hit position 0).
+	// utf8.RuneStart returns true for any byte that is the first byte
+	// of an encoded rune, so this leaves us with a valid prefix even
+	// when the cap fell mid-rune.
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
 	}
 	return s[:cut] + marker
 }

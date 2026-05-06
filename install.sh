@@ -59,16 +59,39 @@ curl -fsSL "$url" -o "${tmp}/${asset}"
 echo "Downloading ${checksums_url}"
 if curl -fsSL "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
   cd "$tmp"
+  # Extract the manifest line for this exact asset before piping. POSIX
+  # sh has no `pipefail`, so `grep <asset> | sha256sum -c -` would have
+  # exited 0 even when grep matched nothing — sha256sum -c on empty
+  # stdin returns 0, so a malformed / wrong manifest would skip
+  # verification and proceed to extract a possibly-tampered tarball.
+  # Capturing first lets us fail loud when the asset isn't listed.
+  #
+  # awk does an exact last-field equality match. Using `grep` here was
+  # subtly broken: BRE treats the literal `.` characters in `.tar.gz`
+  # as "any character," so a manifest line for `local-reviewxtar.gz`
+  # could match `local-review.tar.gz` and slip a wrong-asset hash past
+  # the checksum step.
+  manifest_line=$(awk -v a="$asset" '$NF == a' "$checksums")
+  if [ -z "$manifest_line" ]; then
+    echo "❌ ${asset} not listed in ${checksums}" >&2
+    echo "   refusing to install — manifest is malformed or built for a different asset set" >&2
+    exit 1
+  fi
+  # Use `printf '%s\n'` rather than `echo` to feed the verifier:
+  # POSIX `echo` semantics differ across shells (some interpret backslash
+  # escapes by default, busybox's accepts -e/-n flags), so a manifest
+  # line with backslashes or one starting with `-` could be mangled or
+  # consumed as flags. printf '%s\n' is uniformly literal.
   if command -v sha256sum >/dev/null 2>&1; then
     # GNU coreutils (Linux, Homebrew on macOS).
-    if ! grep " ${asset}\$" "$checksums" | sha256sum -c -; then
+    if ! printf '%s\n' "$manifest_line" | sha256sum -c -; then
       echo "❌ checksum mismatch for ${asset}" >&2
       echo "   refusing to install — possible tampering or corrupted download" >&2
       exit 1
     fi
   elif command -v shasum >/dev/null 2>&1; then
     # macOS default: shasum -a 256 -c reads <hash>  <file> lines.
-    if ! grep " ${asset}\$" "$checksums" | shasum -a 256 -c -; then
+    if ! printf '%s\n' "$manifest_line" | shasum -a 256 -c -; then
       echo "❌ checksum mismatch for ${asset}" >&2
       echo "   refusing to install — possible tampering or corrupted download" >&2
       exit 1
@@ -78,9 +101,23 @@ if curl -fsSL "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
     echo "   install one of: coreutils (sha256sum) or perl (shasum) for tamper resistance" >&2
   fi
 else
-  echo "⚠️  no checksums.txt for ${VERSION} — skipping integrity check" >&2
-  echo "   (releases before v0.6.0 don't ship a manifest; upgrade to v0.6+ for verified installs)" >&2
-  cd "$tmp"
+  # Manifest fetch failed. Pre-fix we always fell through to install-
+  # without-verification with just a warning, so any release packaging
+  # error or transient network issue silently turned into an
+  # unverified install. Default to fail-loud; let users opt out
+  # explicitly only when they know they're installing a legacy
+  # release that genuinely doesn't ship a manifest.
+  if [ "${INSTALL_REVIEW_SKIP_VERIFICATION:-}" = "1" ]; then
+    echo "⚠️  ${checksums} unavailable for ${VERSION} — skipping integrity check" >&2
+    echo "   (INSTALL_REVIEW_SKIP_VERIFICATION=1 — only safe for releases <v0.6.0)" >&2
+    cd "$tmp"
+  else
+    echo "❌ failed to fetch ${checksums_url}" >&2
+    echo "   refusing to install — the checksum manifest may be unavailable due to a network issue or a release packaging error" >&2
+    echo "   if you're installing a release older than v0.6.0 (which doesn't ship a manifest), re-run with:" >&2
+    echo "     curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | INSTALL_REVIEW_SKIP_VERIFICATION=1 sh" >&2
+    exit 1
+  fi
 fi
 
 tar -xzf "$asset"

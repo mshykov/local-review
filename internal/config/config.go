@@ -107,19 +107,27 @@ func Defaults() Config {
 			ExcludeGlobs: []string{"**/*.lock", "**/*.snap", "**/dist/**", "**/build/**"},
 		},
 
-		// v0.1: multi-LLM defaults
+		// v0.1: multi-LLM defaults.
+		//
+		// Model is intentionally empty for every agent. We rely on the
+		// vendor CLI's own current default rather than hardcoding model
+		// IDs in our config — those go stale within months (the v0.1
+		// defaults pinned claude-3-5-sonnet-20241022, gemini-1.5-pro,
+		// and gpt-4, all 12-24 months out of date by v0.6.x). Each
+		// invoker (internal/cli/invoker.go) only passes --model when
+		// non-empty, so an empty default leaves the CLI on whatever it
+		// currently considers stable. Users who want to pin a specific
+		// model should set `model:` explicitly in .local-review.yml.
 		LLMs: map[string]LLMConfig{
 			"claude": {
 				Enabled:    boolPtr(true),
 				CLIPath:    "claude",
-				Model:      "claude-3-5-sonnet-20241022",
 				APIKeyEnv:  "ANTHROPIC_API_KEY",
 				TimeoutSec: 120,
 			},
 			"gemini": {
 				Enabled:    boolPtr(true),
 				CLIPath:    "gemini",
-				Model:      "gemini-1.5-pro",
 				APIKeyEnv:  "GEMINI_API_KEY",
 				TimeoutSec: 120,
 			},
@@ -129,7 +137,6 @@ func Defaults() Config {
 				// but we only invoke it when the user has explicitly authenticated,
 				// so running by default doesn't surprise anyone with a bill.
 				CLIPath:    "codex",
-				Model:      "gpt-4",
 				APIKeyEnv:  "OPENAI_API_KEY",
 				TimeoutSec: 120,
 			},

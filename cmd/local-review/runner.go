@@ -143,7 +143,17 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	if err := validateMergeWith(sf, active); err != nil {
 		return err
 	}
-	printAgentRoster(active, configDisabled, cfg)
+
+	// Resolve commit + branch up front so the opening roster line can
+	// show "Reviewing <branch> (<sha>) with N LLMs..." — printing the
+	// roster before resolution would force a generic header and the
+	// user would have to scroll past N pages of findings to learn what
+	// they actually reviewed.
+	commit, branch, err := resolveCommitBranch(mode, ref)
+	if err != nil {
+		return err
+	}
+	printAgentRoster(active, configDisabled, cfg, branch, commit)
 
 	diffs, err := git.Extract(mode, ref)
 	if err != nil {
@@ -174,11 +184,6 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return err
 	}
 
-	commit, branch, err := resolveCommitBranch(mode, ref)
-	if err != nil {
-		return err
-	}
-
 	startTime := time.Now()
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)
@@ -198,12 +203,49 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	fmt.Println()
 
 	successCount := multi.CountSuccessful(results)
+	mergeable := multi.CountWithOutput(results)
+	rmode := classifyRunMode(results) // computed once here; reused in the report-path block below to avoid a second traversal
 	metadata := buildMetadata(commit, branch, results, startTime)
 
-	if successCount == 0 {
+	// Short-circuit on "nothing for the merger to consume." Pre-fix
+	// this checked successCount (Error == nil), which let two cases
+	// slip past:
+	//
+	//   1. SaveReview-failed-with-output: Error is set but Output is
+	//      populated. successCount drops to 0 even though the merger
+	//      could still consolidate the in-memory output. Pre-fix we
+	//      aborted with "all N reviews failed" — wrong, the reviews
+	//      ran, only persistence failed.
+	//   2. CLI-exited-zero-with-empty-output: Error is nil but Output
+	//      is "". successCount stays positive but BuildMergeInput
+	//      drops the empty entry, so the merger ran on 0 reviews and
+	//      classifyRunMode fell through to runModeMerge — both giving
+	//      the user a "Merged review" framing for what was actually
+	//      nothing.
+	//
+	// CountWithOutput matches what the merger actually consumes, so
+	// "0 mergeable" is the correct threshold for "stop here." When
+	// successCount disagrees (case 1: 0 successCount but mergeable),
+	// the merge proceeds and the gate runs. When mergeable is 0 we
+	// pick the right error message based on whether anyone "succeeded"
+	// in the loose Error == nil sense.
+	if mergeable == 0 {
 		metadata.Merge.Status = "skipped"
 		_, _ = storage.SaveMetadata(branch, commit, metadata)
-		return fmt.Errorf("all %d LLM reviews failed", len(results))
+		failed := len(results) - successCount
+		empty := successCount // succeeded (Error nil) but no Output; classifier already counted these as non-mergeable
+		switch {
+		case failed == len(results):
+			return fmt.Errorf("all %d LLM reviews failed", len(results))
+		case empty == len(results):
+			return fmt.Errorf("all %d LLM reviews returned empty output (no findings to merge)", len(results))
+		default:
+			// Mixed: some agents crashed, others exited zero with blank
+			// output. Pre-fix this case printed "all returned empty
+			// output" which misled users into debugging the wrong
+			// problem (an empty-output bug vs a crash).
+			return fmt.Errorf("no LLM produced output: %d failed, %d returned empty (nothing to merge)", failed, empty)
+		}
 	}
 
 	mergedPath, mergedContent := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
@@ -212,21 +254,25 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	}
 
 	fmt.Println()
-	fmt.Printf("✓ %d/%d LLMs succeeded\n", successCount, len(results))
+	// "produced output" mirrors the classifier (CountWithOutput) and
+	// the merger's actual consumption criterion. Pre-fix this line
+	// said "succeeded" using CountSuccessful (Error == nil), which
+	// drifted from the rest of the surface — a SaveReview-failed-
+	// with-output run would print "0/3 succeeded" while the merger
+	// happily consolidated all 3 outputs and the gate fired correctly.
+	fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", mergeable, len(results), time.Since(startTime).Round(time.Second))
 	if mergedPath != "" {
-		fmt.Printf("Merged report: %s\n", mergedPath)
-	}
-
-	// Per-LLM reviews succeeded but the merge step didn't produce
-	// content (mergeLLM unavailable, merger error, save failed, or the
-	// merger returned only whitespace). Without a merged report the
-	// blocking-finding gate can't run, and returning nil would silently
-	// exit 0 — a pre-commit hook would treat the commit as clean even
-	// though no gate ever fired. TrimSpace (not just == "") catches the
-	// "merger returned `\n`" variant that codex flagged as bypassing the
-	// v0.5.1 fix.
-	if strings.TrimSpace(mergedContent) == "" {
-		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s but the blocking-finding gate did not run", cfg.Storage.BasePath)
+		// Report-path label uses `rmode` (computed above alongside `mergeable`)
+		// so we don't call CountWithOutput a second time. Degraded/solo runs
+		// use distinct labels so users can tell single-source from consensus.
+		switch rmode {
+		case runModeDegraded:
+			fmt.Printf("Single-LLM report (%d of %d agents produced no output): %s\n", len(results)-mergeable, len(results), mergedPath)
+		case runModeSolo:
+			fmt.Printf("Report: %s\n", mergedPath)
+		default:
+			fmt.Printf("Merged report: %s\n", mergedPath)
+		}
 	}
 
 	// Two independent signals trip the gate (any one is enough). False
@@ -237,16 +283,34 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	//     seeing the (possibly-truncated) per-LLM reviews.
 	//  2. Each per-LLM review's full Output — defends against the
 	//     8 KB merger-input truncation hiding blocking findings past
-	//     the cut. The merger only sees the first 8 KB of each
-	//     reviewer; without this independent check, a verbose
-	//     reviewer that puts a critical finding past byte 8000 would
-	//     produce a false-clean exit. The on-disk per-LLM file has
-	//     always had the full output; this just scans it before we
-	//     decide.
+	//     the cut, AND against merger failures (merger.Merge error,
+	//     SaveMerged error, mergeLLM unavailable, whitespace-only
+	//     output) where signal #1 is unavailable. The on-disk per-LLM
+	//     file has always had the full output; this just scans it
+	//     before we decide.
 	//
-	// Returning the sentinel (rather than os.Exit) lets cobra and
-	// main() unwind defers.
-	if mergedHasBlocking(mergedContent) || anyPerLLMHasBlocking(results) {
+	// Compute the per-LLM signal first so a merge-step failure with
+	// blocking per-LLM findings still trips the gate. Pre-fix the
+	// empty-merged-content guard short-circuited before this scan
+	// could run, so a merger timeout or rate-limit collapsed an
+	// exit-2 into exit 1 — and the documented pre-commit hook treats
+	// tool failures (exit 1) as "let the commit through." Returning
+	// the sentinel (rather than os.Exit) lets cobra and main()
+	// unwind defers.
+	perLLMBlocking := anyPerLLMHasBlocking(results)
+
+	if strings.TrimSpace(mergedContent) == "" {
+		// Merge step produced nothing (mergeLLM unavailable, merger
+		// error, save failed, whitespace-only). Per-LLM reviews are
+		// saved on disk and we still scanned them above.
+		if perLLMBlocking {
+			fmt.Fprintln(os.Stderr, "Warning: merge step produced no output, but per-LLM reviews flagged blocking findings — gate firing on the per-LLM signal.")
+			return errBlockingFindings
+		}
+		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s and showed no blocking findings, but the merged report is unavailable", cfg.Storage.BasePath)
+	}
+
+	if mergedHasBlocking(mergedContent) || perLLMBlocking {
 		return errBlockingFindings
 	}
 	return nil
@@ -406,17 +470,34 @@ func validateMergeWith(sf *sharedFlags, active []cli.LLM) error {
 	return fmt.Errorf("--merge-with %q not in active set %v", sf.mergeWith, names)
 }
 
-// printAgentRoster prints "Running review with N agents" plus one line
-// per agent showing model name and CLI version, plus a discoverability
-// hint when an authed agent is disabled in config.
-func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Config) {
-	fmt.Printf("Running review with %d LLM%s...\n", len(active), pluralS(len(active)))
+// printAgentRoster prints "Reviewing <branch> (<short-sha>) with N agents"
+// plus one line per agent showing model name and CLI version, plus a
+// discoverability hint when an authed agent is disabled in config.
+//
+// Including branch and commit on the first line tells the user *what*
+// they're reviewing without scrolling — important when the same shell
+// is jumping between checkouts and `local-review review` is the first
+// thing they see after a `git switch`.
+func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Config, branch, commit string) {
+	short := commit
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	if branch != "" && short != "" {
+		fmt.Printf("Reviewing %s (%s) with %d LLM%s...\n", branch, short, len(active), pluralS(len(active)))
+	} else {
+		fmt.Printf("Running review with %d LLM%s...\n", len(active), pluralS(len(active)))
+	}
 	for _, llm := range active {
 		model := modelFor(llm.Name, cfg)
 		if model != "" {
 			fmt.Printf("  • %s %s (CLI v%s)\n", llm.Name, model, llm.Version)
 		} else {
-			fmt.Printf("  • %s (CLI v%s)\n", llm.Name, llm.Version)
+			// No model pinned in config → the invoker won't pass
+			// --model, so the vendor CLI uses its own current default.
+			// Mark this explicitly so the user can tell "I didn't
+			// configure this" apart from "the tool didn't detect it."
+			fmt.Printf("  • %s (CLI v%s, model: CLI default)\n", llm.Name, llm.Version)
 		}
 	}
 	if len(configDisabled) > 0 {
@@ -495,13 +576,63 @@ func syntheticDetachedBranch(branch, commit string) string {
 	return "detached-" + short
 }
 
+// runMode classifies a multi-LLM review by how many agents produced
+// output the merger will actually consume. The framing ("Merged review"
+// vs "Single-LLM result") and the degraded-run warning hinge on this
+// distinction — see classifyRunMode for the rules.
+type runMode int
+
+const (
+	runModeMerge    runMode = iota // ≥2 outputs; a real cross-model merge
+	runModeDegraded                // exactly 1 output out of ≥2 agents; no consensus
+	runModeSolo                    // exactly 1 output out of 1 agent; user chose --only, expected
+)
+
+// classifyRunMode picks the framing for the merge step based on how
+// many agents produced output the merger will actually see. We count
+// non-blank Output (matching BuildMergeInput's filter, which uses
+// strings.TrimSpace), not Error == nil:
+// a run where the LLM succeeded but SaveReview failed has Error != nil
+// yet Output != "", and the merger will still consume that review, so
+// the framing should reflect that. Pre-fix we used CountSuccessful and
+// would mis-flag such a run as "Degraded, only 1 of 3 succeeded" while
+// the merger was happily consolidating all 3 outputs.
+//
+// The merger still runs in every case (it's what produces the structured
+// Recommendation line the gate reads), but the user-facing language is
+// different so nobody mistakes a single-LLM fallback for cross-model
+// consensus. Zero-output runs never reach here — the caller short-
+// circuits with an "all LLMs failed" error.
+func classifyRunMode(results []multi.ReviewResult) runMode {
+	mergeable := multi.CountWithOutput(results)
+	total := len(results)
+	switch {
+	case mergeable == 1 && total > 1:
+		return runModeDegraded
+	case mergeable == 1 && total == 1:
+		return runModeSolo
+	default:
+		return runModeMerge
+	}
+}
+
 // mergeAndPrint runs the merge LLM, saves the merged report, and prints
 // it to stdout so users see findings without `cat`-ing a file. Returns
 // the saved path and the merged content; both are "" on skip/failure.
 // The content is returned so the caller can run the blocking-finding
 // gate without re-reading from disk.
 func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) (string, string) {
-	fmt.Println("Merging reviews...")
+	mode := classifyRunMode(results)
+
+	switch mode {
+	case runModeDegraded:
+		fmt.Fprintf(os.Stderr, "⚠ Only %d of %d LLMs produced output — review is single-source, no cross-model consensus.\n", multi.CountWithOutput(results), len(results))
+		fmt.Println("Reformatting single review...")
+	case runModeSolo:
+		fmt.Println("Formatting review...")
+	default:
+		fmt.Println("Merging reviews...")
+	}
 
 	preferred := cfg.Merge.PreferredLLM
 	if sf.mergeWith != "" {
@@ -513,7 +644,14 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 		metadata.Merge.Status = "skipped"
 		return "", ""
 	}
-	fmt.Printf("Using %s for merge...\n", mergeLLM.Name)
+	switch mode {
+	case runModeDegraded:
+		fmt.Printf("Using %s to reformat the surviving review...\n", mergeLLM.Name)
+	case runModeSolo:
+		fmt.Printf("Using %s to format the review...\n", mergeLLM.Name)
+	default:
+		fmt.Printf("Using %s for merge...\n", mergeLLM.Name)
+	}
 
 	merger, err := multi.NewMerger(*mergeLLM)
 	if err != nil {
@@ -551,17 +689,46 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 
 	mergedPath, err := storage.SaveMerged(branch, commit, merged)
 	if err != nil {
-		fmt.Printf("Warning: failed to save merged review: %v\n", err)
+		// SaveMerged failed (read-only mount, full disk, permission
+		// denied on .local-review/) — but the merger DID produce
+		// content, and the gate runs against that content. Pre-fix
+		// we returned ("", "") and the caller bailed with "merge
+		// step produced no output; gate did not run", which collapsed
+		// to a tool error (exit 1) — pre-commit hooks treat exit 1
+		// as "let the commit through" and miss the blocking finding
+		// the merger had already identified.
+		//
+		// The right move is: warn loud about the persistence failure,
+		// print the findings inline so the user can see them, and
+		// return the merged content with an empty path. The caller
+		// runs the gate on the content; the closing-line "Merged
+		// report: <path>" branch already guards on non-empty path,
+		// so it silently omits.
+		fmt.Fprintf(os.Stderr, "Warning: failed to save merged review: %v\n", err)
+		fmt.Fprintln(os.Stderr, "         findings shown below; the gate will still run, but the report is not persisted.")
+		fmt.Fprintln(os.Stderr, "         re-run after fixing the storage issue if you want a saved copy.")
+		metadata.Merge.LLM = mergeLLM.Name
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return "", ""
+		metadata.Merge.DurationMs = mergeDuration.Milliseconds()
+		fmt.Println("─── Findings (not persisted) ───")
+		fmt.Println(merged)
+		fmt.Println("─── End ───")
+		return "", merged
 	}
 
 	metadata.Merge.LLM = mergeLLM.Name
 	metadata.Merge.Status = "success"
 	metadata.Merge.DurationMs = mergeDuration.Milliseconds()
 
-	fmt.Printf("✓ Merged review (%.1fs)\n\n", mergeDuration.Seconds())
+	switch mode {
+	case runModeDegraded:
+		fmt.Printf("✓ Reformatted (%.1fs) — single-LLM, no merge\n\n", mergeDuration.Seconds())
+	case runModeSolo:
+		fmt.Printf("✓ Formatted review (%.1fs)\n\n", mergeDuration.Seconds())
+	default:
+		fmt.Printf("✓ Merged review (%.1fs)\n\n", mergeDuration.Seconds())
+	}
 
 	// Print the merged review inline so users see findings without cat.
 	fmt.Println("─── Findings ───")
@@ -650,33 +817,42 @@ func buildMetadata(commit, branch string, results []multi.ReviewResult, startTim
 }
 
 // selectMergeLLM picks which agent merges findings. Priority:
-// caller-preferred → auto (claude > codex > gemini) → first successful.
+// caller-preferred → auto (claude > codex > gemini) → first eligible.
+//
+// Eligibility is "produced mergeable output" (matching CountWithOutput),
+// not "Error == nil". Pre-fix a SaveReview-failed-with-output run
+// (Error != nil, Output != "") was excluded from merger candidates, so
+// when *all* saves failed selectMergeLLM returned nil and the gate
+// skipped — a tool error instead of exit 2, which pre-commit hooks
+// silently ignore. The merge step itself only needs the LLM's CLI to
+// work for the merge prompt; whether an earlier per-LLM SaveReview
+// happened to succeed is unrelated.
 func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred string) *cli.LLM {
-	successful := make(map[string]cli.LLM)
+	eligible := make(map[string]cli.LLM)
 	for _, llm := range available {
 		for _, r := range results {
-			if r.LLM == llm.Name && r.Error == nil {
-				successful[llm.Name] = llm
+			if r.LLM == llm.Name && multi.HasMergeableOutput(r) {
+				eligible[llm.Name] = llm
 				break
 			}
 		}
 	}
-	if len(successful) == 0 {
+	if len(eligible) == 0 {
 		return nil
 	}
 	if preferred != "" && preferred != "auto" {
-		if llm, ok := successful[preferred]; ok {
+		if llm, ok := eligible[preferred]; ok {
 			return &llm
 		}
 	}
 	for _, name := range []string{"claude", "codex", "gemini"} {
-		if llm, ok := successful[name]; ok {
+		if llm, ok := eligible[name]; ok {
 			return &llm
 		}
 	}
 	for _, r := range results {
-		if r.Error == nil {
-			if llm, ok := successful[r.LLM]; ok {
+		if multi.HasMergeableOutput(r) {
+			if llm, ok := eligible[r.LLM]; ok {
 				return &llm
 			}
 		}

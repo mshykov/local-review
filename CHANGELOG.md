@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-06
+
+### Changed
+- **`--help` no longer leads with a 5-line figlet banner.** Replaced with a single-line title so the `git commit` editor and CI logs don't get a wall of ASCII art every time. Subcommands now group as Review / Setup / Other (canonical `review` first, not alphabetised behind `branch`).
+- **Review header now states what's being reviewed.** `Reviewing release/v0.6.1 (1ed03b9) with 3 LLMs...` replaces the generic `Running review with 3 LLMs...` so readers don't have to scroll past N findings to learn the branch + commit.
+- **Closing line includes total wall-clock**: `✓ 2/3 LLMs produced output · total 2m 51s`. Pre-fix users had to mentally sum per-LLM durations + merge duration to know how long a run took.
+- **`local-review doctor` shows the configured model** under each ready CLI (e.g., `model: claude-3-5-sonnet-20241022`) so misconfigured models surface before triggering an expensive review.
+- **Merge prompt drops the editorial `## Conclusion` section.** `## Summary` already carries the Recommendation verdict the gate reads; the second narrative paragraph was redundant and noisy in the CLI.
+- **Multi-LLM model defaults are now empty — vendor CLIs pick their own current stable.** Pre-fix the `Defaults()` config pinned `claude-3-5-sonnet-20241022`, `gemini-1.5-pro`, and `gpt-4` — model IDs from late 2023 and 2024, between 12 and 24 months stale by v0.6.x. We don't release on a vendor-rotation cadence, so hardcoded IDs were guaranteed to age into noise. Each invoker now skips passing `--model` when no value is set, and the CLI uses whatever the vendor currently considers stable. The roster line displays `(model: CLI default)` and `local-review doctor` shows `model: (CLI default)` so users can tell "I didn't pin one" from "config didn't load." Users who want to pin a specific model should set `model:` explicitly per LLM in `.local-review.yml`. A `TestDefaults_MultiLLMModelsAreEmpty` test guards against a future contributor silently re-introducing the staleness problem.
+
+### Fixed
+- **Single-LLM-survivor runs are no longer mis-framed as "Merged review".** When a multi-LLM run starts with N≥2 agents but only 1 produces output, the review is single-source — there is no cross-model consensus. The CLI now prints a `⚠ Only X of N LLMs produced output` warning, calls the post-step "Reformatting" instead of "Merging", and labels the saved file as a "Single-LLM report". Solo runs invoked via `--only <agent>` are also relabeled to drop the misleading "Merged" framing. The closing line reads `✓ X/Y LLMs produced output · total Ns` (was "succeeded"), aligning with the classifier's basis. The classifier counts non-empty Output (matching what the merger consumes), not `Error == nil`, so a SaveReview-after-success failure doesn't accidentally demote a real merge. The merge step still runs (it produces the structured Recommendation line the pre-commit gate reads); only the user-facing language changes.
+- **Merger output no longer leaks ```markdown fence wrappers.** Some merger LLMs ignore the "Return ONLY the merged markdown report" instruction and wrap the result in a code fence; pre-fix the literal triple-backticks bled through to stdout AND were saved into `<commit>_merged.md`. The fence is now stripped when both opener and closer are present (a partial/truncated wrapper is left alone to avoid half-stripping).
+- **Consensus threshold no longer asks the impossible.** Pre-fix the merge prompt always said "if 3+ reviewers agree, consolidate" even when only 2 agents ran — the LLM apologised in its own summary line ("0 (only 2 reviewers, but 3 issues have 2/2 consensus)"), reading as a broken template. The threshold is now clamped to the actual reviewer count before being passed into the prompt.
+
+### Docs
+- **README and landing page gain a "What it is, what it isn't" block** at the top, before the feature list. Heads off the recurring confusions that surfaced in launch feedback (vs Claude's `/simplify`, "is it really local?", SaaS vs CLI, LLM vs linter).
+
 ## [0.6.0] - 2026-05-05
 
 ### Added

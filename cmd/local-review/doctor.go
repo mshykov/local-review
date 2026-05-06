@@ -63,6 +63,7 @@ func runDoctor(out io.Writer) error {
 	// vice versa.
 	overrides := map[string]string{}
 	customEnvVars := map[string]string{}
+	models := map[string]string{}
 	cfg, cfgErr := loadConfig()
 	if cfgErr != nil {
 		// Surface the failure inline. doctor's whole job is "tell me
@@ -84,6 +85,14 @@ func runDoctor(out io.Writer) error {
 			if c.APIKeyEnv != "" {
 				customEnvVars[name] = c.APIKeyEnv
 			}
+			// Surface the configured model so doctor exposes "which
+			// weights will run" — pre-fix the user only learned the
+			// model name when `review` printed the roster, too late
+			// to catch a misconfigured model before triggering an
+			// expensive call.
+			if c.Model != "" {
+				models[name] = c.Model
+			}
 		}
 	}
 	llms := cli.DetectAllWithOverrides(overrides)
@@ -94,7 +103,7 @@ func runDoctor(out io.Writer) error {
 		if status == statusReady {
 			readyCount++
 		}
-		printLLMRow(w, llm, status, auth)
+		printLLMRow(w, llm, status, auth, models[llm.Name])
 	}
 
 	fmt.Fprintln(w)
@@ -155,8 +164,14 @@ func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 	return statusReady, auth
 }
 
-// printLLMRow emits one CLI's full diagnostic block.
-func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus) {
+// printLLMRow emits one CLI's full diagnostic block. configuredModel
+// is the cfg.LLMs[name].Model value (or empty); for ready rows we
+// always print a model line — either the pinned value or "(CLI default)"
+// — so users can tell "I didn't pin one" apart from "config didn't
+// load" at a glance. For not-authed rows we still elide when no model
+// is pinned, since the row's primary signal is the auth fix and the
+// "(CLI default)" line would be noise.
+func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string) {
 	displayName := getDisplayName(llm.Name)
 
 	switch status {
@@ -164,11 +179,23 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus) 
 		fmt.Fprintf(out, "✓ %-15s v%-10s ready\n", displayName, llm.Version)
 		fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
 		fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
+		if configuredModel != "" {
+			fmt.Fprintf(out, "    model:         %s\n", configuredModel)
+		} else {
+			// No pinned model — the invoker won't pass --model and the
+			// vendor CLI picks its own current default. Surface this so
+			// users debugging "why did claude run model X" can tell
+			// "didn't pin one" apart from "config didn't load."
+			fmt.Fprintf(out, "    model:         (CLI default)\n")
+		}
 
 	case statusNotAuthed:
 		fmt.Fprintf(out, "⚠ %-15s v%-10s not authenticated\n", displayName, llm.Version)
 		fmt.Fprintf(out, "    installed: %s\n", llm.Path)
 		fmt.Fprintf(out, "    fix:       %s\n", auth.hint)
+		if configuredModel != "" {
+			fmt.Fprintf(out, "    model:     %s\n", configuredModel)
+		}
 
 	case statusBrokenInstall:
 		fmt.Fprintf(out, "⚠ %-15s install broken\n", displayName)
