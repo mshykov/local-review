@@ -65,7 +65,13 @@ if curl -fsSL "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
   # stdin returns 0, so a malformed / wrong manifest would skip
   # verification and proceed to extract a possibly-tampered tarball.
   # Capturing first lets us fail loud when the asset isn't listed.
-  manifest_line=$(grep " ${asset}\$" "$checksums" || true)
+  #
+  # awk does an exact last-field equality match. Using `grep` here was
+  # subtly broken: BRE treats the literal `.` characters in `.tar.gz`
+  # as "any character," so a manifest line for `local-reviewxtar.gz`
+  # could match `local-review.tar.gz` and slip a wrong-asset hash past
+  # the checksum step.
+  manifest_line=$(awk -v a="$asset" '$NF == a' "$checksums")
   if [ -z "$manifest_line" ]; then
     echo "❌ ${asset} not listed in ${checksums}" >&2
     echo "   refusing to install — manifest is malformed or built for a different asset set" >&2

@@ -253,7 +253,13 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	}
 
 	fmt.Println()
-	fmt.Printf("✓ %d/%d LLMs succeeded · total %s\n", successCount, len(results), time.Since(startTime).Round(time.Second))
+	// "produced output" mirrors the classifier (CountWithOutput) and
+	// the merger's actual consumption criterion. Pre-fix this line
+	// said "succeeded" using CountSuccessful (Error == nil), which
+	// drifted from the rest of the surface — a SaveReview-failed-
+	// with-output run would print "0/3 succeeded" while the merger
+	// happily consolidated all 3 outputs and the gate fired correctly.
+	fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", mergeable, len(results), time.Since(startTime).Round(time.Second))
 	if mergedPath != "" {
 		// "produced output" mirrors the classifier's basis (CountWithOutput,
 		// matching what the merger actually consumes). Using

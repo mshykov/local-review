@@ -174,7 +174,19 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 		}
 	}
 
+	// Clamp the threshold into [1, reviewerCount]. Two failure modes
+	// guard:
+	//
+	//   - User config sets `consensus_threshold: 0` (or negative). Without
+	//     the floor, the prompt would say "0+ reviewers agree" / "-1+
+	//     reviewers agree" — meaningless instructions to the merger.
+	//   - User config leaves the default (3) but only 2 agents produce
+	//     output. The ceiling drops the prompt's threshold to 2 so it
+	//     doesn't ask the impossible.
 	effectiveThreshold := consensusThreshold
+	if effectiveThreshold < 1 {
+		effectiveThreshold = 1
+	}
 	if n := len(reviews); n > 0 && effectiveThreshold > n {
 		effectiveThreshold = n
 	}
