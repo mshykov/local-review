@@ -107,7 +107,7 @@ You have received **{{.ReviewCount}}** separate code review reports from: {{.LLM
 
 ## Summary
 - **Total unique findings**: X
-{{if eq .ReviewCount 2 -}}
+{{if and (eq .ReviewCount 2) (eq .ConsensusThreshold 2) -}}
 - **Findings flagged by both reviewers**: Y
 - **Findings from a single reviewer**: Z
 {{- else -}}

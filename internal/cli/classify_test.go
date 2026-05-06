@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestClassifyExit_ContextDeadlineExceeded(t *testing.T) {
@@ -79,6 +80,39 @@ func TestClassifyExit_NonZeroWithoutStderr(t *testing.T) {
 	}
 	if !strings.Contains(got, "codex") {
 		t.Errorf("want agent name in fallback hint, got: %q", got)
+	}
+}
+
+func TestClassifyExit_StderrTailRespectsUTF8Boundaries(t *testing.T) {
+	// Pre-fix the byte-slice cut in ClassifyExit could land mid-rune
+	// for non-ASCII stderr (Cyrillic CLI errors, CJK locales, emoji),
+	// emitting invalid UTF-8 in the failure line exactly when the
+	// user is already debugging. Build a stderr where the cut would
+	// land mid-rune and assert the output is valid UTF-8.
+	mkLong := func(unit string) []byte {
+		// Repeat past stderrTailMaxLen so truncation fires.
+		s := strings.Repeat(unit, stderrTailMaxLen/len(unit)+10)
+		return []byte(s)
+	}
+	cases := []struct {
+		name string
+		in   []byte
+	}{
+		{"cyrillic", mkLong("привіт ")},
+		{"cjk", mkLong("世界 ")},
+		{"emoji", mkLong("🚨 ")},
+		{"mixed ascii + multibyte", mkLong("err: проблема in 文件 🐛 ")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ClassifyExit(context.Background(), errors.New("exit status 1"), tc.in, "claude")
+			if !utf8.ValidString(got) {
+				t.Errorf("classified output is invalid UTF-8 — boundary not respected")
+			}
+			if !strings.Contains(got, "…") {
+				t.Errorf("want truncation marker, got: %q", got)
+			}
+		})
 	}
 }
 
