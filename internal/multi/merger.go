@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+	"unicode/utf8"
 
 	"github.com/mshykov/local-review/internal/cli"
 )
@@ -191,6 +192,11 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 // when within the cap; otherwise truncates and appends an explicit
 // "[…truncated]" marker so a reader (human or LLM) can tell that
 // findings may continue in the saved per-LLM file.
+//
+// The cut point is walked back to a UTF-8 rune boundary. Pre-fix the
+// raw byte slice could split a multi-byte code point (Cyrillic, CJK,
+// emoji) and feed invalid UTF-8 into the merger prompt, degrading or
+// breaking the merge step on non-ASCII reviews.
 func truncateForMerge(s string) string {
 	if len(s) <= MaxReviewBytesForMerge {
 		return s
@@ -199,6 +205,13 @@ func truncateForMerge(s string) string {
 	cut := MaxReviewBytesForMerge - len(marker)
 	if cut < 0 {
 		cut = 0
+	}
+	// Walk back until we land on a UTF-8 start byte (or hit position 0).
+	// utf8.RuneStart returns true for any byte that is the first byte
+	// of an encoded rune, so this leaves us with a valid prefix even
+	// when the cap fell mid-rune.
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
 	}
 	return s[:cut] + marker
 }

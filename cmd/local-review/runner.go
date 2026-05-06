@@ -678,10 +678,32 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 
 	mergedPath, err := storage.SaveMerged(branch, commit, merged)
 	if err != nil {
-		fmt.Printf("Warning: failed to save merged review: %v\n", err)
+		// SaveMerged failed (read-only mount, full disk, permission
+		// denied on .local-review/) — but the merger DID produce
+		// content, and the gate runs against that content. Pre-fix
+		// we returned ("", "") and the caller bailed with "merge
+		// step produced no output; gate did not run", which collapsed
+		// to a tool error (exit 1) — pre-commit hooks treat exit 1
+		// as "let the commit through" and miss the blocking finding
+		// the merger had already identified.
+		//
+		// The right move is: warn loud about the persistence failure,
+		// print the findings inline so the user can see them, and
+		// return the merged content with an empty path. The caller
+		// runs the gate on the content; the closing-line "Merged
+		// report: <path>" branch already guards on non-empty path,
+		// so it silently omits.
+		fmt.Fprintf(os.Stderr, "Warning: failed to save merged review: %v\n", err)
+		fmt.Fprintln(os.Stderr, "         findings shown below; the gate will still run, but the report is not persisted.")
+		fmt.Fprintln(os.Stderr, "         re-run after fixing the storage issue if you want a saved copy.")
+		metadata.Merge.LLM = mergeLLM.Name
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return "", ""
+		metadata.Merge.DurationMs = mergeDuration.Milliseconds()
+		fmt.Println("─── Findings (not persisted) ───")
+		fmt.Println(merged)
+		fmt.Println("─── End ───")
+		return "", merged
 	}
 
 	metadata.Merge.LLM = mergeLLM.Name

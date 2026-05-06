@@ -3,6 +3,7 @@ package multi
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestBuildMergeInput_TruncatesOversizeReviews(t *testing.T) {
@@ -30,6 +31,38 @@ func TestBuildMergeInput_TruncatesOversizeReviews(t *testing.T) {
 	}
 	if !strings.Contains(gem.Content, "truncated") {
 		t.Errorf("truncation marker missing from clipped content")
+	}
+}
+
+func TestTruncateForMerge_RespectsUTF8Boundaries(t *testing.T) {
+	// Pre-fix the byte slice in truncateForMerge could split a multi-
+	// byte UTF-8 sequence, feeding invalid UTF-8 into the merge
+	// prompt. Cyrillic ("Привіт"), CJK ("世界"), and emoji ("🚨") are
+	// all multi-byte; we exercise all three.
+	mkLong := func(unit string) string {
+		// Repeat enough times to exceed the cap, so truncation actually fires.
+		s := strings.Repeat(unit, MaxReviewBytesForMerge/len(unit)+10)
+		return s
+	}
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"cyrillic", mkLong("привіт ")},
+		{"cjk", mkLong("世界 ")},
+		{"emoji", mkLong("🚨 ")},
+		{"mixed ascii + multibyte", mkLong("issue: проблема in 文件 🐛 ")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncateForMerge(tc.in)
+			if !utf8.ValidString(got) {
+				t.Errorf("truncated output is invalid UTF-8 — boundary not respected")
+			}
+			if !strings.Contains(got, "truncated") {
+				t.Errorf("truncation marker missing")
+			}
+		})
 	}
 }
 

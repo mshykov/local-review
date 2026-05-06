@@ -90,9 +90,23 @@ if curl -fsSL "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
     echo "   install one of: coreutils (sha256sum) or perl (shasum) for tamper resistance" >&2
   fi
 else
-  echo "⚠️  no checksums.txt for ${VERSION} — skipping integrity check" >&2
-  echo "   (releases before v0.6.0 don't ship a manifest; upgrade to v0.6+ for verified installs)" >&2
-  cd "$tmp"
+  # Manifest fetch failed. Pre-fix we always fell through to install-
+  # without-verification with just a warning, so any release packaging
+  # error or transient network issue silently turned into an
+  # unverified install. Default to fail-loud; let users opt out
+  # explicitly only when they know they're installing a legacy
+  # release that genuinely doesn't ship a manifest.
+  if [ "${INSTALL_REVIEW_SKIP_VERIFICATION:-}" = "1" ]; then
+    echo "⚠️  no checksums.txt for ${VERSION} — skipping integrity check" >&2
+    echo "   (INSTALL_REVIEW_SKIP_VERIFICATION=1 — only safe for releases <v0.6.0)" >&2
+    cd "$tmp"
+  else
+    echo "❌ failed to fetch ${checksums_url}" >&2
+    echo "   refusing to install — the manifest may be unavailable due to a network issue or a release packaging error" >&2
+    echo "   if you're installing a release older than v0.6.0 (which doesn't ship a manifest), re-run with:" >&2
+    echo "     curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | INSTALL_REVIEW_SKIP_VERIFICATION=1 sh" >&2
+    exit 1
+  fi
 fi
 
 tar -xzf "$asset"
