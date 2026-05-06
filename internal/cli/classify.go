@@ -52,7 +52,12 @@ func ClassifyExit(ctx context.Context, err error, combinedOutput []byte, agent s
 	// have SIGKILL semantics anyway, so the behavior matches the
 	// platform's reality.
 	if strings.Contains(errMsg, "signal: killed") {
-		return fmt.Sprintf("killed — likely out of memory or a hard timeout; try `local-review commit HEAD` for a smaller diff, or `--only` to skip %s", agent)
+		// Avoid suggesting "--only to skip <agent>" because if the
+		// user is already running with `--only <agent>` (one-agent
+		// run that crashed), that hint is a contradiction. Smaller
+		// diff is the universally correct first step regardless of
+		// how the run was scoped.
+		return fmt.Sprintf("killed — likely out of memory or a hard timeout for %s; try a smaller diff: `local-review commit HEAD` (last commit), `local-review staged` (staged only), or pin a smaller-context model via `llms.%s.model:`", agent, agent)
 	}
 
 	// Non-zero exit (no signal). Surface the stderr tail because

@@ -44,8 +44,17 @@ func TestClassifyExit_SIGKILL(t *testing.T) {
 	if !strings.Contains(got, "local-review commit HEAD") {
 		t.Errorf("want hint to suggest commit-only review, got: %q", got)
 	}
-	if !strings.Contains(got, "--only") {
-		t.Errorf("want hint to mention --only, got: %q", got)
+	if !strings.Contains(got, "local-review staged") {
+		t.Errorf("want hint to suggest staged-only review, got: %q", got)
+	}
+	if !strings.Contains(got, "llms.claude.model") {
+		t.Errorf("want hint to suggest pinning a smaller model, got: %q", got)
+	}
+	// Must NOT suggest --only — the user might already be running
+	// with --only <agent> (single-agent run that crashed), and that
+	// would contradict itself.
+	if strings.Contains(got, "--only") {
+		t.Errorf("hint should not suggest --only (contradicts when user is already using --only): %q", got)
 	}
 }
 
