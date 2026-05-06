@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -193,14 +194,35 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return fmt.Errorf("run reviews: %w", err)
 	}
 
+	anyFailed := false
 	for i, r := range results {
 		if r.Error != nil {
-			fmt.Printf("[%d/%d] %s ✗ (%v)\n", i+1, len(results), r.LLM, r.Error)
+			anyFailed = true
+			// r.Error is the invoker's ClassifyExit output — already
+			// has the actionable hint inline. No "review failed:"
+			// prefix or "(output: )" wrapping; "[N/M] agent ✗ <msg>"
+			// reads clean.
+			fmt.Printf("[%d/%d] %s ✗ %s\n", i+1, len(results), r.LLM, r.Error)
 		} else {
 			fmt.Printf("[%d/%d] %s ✓ (%.1fs)\n", i+1, len(results), r.LLM, r.Duration.Seconds())
 		}
 	}
 	fmt.Println()
+
+	// Surface the on-disk path so users know where to find raw
+	// per-LLM output — especially when one agent failed and they
+	// want to debug from saved partial state. Storage uses
+	// SanitizeBranch internally; we mirror that here so the path
+	// we print actually exists.
+	storageDir := filepath.Join(cfg.Storage.BasePath, git.SanitizeBranchName(branch))
+	if anyFailed {
+		fmt.Fprintf(os.Stderr, "Per-LLM reviews saved to → %s/\n\n", storageDir)
+	} else {
+		// On a clean run print to stdout (it's informational, not a
+		// warning) and quietly so it doesn't compete with the merged
+		// findings the user is about to read.
+		fmt.Printf("Per-LLM reviews → %s/\n\n", storageDir)
+	}
 
 	successCount := multi.CountSuccessful(results)
 	mergeable := multi.CountWithOutput(results)
@@ -491,13 +513,18 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 	for _, llm := range active {
 		model := modelFor(llm.Name, cfg)
 		if model != "" {
-			fmt.Printf("  • %s %s (CLI v%s)\n", llm.Name, model, llm.Version)
+			// agent_<model> reads as a single identifier (think
+			// docker image names) so users see "what model is
+			// running" at a glance.
+			fmt.Printf("  • %s_%s (CLI v%s)\n", llm.Name, model, llm.Version)
 		} else {
-			// No model pinned in config → the invoker won't pass
-			// --model, so the vendor CLI uses its own current default.
-			// Mark this explicitly so the user can tell "I didn't
-			// configure this" apart from "the tool didn't detect it."
-			fmt.Printf("  • %s (CLI v%s, model: CLI default)\n", llm.Name, llm.Version)
+			// No model pinned → the invoker doesn't pass --model and
+			// the vendor CLI picks its own current default. We can't
+			// know which model that is without probing the CLI (no
+			// portable way), so we say so explicitly and tell the
+			// user how to take control. Pre-fix this said "model: CLI
+			// default" which the user reported as a non-answer.
+			fmt.Printf("  • %s (CLI v%s) — using vendor's default model; pin via `llms.%s.model:`\n", llm.Name, llm.Version, llm.Name)
 		}
 	}
 	if len(configDisabled) > 0 {

@@ -158,9 +158,14 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["codex"], c.apiKey)
 	if combined, err := cmd.CombinedOutput(); err != nil {
-		// Surface the CLI's own stderr so users can see "auth required",
-		// "rate limited", etc. instead of a bare "exit status 1".
-		return "", fmt.Errorf("%s failed: %w (output: %s)", errLabel, err, strings.TrimSpace(string(combined)))
+		// ClassifyExit produces the user-facing summary with an
+		// actionable hint (smaller diff for SIGKILL, raise timeout for
+		// deadline, surface stderr tail for non-zero exit). The
+		// errLabel arg is unused here now — the caller's per-LLM line
+		// already prefixes the agent name, so prefixing it again would
+		// just produce "codex ✗ codex review failed: ..." duplication.
+		_ = errLabel
+		return "", fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "codex"))
 	}
 
 	out, err := os.ReadFile(tmpPath)
@@ -192,11 +197,10 @@ func (g *GeminiInvoker) Review(ctx context.Context, systemPrompt, diff string) (
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Surface gemini's own stderr alongside the exit status —
-		// "auth required", "rate limited", "model not found" etc.
-		// otherwise collapse to a bare "exit status 1" that's
-		// impossible to diagnose. Matches the codex invoker.
-		return "", fmt.Errorf("gemini review failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+		// Classified message includes the actionable hint inline; no
+		// "gemini review failed:" prefix because the caller's per-LLM
+		// line already names the agent.
+		return "", fmt.Errorf("%s", ClassifyExit(ctx, err, output, "gemini"))
 	}
 
 	return string(output), nil
@@ -218,7 +222,7 @@ func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, e
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["gemini"], g.apiKey)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("gemini failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("%s", ClassifyExit(ctx, err, output, "gemini"))
 	}
 	return string(output), nil
 }
@@ -252,10 +256,13 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (strin
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["claude"], c.apiKey)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Preserve claude's stderr/stdout — auth, rate-limit, and
-		// usage-quota errors otherwise collapse to "exit status 1"
-		// with no actionable signal. Matches the codex invoker.
-		return "", fmt.Errorf("%s failed: %w (output: %s)", errLabel, err, strings.TrimSpace(string(output)))
+		// Classified message includes actionable hints (OOM → smaller
+		// diff, timeout → raise timeout_sec, non-zero → stderr tail).
+		// errLabel was the old "claude review failed:" / "claude:" prefix
+		// — the caller's per-LLM line already names the agent so the
+		// prefix would duplicate.
+		_ = errLabel
+		return "", fmt.Errorf("%s", ClassifyExit(ctx, err, output, "claude"))
 	}
 	return string(output), nil
 }

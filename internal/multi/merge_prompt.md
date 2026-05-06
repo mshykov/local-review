@@ -80,9 +80,9 @@ You have received **{{.ReviewCount}}** separate code review reports from: {{.LLM
   - "SQL injection risk" = "unsafe query construction" = "user input not sanitized in SQL"
 
 ### 2. Prioritize by Consensus and Severity
-- **High-confidence issues** ({{.ConsensusThreshold}}+ LLMs agree) should be prominently featured
+- **High-confidence issues** ({{.ConsensusThreshold}}+ reviewers agree) should be prominently featured
 - If duplicates have different severity levels, use the **highest severity** but note the disagreement
-- Issues flagged by only 1 LLM should still be included, but marked as lower confidence
+- Issues flagged by only 1 reviewer should still be included, but marked as lower confidence
 
 ### 3. Preserve Important Context
 - Keep file names and line numbers from original reviews
@@ -107,8 +107,12 @@ You have received **{{.ReviewCount}}** separate code review reports from: {{.LLM
 
 ## Summary
 - **Total unique findings**: X
-- **Reviewers**: {{.LLMNames}}
-- **High-confidence issues** ({{.ConsensusThreshold}}+ LLMs agree): Y
+{{if eq .ReviewCount 2 -}}
+- **Findings flagged by both reviewers**: Y
+- **Findings from a single reviewer**: Z
+{{- else -}}
+- **High-confidence issues** ({{.ConsensusThreshold}}+ reviewers agree): Y
+{{- end}}
 - **Recommendation**: [BLOCK MERGE | REQUEST CHANGES | APPROVE]
 
 ## Critical Issues
