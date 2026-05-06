@@ -214,9 +214,15 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	fmt.Println()
 	fmt.Printf("✓ %d/%d LLMs succeeded\n", successCount, len(results))
 	if mergedPath != "" {
+		// "produced output" mirrors the classifier's basis (CountWithOutput,
+		// matching what the merger actually consumes). Using
+		// `len - CountSuccessful` here would drift for the empty-Output-but-
+		// Error-nil and non-empty-Output-but-Error-set cases the classifier
+		// already handles.
+		mergeable := multi.CountWithOutput(results)
 		switch classifyRunMode(results) {
 		case runModeDegraded:
-			fmt.Printf("Single-LLM report (%d of %d agents failed): %s\n", len(results)-successCount, len(results), mergedPath)
+			fmt.Printf("Single-LLM report (%d of %d agents produced no output): %s\n", len(results)-mergeable, len(results), mergedPath)
 		case runModeSolo:
 			fmt.Printf("Report: %s\n", mergedPath)
 		default:
@@ -503,15 +509,15 @@ func syntheticDetachedBranch(branch, commit string) string {
 }
 
 // runMode classifies a multi-LLM review by how many agents produced
-// output. The framing ("Merged review" vs "Single-LLM result") and the
-// degraded-run warning hinge on this distinction — see classifyRunMode
-// for the rules.
+// output the merger will actually consume. The framing ("Merged review"
+// vs "Single-LLM result") and the degraded-run warning hinge on this
+// distinction — see classifyRunMode for the rules.
 type runMode int
 
 const (
-	runModeMerge    runMode = iota // ≥2 successes; a real cross-model merge
-	runModeDegraded                // exactly 1 success out of ≥2; agents failed, no consensus
-	runModeSolo                    // exactly 1 success out of 1; user chose --only, expected
+	runModeMerge    runMode = iota // ≥2 outputs; a real cross-model merge
+	runModeDegraded                // exactly 1 output out of ≥2 agents; no consensus
+	runModeSolo                    // exactly 1 output out of 1 agent; user chose --only, expected
 )
 
 // classifyRunMode picks the framing for the merge step based on how

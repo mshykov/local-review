@@ -104,11 +104,7 @@ func (o *Orchestrator) RunParallel(ctx context.Context, systemPrompt, diff, comm
 	return results, nil
 }
 
-// CountSuccessful returns the number of successful reviews (Error == nil).
-// Used by the run-control gate ("did anything succeed at all?"); for
-// framing decisions ("how many reviews will the merger see?") prefer
-// CountWithOutput, which matches BuildMergeInput's filter and so won't
-// drift if a save-after-success failure leaves Output set + Error set.
+// CountSuccessful returns the number of successful reviews (Error == nil); for framing decisions prefer CountWithOutput.
 func CountSuccessful(results []ReviewResult) int {
 	count := 0
 	for _, r := range results {
@@ -119,11 +115,7 @@ func CountSuccessful(results []ReviewResult) int {
 	return count
 }
 
-// CountWithOutput returns the number of reviews that produced any
-// content for the merger to consume, matching BuildMergeInput's
-// `Output != ""` filter. A run where the LLM succeeded but SaveReview
-// failed has Error != nil yet Output != ""; the merger will still see
-// that review, so the framing should reflect that.
+// CountWithOutput returns the number of reviews with non-empty Output (matches BuildMergeInput's filter).
 func CountWithOutput(results []ReviewResult) int {
 	count := 0
 	for _, r := range results {
