@@ -20,8 +20,11 @@
   <a href="#install">Install</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#multi-llm-reviews">Multi-LLM</a> •
+  <a href="CHECKLIST.md">Checklist</a> •
   <a href="https://mshykov.github.io/local-review">Website</a>
 </p>
+
+> 📋 **Looking for the human-readable code review checklist this tool implements?** See [**CHECKLIST.md**](CHECKLIST.md) — OWASP 2025-aligned, with severity tiers and concrete measurables. Use it for human reviews, or run `local-review review` to get an LLM pass against the same rules.
 
 ---
 
