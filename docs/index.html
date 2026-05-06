@@ -602,6 +602,61 @@
       font-weight: 700;
     }
 
+    /* Checklist CTA — light tinted band so it reads as a deliberate
+       call-out, distinct from the regular white sections, but quieter
+       than the dark Quick Start section. Centred copy + cta-buttons
+       reuses the existing button styles. */
+    .checklist-cta {
+      background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%);
+      border-top: 1px solid #e2e8f0;
+      border-bottom: 1px solid #e2e8f0;
+      text-align: center;
+    }
+
+    .checklist-cta h2 {
+      margin-bottom: 16px;
+    }
+
+    .checklist-cta-lead {
+      font-size: 1.05em;
+      max-width: 720px;
+      margin: 0 auto 14px;
+      color: #2d3748;
+    }
+
+    .checklist-cta-lead-sub {
+      font-size: 0.95em;
+      max-width: 720px;
+      margin: 0 auto 28px;
+      color: #4a5568;
+    }
+
+    .checklist-cta .cta-buttons {
+      margin-bottom: 0;
+    }
+
+    .checklist-cta .btn-primary {
+      background: #15803d;
+      color: white;
+      box-shadow: 0 2px 8px rgba(21, 128, 61, 0.2);
+    }
+
+    .checklist-cta .btn-primary:hover {
+      background: #166534;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 14px rgba(21, 128, 61, 0.3);
+    }
+
+    .checklist-cta .btn-secondary {
+      color: #2d3748;
+      border-color: #cbd5e0;
+    }
+
+    .checklist-cta .btn-secondary:hover {
+      background: rgba(45, 55, 72, 0.05);
+      border-color: #2d3748;
+    }
+
     @media (max-width: 768px) {
       h1 { font-size: 2em; }
       .tagline { font-size: 1.1em; }
@@ -836,6 +891,24 @@
       <p class="lang-footnote">
         More language packs on the way — <a href="https://github.com/mshykov/local-review/blob/main/CONTRIBUTING.md#adding-a-prompt-pack">add yours →</a>
       </p>
+    </div>
+  </section>
+
+  <section class="checklist-cta">
+    <div class="container">
+      <h2>Want the checklist behind the tool?</h2>
+      <p class="checklist-cta-lead">
+        Every rule local-review applies is published as a human-readable checklist —
+        OWASP 2025-aligned, with severity tiers, concrete measurables, and the
+        specialist-review prompts you don't get from generic checklists.
+      </p>
+      <p class="checklist-cta-lead-sub">
+        Use it for manual reviews, paste it into your team wiki, or run <code>local-review review</code> to get the same rules executed by an LLM in seconds.
+      </p>
+      <div class="cta-buttons">
+        <a href="https://github.com/mshykov/local-review/blob/main/CHECKLIST.md" class="btn btn-primary">📋 Open the Checklist</a>
+        <a href="https://github.com/mshykov/local-review#install" class="btn btn-secondary">Run it on your code</a>
+      </div>
     </div>
   </section>
 
