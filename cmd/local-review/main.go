@@ -25,24 +25,37 @@ import (
 	"github.com/mshykov/local-review/internal/git"
 )
 
-// banner is the single-line "local-review" header shown atop --help on
-// a TTY. The previous 5-line figlet ate too much vertical space — for a
-// reviewer that runs from `git commit` editors and CI logs, compact
-// wins over decorative. helpHeader() still suppresses the banner for
+// banner is the figlet small-font "LOCAL-REVIEW" art shown atop --help.
+// Small font fits in ~70 columns vs the original block font's ~120, so
+// it stays readable on narrow tmux panes, the `git commit` editor, and
+// most CI logs without wrapping. helpHeader() suppresses it for
 // non-TTY stdout (pipes/files) so machine-readable callers get clean
-// text.
-const banner = "── local-review · multi-LLM code review ──"
+// text, and gates on terminal width so it doesn't garble narrow
+// terminals.
+const banner = `
+   _    ___   ___   _   _       ___ _____   _____ _____      __
+  | |  / _ \ / __| /_\ | |  ___| _ \ __\ \ / /_ _| __\ \    / /
+  | |_| (_) | (__ / _ \| |_|___|   / _| \ V / | || _| \ \/\/ /
+  |____\___/ \___/_/ \_\____|  |_|_\___| \_/ |___|___| \_/\_/
+`
 
-// helpHeader returns the banner when stdout is a TTY, or an empty
-// string otherwise. We use term.IsTerminal on the stdout fd; $COLUMNS
-// isn't reliable here because shells don't export it to child
-// processes by default.
+// helpHeader returns the banner when stdout is a wide-enough terminal,
+// or an empty string otherwise. The small-font banner is ~70 cols, so
+// the gate is set at 70.
+//
+// We use term.GetSize on the stdout fd. $COLUMNS isn't reliable here —
+// shells don't export it to child processes by default, so falling
+// back to it would silently disable the banner in the common case.
 func helpHeader() string {
 	fd := int(os.Stdout.Fd())
 	if !term.IsTerminal(fd) {
 		return ""
 	}
-	return banner + "\n\n"
+	w, _, err := term.GetSize(fd)
+	if err != nil || w < 70 {
+		return ""
+	}
+	return banner + "\n"
 }
 
 // sharedFlags collects every flag accepted by the review-shape commands.
