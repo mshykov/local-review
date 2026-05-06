@@ -25,6 +25,16 @@
 
 ---
 
+## What it is, what it isn't
+
+| ✅ What it **is** | ❌ What it **isn't** |
+| --- | --- |
+| A local CLI that reviews a git diff using LLMs you've already authenticated | A replacement for Claude's `/review` or `/simplify` — those are single-prompt commands; this is multi-LLM diff orchestration |
+| An orchestrator that runs Claude / Gemini / Codex CLIs in parallel and merges findings into one report | "Code never leaves your machine" — the diff still goes to whichever LLM you authenticate (run Ollama for true offline) |
+| BYOK — your API key, requests go direct to the vendor (no middleman server) | A SaaS — no hosted dashboard, no account, no team collaboration features |
+| A pre-commit gate — exits non-zero on `major` / `critical` findings so hooks can block the commit | A linter or static analyzer — it's LLM-based, with the heuristic tradeoffs that implies |
+| A single Go binary — no Node, no Python, no Docker, no telemetry | A chat interface — reads a diff, prints findings, exits |
+
 ## Why
 
 Reviewer tools today are mostly:

@@ -25,37 +25,24 @@ import (
 	"github.com/mshykov/local-review/internal/git"
 )
 
-// banner is the figlet small-font "LOCAL-REVIEW" art shown atop --help.
-// Small font fits in ~70 columns vs the original block font's ~120, so
-// it stays readable on narrow tmux panes, the `git commit` editor, and
-// most CI logs without wrapping. helpHeader() still suppresses it for
+// banner is the single-line "local-review" header shown atop --help on
+// a TTY. The previous 5-line figlet ate too much vertical space — for a
+// reviewer that runs from `git commit` editors and CI logs, compact
+// wins over decorative. helpHeader() still suppresses the banner for
 // non-TTY stdout (pipes/files) so machine-readable callers get clean
 // text.
-const banner = `
-   _    ___   ___   _   _       ___ _____   _____ _____      __
-  | |  / _ \ / __| /_\ | |  ___| _ \ __\ \ / /_ _| __\ \    / /
-  | |_| (_) | (__ / _ \| |_|___|   / _| \ V / | || _| \ \/\/ /
-  |____\___/ \___/_/ \_\____|  |_|_\___| \_/ |___|___| \_/\_/
-`
+const banner = "── local-review · multi-LLM code review ──"
 
-// helpHeader returns the banner when stdout is a wide-enough terminal,
-// or an empty string otherwise. The new small-font banner is ~70 cols
-// (was ~120 with block font), so the gate relaxes from 100 → 70 — most
-// terminals comfortably fit it.
-//
-// We use term.GetSize on the stdout fd. $COLUMNS isn't reliable here —
-// shells don't export it to child processes by default, so falling
-// back to it would silently disable the banner in the common case.
+// helpHeader returns the banner when stdout is a TTY, or an empty
+// string otherwise. We use term.IsTerminal on the stdout fd; $COLUMNS
+// isn't reliable here because shells don't export it to child
+// processes by default.
 func helpHeader() string {
 	fd := int(os.Stdout.Fd())
 	if !term.IsTerminal(fd) {
 		return ""
 	}
-	w, _, err := term.GetSize(fd)
-	if err != nil || w < 70 {
-		return ""
-	}
-	return banner + "\n"
+	return banner + "\n\n"
 }
 
 // sharedFlags collects every flag accepted by the review-shape commands.
@@ -81,6 +68,12 @@ type sharedFlags struct {
 }
 
 func main() {
+	// Preserve AddCommand insertion order in --help so the canonical
+	// `review` appears first inside the Review group instead of being
+	// alphabetised behind `branch`/`commit`. Cobra's default sort hides
+	// the most-used command at the bottom.
+	cobra.EnableCommandSorting = false
+
 	var sf sharedFlags
 
 	root := &cobra.Command{
@@ -128,14 +121,31 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.PersistentFlags().StringVar(&sf.codexModel, "codex-model", "", "override codex's model")
 	root.PersistentFlags().StringVar(&sf.mergeWith, "merge-with", "", "agent to use for merging findings (default: auto)")
 
-	root.AddCommand(reviewCmd(&sf))
-	root.AddCommand(stagedCmd(&sf))
-	root.AddCommand(commitCmd(&sf))
-	root.AddCommand(branchCmd(&sf))
-	root.AddCommand(versionCmd())
-	root.AddCommand(configCmd(&sf))
-	root.AddCommand(doctorCmd())
-	root.AddCommand(initCmd())
+	// Group commands so --help reads as three sections (Review / Setup /
+	// Other) instead of one alphabetical wall. Cobra renders any command
+	// without a GroupID under "Additional Commands:", so we also wire the
+	// auto-generated help/completion commands into the "other" group.
+	root.AddGroup(
+		&cobra.Group{ID: "review", Title: "Review:"},
+		&cobra.Group{ID: "setup", Title: "Setup:"},
+		&cobra.Group{ID: "other", Title: "Other:"},
+	)
+	root.SetHelpCommandGroupID("other")
+	root.SetCompletionCommandGroupID("other")
+
+	addGrouped := func(group string, cmd *cobra.Command) {
+		cmd.GroupID = group
+		root.AddCommand(cmd)
+	}
+
+	addGrouped("review", reviewCmd(&sf))
+	addGrouped("review", stagedCmd(&sf))
+	addGrouped("review", commitCmd(&sf))
+	addGrouped("review", branchCmd(&sf))
+	addGrouped("setup", initCmd())
+	addGrouped("setup", doctorCmd())
+	addGrouped("setup", configCmd(&sf))
+	addGrouped("other", versionCmd())
 
 	if err := root.Execute(); err != nil {
 		// errBlockingFindings is a sentinel — review found major/critical

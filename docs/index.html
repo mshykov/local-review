@@ -503,9 +503,70 @@
       text-decoration: underline;
     }
 
+    .scope {
+      background: #f7fafc;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .scope-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      margin-top: 30px;
+    }
+
+    .scope-col {
+      padding: 24px 28px;
+      background: #fff;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .scope-col h3 {
+      margin: 0 0 12px;
+      font-size: 1.1em;
+      color: #2d3748;
+    }
+
+    .scope-col.is h3 { color: #2f855a; }
+    .scope-col.isnt h3 { color: #c53030; }
+
+    .scope-col ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .scope-col li {
+      padding: 8px 0 8px 24px;
+      position: relative;
+      font-size: 0.95em;
+      line-height: 1.5;
+      border-top: 1px solid #edf2f7;
+    }
+
+    .scope-col li:first-child { border-top: none; }
+
+    .scope-col.is li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: #38a169;
+      font-weight: 700;
+    }
+
+    .scope-col.isnt li::before {
+      content: "✕";
+      position: absolute;
+      left: 0;
+      color: #e53e3e;
+      font-weight: 700;
+    }
+
     @media (max-width: 768px) {
       h1 { font-size: 2em; }
       .tagline { font-size: 1.1em; }
+      .scope-grid { grid-template-columns: 1fr; }
       .features { grid-template-columns: 1fr; }
       .cta-buttons { flex-direction: column; align-items: stretch; }
       .btn { text-align: center; }
@@ -532,6 +593,34 @@
       <p class="trust-line">Open-source &middot; MIT Licensed &middot; No telemetry &middot; No SaaS</p>
     </div>
   </header>
+
+  <section class="scope">
+    <div class="container">
+      <h2>What it is, what it isn't</h2>
+      <div class="scope-grid">
+        <div class="scope-col is">
+          <h3>What it is</h3>
+          <ul>
+            <li>A local CLI that reviews a git diff using LLMs you've already authenticated</li>
+            <li>An orchestrator that runs Claude / Gemini / Codex CLIs in parallel and merges findings into one report</li>
+            <li>BYOK — your API key, requests go direct to the vendor (no middleman server)</li>
+            <li>A pre-commit gate — exits non-zero on <code>major</code> / <code>critical</code> findings so hooks can block the commit</li>
+            <li>A single Go binary — no Node, no Python, no Docker, no telemetry</li>
+          </ul>
+        </div>
+        <div class="scope-col isnt">
+          <h3>What it isn't</h3>
+          <ul>
+            <li>A replacement for Claude's <code>/review</code> or <code>/simplify</code> — those are single-prompt commands; this is multi-LLM diff orchestration with merge and storage</li>
+            <li>"Code never leaves your machine" — the diff still goes to whichever LLM you authenticate (run Ollama for true offline)</li>
+            <li>A SaaS — no hosted dashboard, no account, no team collaboration features</li>
+            <li>A linter or static analyzer — it's LLM-based, with the heuristic tradeoffs that implies</li>
+            <li>A chat interface — reads a diff, prints findings, exits</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <section>
     <div class="container">
