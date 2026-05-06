@@ -204,6 +204,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 
 	successCount := multi.CountSuccessful(results)
 	mergeable := multi.CountWithOutput(results)
+	rmode := classifyRunMode(results) // computed once here; reused in the report-path block below to avoid a second traversal
 	metadata := buildMetadata(commit, branch, results, startTime)
 
 	// Short-circuit on "nothing for the merger to consume." Pre-fix
@@ -261,13 +262,10 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// happily consolidated all 3 outputs and the gate fired correctly.
 	fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", mergeable, len(results), time.Since(startTime).Round(time.Second))
 	if mergedPath != "" {
-		// "produced output" mirrors the classifier's basis (CountWithOutput,
-		// matching what the merger actually consumes). Using
-		// `len - CountSuccessful` here would drift for the empty-Output-but-
-		// Error-nil and non-empty-Output-but-Error-set cases the classifier
-		// already handles. `mergeable` is computed once at the top of this
-		// function and reused here so we don't traverse results twice.
-		switch classifyRunMode(results) {
+		// Report-path label uses `rmode` (computed above alongside `mergeable`)
+		// so we don't call CountWithOutput a second time. Degraded/solo runs
+		// use distinct labels so users can tell single-source from consensus.
+		switch rmode {
 		case runModeDegraded:
 			fmt.Printf("Single-LLM report (%d of %d agents produced no output): %s\n", len(results)-mergeable, len(results), mergedPath)
 		case runModeSolo:
@@ -592,7 +590,8 @@ const (
 
 // classifyRunMode picks the framing for the merge step based on how
 // many agents produced output the merger will actually see. We count
-// non-empty Output (matching BuildMergeInput's filter), not Error == nil:
+// non-blank Output (matching BuildMergeInput's filter, which uses
+// strings.TrimSpace), not Error == nil:
 // a run where the LLM succeeded but SaveReview failed has Error != nil
 // yet Output != "", and the merger will still consume that review, so
 // the framing should reflect that. Pre-fix we used CountSuccessful and
