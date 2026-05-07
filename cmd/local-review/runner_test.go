@@ -696,3 +696,62 @@ func TestFormatTokenSuffix_BehaviorByShape(t *testing.T) {
 		})
 	}
 }
+
+func TestSortByRoster_RestoresDeterministicOrder(t *testing.T) {
+	// Pin the v0.6.7 determinism contract: streaming the channel
+	// produces results in completion order, but everything
+	// downstream (BuildMergeInput, buildMetadata, selectMergeLLM)
+	// must see roster order so two identical runs produce identical
+	// merge prompts. Pre-fix, the merge prompt's "Reviewer 1"
+	// could be claude in run A and codex in run B depending on
+	// which finished first — a regression from v0.6.6's deterministic
+	// shape that erodes trust without surfacing as an error.
+	roster := []cli.LLM{
+		{Name: "claude"},
+		{Name: "gemini"},
+		{Name: "codex"},
+	}
+	// Completion order: codex (fastest) → claude → gemini (slowest).
+	// Roster order should re-sort to claude, gemini, codex.
+	completionOrder := []multi.ReviewResult{
+		{LLM: "codex", Output: "c"},
+		{LLM: "claude", Output: "a"},
+		{LLM: "gemini", Output: "b"},
+	}
+	got := sortByRoster(completionOrder, roster)
+	want := []string{"claude", "gemini", "codex"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i, name := range want {
+		if got[i].LLM != name {
+			t.Errorf("got[%d].LLM = %s, want %s (full: %v)", i, got[i].LLM, name, got)
+		}
+	}
+}
+
+func TestSortByRoster_UnknownAgentSinksStable(t *testing.T) {
+	// Defensive: an agent in `results` but absent from `available`
+	// shouldn't happen in practice (active drives both) but if it
+	// ever does — say a future feature lets the orchestrator pick
+	// up an agent that wasn't in the roster — those entries land
+	// at the end in their original (completion) order rather than
+	// crashing or duplicating.
+	roster := []cli.LLM{
+		{Name: "claude"},
+		{Name: "codex"},
+	}
+	in := []multi.ReviewResult{
+		{LLM: "ghost", Output: "g1"},
+		{LLM: "codex", Output: "c"},
+		{LLM: "phantom", Output: "p"},
+		{LLM: "claude", Output: "a"},
+	}
+	got := sortByRoster(in, roster)
+	want := []string{"claude", "codex", "ghost", "phantom"}
+	for i, name := range want {
+		if got[i].LLM != name {
+			t.Errorf("got[%d].LLM = %s, want %s", i, got[i].LLM, name)
+		}
+	}
+}

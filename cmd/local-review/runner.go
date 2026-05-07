@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -242,6 +243,17 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		}
 	}
 	fmt.Println()
+
+	// Sort results back to roster order before any downstream use.
+	// Display lines above already printed in completion order (the
+	// streaming UX); everything from here on (BuildMergeInput,
+	// buildMetadata, selectMergeLLM) is order-sensitive and must be
+	// deterministic across runs on identical input. Pre-fix, two
+	// identical `local-review review` runs could produce different
+	// merge prompts (reviewer #1 was "claude" in one run, "codex" in
+	// the next, depending on which finished first) — a regression
+	// from v0.6.6 that erodes trust without surfacing as an error.
+	results = sortByRoster(results, active)
 
 	// Surface the on-disk path so users know where to find raw
 	// per-LLM output — especially when one agent failed and they
@@ -980,6 +992,40 @@ func buildMetadata(commit, branch string, results []multi.ReviewResult, startTim
 		}
 	}
 	return meta
+}
+
+// sortByRoster returns results re-ordered to match the configured
+// roster order in `available`. Used after the streaming channel
+// drains to restore determinism for downstream consumers
+// (BuildMergeInput, buildMetadata, selectMergeLLM): identical runs
+// must produce identical merge prompts and metadata files
+// regardless of which agent happened to finish first.
+//
+// Stable: agents present in `results` but absent from `available`
+// (defensive — shouldn't happen in practice since active drives
+// both) keep their relative completion-order position at the end.
+func sortByRoster(results []multi.ReviewResult, available []cli.LLM) []multi.ReviewResult {
+	rank := make(map[string]int, len(available))
+	for i, llm := range available {
+		rank[llm.Name] = i
+	}
+	sorted := make([]multi.ReviewResult, len(results))
+	copy(sorted, results)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri, oki := rank[sorted[i].LLM]
+		rj, okj := rank[sorted[j].LLM]
+		switch {
+		case oki && okj:
+			return ri < rj
+		case oki:
+			return true
+		case okj:
+			return false
+		default:
+			return false
+		}
+	})
+	return sorted
 }
 
 // selectMergeLLM picks which agent merges findings. Priority:
