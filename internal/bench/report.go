@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -60,10 +61,11 @@ func WriteJSON(w io.Writer, rep Report) error {
 }
 
 // perCaseLines returns one row per case showing per-LLM scores side by
-// side. Order: cases by ID, LLMs in their report order (already sorted
-// alphabetically by Run).
+// side. Order: cases by ID (sorted), LLMs in their report order
+// (already sorted alphabetically by Run).
 func perCaseLines(rep Report) []string {
 	caseIDs := collectCaseIDs(rep)
+	sort.Strings(caseIDs)
 	scoreByCaseLLM := indexScores(rep)
 
 	var lines []string

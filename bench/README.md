@@ -13,7 +13,7 @@ the long-term roadmap.
 
 ## Layout
 
-```
+```text
 bench/
   dataset/                   # labelled inputs
     <case-id>/

@@ -30,6 +30,15 @@ on:
       - '.github/workflows/bench.yml'
   workflow_dispatch:
 
+# Pin the GITHUB_TOKEN to the minimum surface this job needs:
+# checkout the code, no writes. Without this block the token
+# inherits the repo's default scopes — flagged by CodeQL and
+# CodeRabbit as a least-privilege violation. The bench is
+# read-only (no PR comments, no artifact deletion, no API
+# calls); contents:read is enough.
+permissions:
+  contents: read
+
 jobs:
   bench:
     runs-on: ubuntu-latest

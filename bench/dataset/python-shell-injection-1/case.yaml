@@ -8,7 +8,8 @@ description: |
   argv list.
 expected:
   - file: scripts/archive.py
-    line: 10
+    line: 9
+    window: 2
     category: security
     severity: critical
-    note: shell=True + interpolated user input → command injection
+    note: shell=True with f-string built from user input → command injection

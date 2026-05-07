@@ -202,7 +202,14 @@ func splitCSV(s string) []string {
 
 // writeBenchJSONFile writes the report as JSON to path, creating
 // parent directories as needed. Used by --out.
-func writeBenchJSONFile(path string, rep bench.Report) error {
+//
+// Close error is checked explicitly (not just deferred-and-dropped):
+// on a full-disk or other late-write I/O failure, Write may return
+// success while the buffered tail bytes only fail at Close. Without
+// this check a corrupt/truncated bench-results.json would look
+// indistinguishable from a clean run — exactly the failure mode
+// the bench is supposed to surface, not hide.
+func writeBenchJSONFile(path string, rep bench.Report) (retErr error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -212,6 +219,10 @@ func writeBenchJSONFile(path string, rep bench.Report) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && retErr == nil {
+			retErr = fmt.Errorf("close %s: %w", path, cerr)
+		}
+	}()
 	return bench.WriteJSON(f, rep)
 }

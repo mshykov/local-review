@@ -71,7 +71,17 @@ func ParseFindings(markdown string) []ProducedFinding {
 
 	for _, line := range strings.Split(markdown, "\n") {
 		if h := severityHeadingRE.FindStringSubmatch(line); h != nil {
-			severity = inferSeverity(h[1])
+			// Only update severity when the heading carries a
+			// recognised severity word. The previous form
+			// unconditionally clobbered it on every heading, so a
+			// `### Details` or `### Suggested fix` sub-heading inside
+			// a "## Major Issues" block would silently strip severity
+			// from the findings underneath. Inherit the parent
+			// severity instead — that's what reviewers actually mean
+			// when they nest sub-sections.
+			if s := inferSeverity(h[1]); s != "" {
+				severity = s
+			}
 			continue
 		}
 

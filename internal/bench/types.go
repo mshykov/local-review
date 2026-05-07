@@ -49,39 +49,46 @@ type Case struct {
 }
 
 // ExpectedFinding describes one bug or issue the reviewer should catch.
-// Matching is intentionally loose — see scorer.go for the exact rules —
+// Matching is intentionally loose — see score.go for the exact rules —
 // because LLM line numbers wander by ±a few lines on the same diff.
+//
+// Both yaml and json tags are set: yaml is read from case.yaml,
+// json is emitted in the bench Report (CaseScore.Missed,
+// MatchPair.Expected). Without explicit json tags the JSON output
+// would carry CamelCase field names while the rest of the report
+// uses snake_case, breaking schema consistency for downstream
+// consumers.
 type ExpectedFinding struct {
 	// File the bug lives in (matched by suffix, so "foo.go" matches
 	// "src/foo.go" — LLMs vary on whether they emit relative or full
 	// paths).
-	File string `yaml:"file"`
+	File string `yaml:"file" json:"file"`
 
 	// Line number of the bug. Matching uses Window (default 3) on each
 	// side; a produced finding within [Line-Window, Line+Window] counts.
-	Line int `yaml:"line"`
+	Line int `yaml:"line" json:"line"`
 
 	// Window in lines around Line that still counts as a match. Zero
 	// means "use the global default" (3). Per-finding override exists
 	// because some bugs have a clear single-line locus (nil deref) and
 	// others span a small block (race window, error-handling section).
-	Window int `yaml:"window,omitempty"`
+	Window int `yaml:"window,omitempty" json:"window,omitempty"`
 
 	// Optional category hint: "security", "correctness", "performance",
 	// "style". Recorded but NOT required for a match in v1 — the
 	// markdown produced by LLM CLIs doesn't reliably preserve category
 	// labels, and forcing a match would inflate false negatives.
-	Category string `yaml:"category,omitempty"`
+	Category string `yaml:"category,omitempty" json:"category,omitempty"`
 
 	// Optional severity hint: "critical", "major", "warning", "info",
 	// "nit". Recorded but not required for a match in v1; LLMs grade
 	// severity inconsistently across runs.
-	Severity string `yaml:"severity,omitempty"`
+	Severity string `yaml:"severity,omitempty" json:"severity,omitempty"`
 
 	// Human-readable note about what the finding should call out. Shown
 	// in reports next to "MISSED" lines so a maintainer reviewing a
 	// regression can tell at a glance which bug the reviewer dropped.
-	Note string `yaml:"note,omitempty"`
+	Note string `yaml:"note,omitempty" json:"note,omitempty"`
 }
 
 // ProducedFinding is one finding extracted from the LLM's review
