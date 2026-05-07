@@ -29,7 +29,7 @@
 > ✨ **New in v0.7** — *Smarter, more visible reviews.* Three changes you'll notice on your first run after upgrading:
 >
 > - **Diff-too-large preflight.** Agents whose context window can't fit the prompt + diff are skipped *before* the run starts, with a one-line hint on how to scope smaller. No more 5-minute fan-outs that fail with N opaque errors.
-> - **Per-LLM token visibility.** Each completion line shows what that agent consumed (`· 12.3k in / 4.5k out`); the closing line aggregates the run total. Same data persists in `<commit>_metadata.json` so paid-tier users can attribute spend per PR.
+> - **Per-LLM token visibility.** Each completion line shows the prompt and response size for that agent (`· 12.3k in / 4.5k out`); the closing line aggregates the run total. Same data persists in `<commit>_metadata.json`. (For Anthropic, "in" includes cache-read tokens — these numbers are *prompt size*, not billed amount; check your vendor dashboard for actual spend.)
 > - **Live progress streaming.** Per-agent lines print as each agent finishes — no more blank terminal while the slow one grinds. See [CHANGELOG](CHANGELOG.md#070---2026-05-07) for the full notes.
 
 ---
