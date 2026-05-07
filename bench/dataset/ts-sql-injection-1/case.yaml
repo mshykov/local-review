@@ -7,7 +7,8 @@ description: |
   straight into the SQL. The fix is parameterised queries.
 expected:
   - file: src/api/users.ts
-    line: 12
+    line: 7
+    window: 2
     category: security
     severity: critical
-    note: SQL injection via template string interpolation
+    note: SQL injection via template string interpolation on the SELECT line

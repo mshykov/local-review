@@ -1,6 +1,6 @@
 ## Critical Issues
 
-- `src/api/users.ts:12` — **SQL injection**. The query is now built by
+- `src/api/users.ts:7` — **SQL injection**. The query is now built by
   template-string interpolation of `req.query.id`, which is attacker-
   controlled. Any non-numeric input (e.g. `1; DROP TABLE users;`) is
   executed verbatim. The previous code used a parameterised query with

@@ -143,3 +143,10 @@ not what a v0.7 release actually ships.
   is a known cost of not requiring category match.
 * We don't yet score the **merge** step — only individual agent
   reviews. Phase 3 candidate.
+* The finding parser recognises a curated allow-list of
+  extensionless filenames (`Dockerfile`, `Makefile`, `Rakefile`,
+  `Procfile`, `Gemfile`, `Jenkinsfile`). When a new extensionless
+  format becomes common (e.g. `Containerfile`, `BUCK`, `BUILD.bazel`)
+  add it to `fileLineRE` in `internal/bench/parse.go` — broader
+  extensionless-anywhere matching would mis-match phrases like
+  "version: 0.42" in prose.

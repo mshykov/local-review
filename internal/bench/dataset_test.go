@@ -114,3 +114,21 @@ func TestLoadDataset_EmptyIsError(t *testing.T) {
 		t.Fatal("expected error for empty dataset directory")
 	}
 }
+
+func TestLoadDataset_DuplicateIDIsError(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(subdir, id string) {
+		cd := filepath.Join(dir, subdir)
+		_ = os.Mkdir(cd, 0o755)
+		yamlBody := "id: " + id + "\nclean: true\n"
+		_ = os.WriteFile(filepath.Join(cd, "case.yaml"), []byte(yamlBody), 0o644)
+		_ = os.WriteFile(filepath.Join(cd, "diff.patch"), []byte("x"), 0o644)
+	}
+	mk("dir-a", "shared-id")
+	mk("dir-b", "shared-id")
+
+	_, err := LoadDataset(dir)
+	if err == nil {
+		t.Fatal("expected error when two case directories declare the same id")
+	}
+}

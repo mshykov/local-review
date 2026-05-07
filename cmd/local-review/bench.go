@@ -22,6 +22,15 @@ type benchFlags struct {
 	only      string // comma-separated llm names to restrict the run to
 	jsonOut   bool   // emit JSON to stdout instead of text summary
 	outFile   string // also write JSON to this file
+
+	// strict, when true, makes any per-case error (missing fixture,
+	// CLI invocation failure, etc.) a non-zero exit. Defaults to
+	// true in replay mode (CI's intended gate — a missing fixture
+	// must fail the workflow, not pass a green report on a dataset
+	// that wasn't actually scored) and false in live mode (real
+	// CLIs flake, a transient one-agent failure shouldn't kill the
+	// bench and lose data on agents that did succeed).
+	strict bool
 }
 
 // benchCmd wires the `local-review bench` subcommand. Phase 1 of issue
@@ -57,7 +66,13 @@ Examples:
 The dataset format and starter cases live under bench/. See
 bench/README.md for how to add a new case.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBench(cmd.Context(), bf)
+			// Effective strictness: explicit --strict wins; otherwise
+			// default ON in replay mode, OFF in live mode.
+			strict := bf.strict
+			if !cmd.Flags().Changed("strict") {
+				strict = bf.replayDir != ""
+			}
+			return runBench(cmd.Context(), bf, strict)
 		},
 	}
 
@@ -66,13 +81,15 @@ bench/README.md for how to add a new case.`,
 	cmd.Flags().StringVar(&bf.only, "only", "", "comma-separated agent names to bench (default: all installed in live mode, all canonical in replay)")
 	cmd.Flags().BoolVar(&bf.jsonOut, "json", false, "emit JSON to stdout instead of the text summary")
 	cmd.Flags().StringVar(&bf.outFile, "out", "", "also write JSON to this path (text summary still goes to stdout unless --json)")
+	cmd.Flags().BoolVar(&bf.strict, "strict", false, "exit non-zero on any per-case error; default ON in --replay (CI gate), OFF in live mode")
 
 	return cmd
 }
 
 // runBench dispatches a bench invocation: load config + dataset, pick
-// the LLMs to run, score, render.
-func runBench(ctx context.Context, bf benchFlags) error {
+// the LLMs to run, score, render. strict makes per-case errors a
+// non-zero exit; resolved by the caller from --strict + mode default.
+func runBench(ctx context.Context, bf benchFlags, strict bool) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -111,9 +128,29 @@ func runBench(ctx context.Context, bf benchFlags) error {
 	}
 
 	if bf.jsonOut {
-		return bench.WriteJSON(os.Stdout, rep)
+		if err := bench.WriteJSON(os.Stdout, rep); err != nil {
+			return err
+		}
+	} else {
+		if err := bench.WriteText(os.Stdout, rep); err != nil {
+			return err
+		}
 	}
-	return bench.WriteText(os.Stdout, rep)
+
+	if strict {
+		var failures []string
+		for _, lr := range rep.LLMReports {
+			for _, cs := range lr.Cases {
+				if cs.Error != "" {
+					failures = append(failures, fmt.Sprintf("%s/%s: %s", lr.LLM, cs.CaseID, cs.Error))
+				}
+			}
+		}
+		if len(failures) > 0 {
+			return fmt.Errorf("strict mode: %d case(s) errored: %s", len(failures), strings.Join(failures, "; "))
+		}
+	}
+	return nil
 }
 
 // pickBenchLLMs decides which agents to bench.
@@ -124,6 +161,8 @@ func runBench(ctx context.Context, bf benchFlags) error {
 //     trio so the runner produces a row per fixture-bearing LLM.
 //   - Live mode: reuse pickAgents() so the bench respects the same
 //     readiness + config.enabled rules as `local-review review`.
+//     Mirrors the v0.6 review-runner strictness: `--only` matching
+//     no ready agents is an error, not a silent fall-through.
 func pickBenchLLMs(bf benchFlags) ([]cli.LLM, error) {
 	if bf.replayDir != "" {
 		names := splitCSV(bf.only)
@@ -143,6 +182,9 @@ func pickBenchLLMs(bf benchFlags) ([]cli.LLM, error) {
 	}
 	sf := &sharedFlags{only: bf.only}
 	active, _ := pickAgents(cfg, sf)
+	if len(active) == 0 && bf.only != "" {
+		return nil, fmt.Errorf("--only %q matched no ready LLMs (run `local-review doctor` to see what's authenticated; refusing to silently bench a different set than the one named)", bf.only)
+	}
 	return active, nil
 }
 

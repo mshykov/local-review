@@ -33,6 +33,7 @@ func LoadDataset(root string) ([]Case, error) {
 	}
 
 	var cases []Case
+	idToDir := make(map[string]string)
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -50,6 +51,14 @@ func LoadDataset(root string) ([]Case, error) {
 			// that the user wants to know about immediately.
 			return nil, fmt.Errorf("load case %q: %w", e.Name(), err)
 		}
+		if prev, dup := idToDir[c.ID]; dup {
+			// Two cases sharing an ID would silently end up sharing
+			// fixture lookups in replay mode and collide in
+			// indexScores during reporting. Refuse the dataset and
+			// point at both directories so the user can resolve.
+			return nil, fmt.Errorf("duplicate case id %q in %q and %q (each case directory must have a unique id, or be left to default to the directory name)", c.ID, prev, caseDir)
+		}
+		idToDir[c.ID] = caseDir
 		cases = append(cases, c)
 	}
 
