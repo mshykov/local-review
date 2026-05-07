@@ -132,7 +132,7 @@ func Defaults() Config {
 		// 2–5 min on the same diff and timed out. 600s gives enough
 		// headroom for a worst-case agent on a worst-case diff while
 		// still failing fast on a genuinely hung subprocess. Users
-		// can lower per-agent via `llms.<agent>.timeout_sec:`.
+		// can lower per-agent via `llms.<agent>.timeout_seconds:`.
 		LLMs: map[string]LLMConfig{
 			"claude": {
 				Enabled: boolPtr(true),

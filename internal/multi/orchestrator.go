@@ -68,9 +68,9 @@ func (o *Orchestrator) RunParallel(ctx context.Context, systemPrompt, diff, comm
 				return
 			}
 
-			// Create context with timeout from config (default: 120s)
+			// Create context with timeout from config (default: 600s)
 			timeout := time.Duration(l.TimeoutSec) * time.Second
-			if l.TimeoutSec == 0 {
+			if l.TimeoutSec <= 0 {
 				// 10 minutes. Matches config.Defaults() and the runner's
 				// applyConfig fallback. The 120s pre-v0.6.4 default
 				// surfaced as user-reported timeouts on the most common
