@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mshykov/local-review/internal/cli"
 )
@@ -121,6 +122,29 @@ func TestRun_ReplayWithoutDirIsError(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error when replay mode is selected without a fixtures dir")
+	}
+}
+
+func TestFillAggregates_P95UsesCeilNearestRank(t *testing.T) {
+	// Regression: the prior `(n*95)/100` form picked the maximum for
+	// n=20 instead of the documented "second-highest of 20". Build
+	// a synthetic LLMReport with 20 cases and verify p95 is the
+	// 19th-highest value (index 18), not the 20th.
+	lr := &LLMReport{}
+	durations := make([]time.Duration, 20)
+	for i := range durations {
+		durations[i] = time.Duration(i+1) * time.Millisecond // 1ms..20ms
+	}
+	fillAggregates(lr, durations)
+	if got, want := lr.P95Ms, int64(19); got != want {
+		t.Errorf("p95 for n=20: got %dms, want %dms (index 18, value 19ms)", got, want)
+	}
+
+	// n=1 stays at the only sample, no panic.
+	lr2 := &LLMReport{}
+	fillAggregates(lr2, []time.Duration{42 * time.Millisecond})
+	if lr2.P95Ms != 42 {
+		t.Errorf("p95 for n=1: got %dms, want 42ms", lr2.P95Ms)
 	}
 }
 

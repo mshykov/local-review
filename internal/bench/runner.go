@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -242,9 +243,18 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 		}
 		lr.TotalDurationMs = total.Milliseconds()
 		lr.MedianMs = durations[len(durations)/2].Milliseconds()
-		// p95 with a small N is just "the highest few" — use ceil-style
-		// indexing so a 4-element list returns the 4th, not the 3rd.
-		idx := (len(durations) * 95) / 100
+		// Nearest-rank p95: idx = ⌈0.95·n⌉ - 1 (then clamp). The
+		// previous form `(n*95)/100` was a floor — for n=20 it picked
+		// index 19 (the maximum), one off from the documented
+		// "second-highest of 20" intent. Off-by-one only bites when
+		// 0.95·n is an integer (n=20, 40, 60, …); on the small Ns the
+		// bench actually runs (≤4 cases per LLM) both forms collapse
+		// to the max, so the user-visible numbers don't change today.
+		// Fixed for forward compatibility as the dataset grows.
+		idx := int(math.Ceil(0.95*float64(len(durations)))) - 1
+		if idx < 0 {
+			idx = 0
+		}
 		if idx >= len(durations) {
 			idx = len(durations) - 1
 		}
