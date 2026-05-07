@@ -251,7 +251,7 @@ npm install -g @anthropic-ai/claude-code
     },
     {
       "llm": "codex",
-      "version": "0.128",
+      "version": "0.120",
       "mode": "cli",
       "status": "success",
       "duration_ms": 9800,

@@ -22,7 +22,7 @@ This minor bundles three features that, together, move multi-LLM runs from "blac
 ### Fixed
 
 - **Timeout-error hint pointed at a non-existent config field.** When an agent timed out, the failure message read `... raise llms.<agent>.timeout_sec in .local-review.yml` — but the actual YAML key is `timeout_seconds`. Pasting the suggested fix into a config left it untouched. Hint and `classify_test.go` now reference `timeout_seconds`. Discovered during the v0.7 doc audit (`internal/cli/classify.go`).
-- **`README.md` "Codex disabled by default" landing-page claim was wrong.** Codex's `Enabled` field is `nil` (= "run if active") in `Defaults()` — same posture as claude and gemini. Landing page now reads "Enabled when authenticated."
+- **Landing page (`docs/index.html`) "Codex disabled by default" claim was wrong.** Codex's `Enabled` field is `nil` (= "run if active") in `Defaults()` — same posture as claude and gemini. Landing page now reads "Enabled when authenticated."
 
 ### Docs
 
