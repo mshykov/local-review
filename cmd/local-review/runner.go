@@ -609,16 +609,15 @@ func aggregateTokens(results []multi.ReviewResult, mergeTokens cli.TokenUsage) i
 	return total
 }
 
-// humanTokens formats a token count with a "k" suffix above 10k for
-// quick scannability. Below 10k we keep digits because the
-// difference between 1234 and 1500 tokens is meaningful at small
-// scales but invisible at "1k" rounding.
+// humanTokens formats a token count with a "k" suffix for quick
+// scannability. Values are divided by 1000 and shown with at most
+// one decimal place, dropping ".0" for whole thousands.
 func humanTokens(n int) string {
-	if n < 10_000 {
-		return fmt.Sprintf("%d", n)
+	k := float64(n) / 1000.0
+	if k == float64(int(k)) {
+		return fmt.Sprintf("%dk", int(k))
 	}
-	rounded := (n + 500) / 1000
-	return fmt.Sprintf("%dk", rounded)
+	return fmt.Sprintf("%.1fk", k)
 }
 
 // formatTokenSuffix returns " · 12.3k in / 4.5k out" for the per-LLM
