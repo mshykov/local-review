@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-05-06
+
+### Changed
+- **Default per-agent timeout raised from 120s → 600s (10 min).** User feedback after v0.6.3: claude (Anthropic Sonnet on a thinking model) regularly took 2–5 min on branch-sized diffs while gemini and codex finished in 80–100s. The 120s default kept timing claude out on real-world `local-review review` runs even though the agent was making forward progress. 600s gives enough headroom for a worst-case agent on a worst-case diff while still failing fast on a genuinely hung subprocess. Users who want shorter timeouts can override per-agent via `llms.<agent>.timeout_seconds:` in `.local-review.yml`. Same bump applied to: per-agent default in `Defaults()`, the `applyConfig` fallback in the runner, the `RunParallel` fallback in the orchestrator, the merge-step fallback in `mergeAndPrint`, and the v0 single-LLM API path's `Provider.TimeoutSec` (60s → 600s).
+
 ## [0.6.3] - 2026-05-06
 
 ### Fixed

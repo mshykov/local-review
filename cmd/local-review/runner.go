@@ -127,8 +127,11 @@ func applyConfig(llm cli.LLM, cfg config.Config) cli.LLM {
 			llm.APIKey = c.APIKey
 		}
 	}
-	if llm.TimeoutSec == 0 {
-		llm.TimeoutSec = 120
+	if llm.TimeoutSec <= 0 {
+		// 10 minutes — matches config.Defaults() and the orchestrator's
+		// fallback in RunParallel. A future refactor could lift this to
+		// a shared constant; for now we keep them in sync by convention.
+		llm.TimeoutSec = 600
 	}
 	return llm
 }
@@ -695,10 +698,13 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	// with `time.Duration(0)` = no timeout = a hung merge LLM hanging
 	// the whole review.
 	mergeTimeout := time.Duration(mergeLLM.TimeoutSec) * time.Second
-	// Negative timeouts (e.g., a `timeout_sec: -1` typo) would otherwise
+	// Negative timeouts (e.g., a `timeout_seconds: -1` typo) would otherwise
 	// produce an already-expired context that cancels the merge instantly.
 	if mergeLLM.TimeoutSec <= 0 {
-		mergeTimeout = 120 * time.Second
+		// Same 10-minute default as per-agent reviews — merge prompts
+		// are typically smaller than reviews but a slow merger LLM on
+		// a many-reviewer run can still creep past the old 120s cap.
+		mergeTimeout = 600 * time.Second
 	}
 	mergeCtx, cancel := context.WithTimeout(ctx, mergeTimeout)
 	defer cancel()
