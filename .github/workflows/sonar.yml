@@ -45,9 +45,12 @@ jobs:
           COMMIT_SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
         run: |
-          # Same lookup release.yml uses: works for squash, merge commit,
-          # and rebase strategies (parsing the commit subject only catches
-          # merge commits).
+          # Lookup the PR via the GitHub API (works for squash, merge
+          # commit, and rebase merge strategies — parsing the commit
+          # subject only catches merge commits). Using `gh api`
+          # instead of `gh pr view` because this job doesn't check
+          # out the repo, so `gh pr view` would fail trying to infer
+          # the git context from cwd.
           pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
             --jq '.[0].number' 2>/dev/null || echo "")
           if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
@@ -56,7 +59,10 @@ jobs:
             exit 0
           fi
 
-          labels=$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || echo "")
+          # Same reason for `gh api ... --jq` over `gh pr view --repo`:
+          # explicit, no cwd dependency.
+          labels=$(gh api "/repos/${REPO}/pulls/${pr_number}" \
+            --jq '.labels[].name' 2>/dev/null || echo "")
           if echo "$labels" | grep -qxF "release"; then
             echo "PR #$pr_number has 'release' label — running Sonar scan"
             echo "should_scan=true" >> "$GITHUB_OUTPUT"
@@ -86,19 +92,17 @@ jobs:
       - name: Run tests with coverage
         # -coverprofile produces the file Sonar's Go support consumes
         # directly (no conversion step needed). -covermode=atomic is
-        # required when -race is enabled. We exclude .claude/ from
-        # coverage to avoid path-traversal noise on local-only test
-        # worktrees.
+        # required when -race is enabled. We don't filter ./... — the
+        # `.claude/` worktree directory exists only on developer
+        # machines (gitignored), so CI's `go test ./...` already
+        # only sees real packages. The `.claude/**` exclusion in
+        # sonar-project.properties handles the analysis side, in case
+        # a future contributor commits `.claude/` by accident.
         run: |
           go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: SonarQube Scan
-        # NOTE: pinned to the current major (v6); the rest of the repo
-        # SHA-pins every action. After the first successful run the
-        # maintainer should look up the resolved SHA from the run log
-        # and pin to that instead — same pattern as actions/checkout
-        # etc. above.
-        uses: SonarSource/sonarqube-scan-action@v6
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           # SONAR_HOST_URL only needed for self-hosted SonarQube; SonarCloud
