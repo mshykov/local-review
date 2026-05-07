@@ -26,6 +26,12 @@
 
 > 📋 **Looking for the human-readable code review checklist this tool implements?** See [**CHECKLIST.md**](CHECKLIST.md) — OWASP 2025-aligned, with severity tiers and concrete measurables. Use it for human reviews, or run `local-review review` to get an LLM pass against the same rules.
 
+> ✨ **New in v0.7** — *Smarter, more visible reviews.* Three changes you'll notice on your first run after upgrading:
+>
+> - **Diff-too-large preflight.** Agents whose context window can't fit the prompt + diff are skipped *before* the run starts, with a one-line hint on how to scope smaller. No more 5-minute fan-outs that fail with N opaque errors.
+> - **Per-LLM token visibility.** Each completion line shows what that agent consumed (`· 12.3k in / 4.5k out`); the closing line aggregates the run total. Same data persists in `<commit>_metadata.json` so paid-tier users can attribute spend per PR.
+> - **Live progress streaming.** Per-agent lines print as each agent finishes — no more blank terminal while the slow one grinds. See [CHANGELOG](CHANGELOG.md#070---2026-05-07) for the full notes.
+
 ---
 
 ## What it is, what it isn't
@@ -118,7 +124,7 @@ local-review review --merge-with claude
 **How it works:**
 1. Detects installed LLM CLIs and which are authenticated (`local-review doctor`)
 2. Runs every authenticated CLI in parallel
-3. Saves each review to `.local-review/reviews/<branch>/<commit>_<llm>.md`
+3. Saves each review to `.local-review/reviews/<branch>/<commit>_<llm>_<version>.md`
 4. Merges findings (dedup, consensus tagging) into one report
 5. Prints the merged report to stdout (also saved as `<commit>_merged.md`)
 
@@ -229,7 +235,7 @@ Common flags:
 | `--max-findings <n>` | Cap output (single-LLM fallback only) |
 | `--json` | Emit JSON (single-LLM fallback only — see below) |
 
-In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the v0.7 roadmap.
+In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the post-v0.7 roadmap — no fixed date; we'll unpark it when the third user asks for it.
 
 Config wins by default; flags override config at runtime (e.g., `--only codex` runs codex even if your config sets `codex.enabled: false`).
 

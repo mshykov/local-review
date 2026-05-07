@@ -28,14 +28,17 @@ const stderrTailMaxLen = 300
 // reliably triggered "delete the tool" frustration.
 //
 // agent is the LLM name ("claude", "gemini", "codex") — embedded into
-// hints that reference per-agent config (e.g. `llms.<agent>.timeout_sec`).
+// hints that reference per-agent config (e.g. `llms.<agent>.timeout_seconds`).
+// The YAML key is `timeout_seconds` (see internal/config/config.go LLMConfig
+// struct tag). A previous version of this hint said `timeout_sec` — wrong,
+// and would silently leave the user's config untouched if they pasted it.
 func ClassifyExit(ctx context.Context, err error, combinedOutput []byte, agent string) string {
 	// Context state is the most reliable signal: when the parent
 	// context expired or was cancelled, the child's exec error is
 	// often a generic "signal: killed" with no other distinguishing
 	// info, but ctx.Err() has already settled to the right reason.
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Sprintf("timeout — try `local-review commit HEAD` for a smaller diff, or raise llms.%s.timeout_sec in .local-review.yml", agent)
+		return fmt.Sprintf("timeout — try `local-review commit HEAD` for a smaller diff, or raise llms.%s.timeout_seconds in .local-review.yml", agent)
 	}
 	if errors.Is(ctx.Err(), context.Canceled) {
 		return "cancelled"

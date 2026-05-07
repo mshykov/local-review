@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-07
+
+**Theme: smarter, more visible reviews.**
+
+This minor bundles three features that, together, move multi-LLM runs from "black box that prints a report" to "tool that tells you what's about to happen, what's happening, and what each agent cost." Each feature shipped as a v0.6.x patch over the past two days; v0.7.0 frames them as one coherent narrative with a release announcement.
+
+### Bundled patch releases
+
+- **Diff-too-large preflight** *(v0.6.5, see entry below)* — agents whose context window can't fit the prompt + diff are skipped *before* the run starts, with a one-line hint on how to scope smaller. No more 5-minute fan-outs that fail with N opaque errors on squash-merged release branches or vendored-blob diffs.
+- **Per-LLM token visibility** *(v0.6.6, see entry below)* — every completion line shows what that agent consumed (`· 12.3k in / 4.5k out`); the closing line aggregates the run total. Same data persists in `<commit>_metadata.json` so paid-tier users can attribute spend per PR without round-tripping the vendor dashboard.
+- **Live progress streaming** *(v0.6.7, see entry below)* — per-agent lines print as each agent finishes, not all-at-once after the slowest one. A 5-min gemini run no longer looks like a hung terminal. Dropped the `[N/M]` numeric prefix from the per-LLM line — with streaming, the number would track "how many have finished" rather than roster position.
+
+### Fixed
+
+- **Timeout-error hint pointed at a non-existent config field.** When an agent timed out, the failure message read `... raise llms.<agent>.timeout_sec in .local-review.yml` — but the actual YAML key is `timeout_seconds`. Pasting the suggested fix into a config left it untouched. Hint and `classify_test.go` now reference `timeout_seconds`. Discovered during the v0.7 doc audit (`internal/cli/classify.go`).
+- **`README.md` "Codex disabled by default" landing-page claim was wrong.** Codex's `Enabled` field is `nil` (= "run if active") in `Defaults()` — same posture as claude and gemini. Landing page now reads "Enabled when authenticated."
+
+### Docs
+
+- **Doc audit pass for v0.7.0 release**: `SECURITY.md` support matrix bumped (0.7.x active, 0.6.x exception-only); `CLAUDE.md` `metadata.json` example now includes the v0.6.6 token fields (`input_tokens`, `output_tokens`, `total_only_tokens`); `README.md` adds a "What's new in v0.7" callout and corrects the "structured-JSON multi-LLM is on the v0.7 roadmap" claim (now post-v0.7); cosign-signing roadmap reference in the v0.6.0 entry corrected for the same reason.
+
 ## [0.6.7] - 2026-05-07
 
 ### Added
@@ -112,7 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-LLM honors `review.include` / `review.exclude` globs.** Previously the multi path bypassed the filter entirely and reviewed files the user had told it to skip.
 - **`local-review review` (already in v0.5) gains `--only` strictness**: when `--only` matches no ready agents (typo, unauthed agent), the run errors out instead of silently falling back to the configured `provider:` — that fallback would have sent the diff to a different vendor than the one named, a privacy / cost footgun.
 - **Multi-LLM blocking gate has two independent signals**: the merged report AND each per-LLM Output (full, before merger truncation). Defends against a verbose reviewer pushing a Critical finding past the 8 KB merger-input cap.
-- **`install.sh` verifies SHA-256 checksums** of release tarballs. Each release now ships a `checksums.txt` manifest; the installer downloads it alongside the tarball and verifies before extracting. Defends against accidental corruption and basic CDN/MITM tampering. Cosign signing is on the v0.7 roadmap for compromised-release-key defense.
+- **`install.sh` verifies SHA-256 checksums** of release tarballs. Each release now ships a `checksums.txt` manifest; the installer downloads it alongside the tarball and verifies before extracting. Defends against accidental corruption and basic CDN/MITM tampering. Cosign signing is on the post-v0.7 roadmap for compromised-release-key defense (originally targeted v0.7; deferred — v0.7.0 ships without it).
 
 ### Changed
 - **`ParseSeverity` defaults to `major` for unknown values** (was `warning`). LLM typos (`"criticl"`, `"sev-high"`, `"BLOCKER"`) used to silently demote out of the blocking range, hiding real findings from the pre-commit hook. Now: unknown → fail-closed at major. **Heads-up:** previously-passing reviews where the LLM emitted a typo'd severity may now block; rerun with the typo corrected, or treat the new failure as the gate working correctly.
@@ -132,7 +153,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ollama "no API key" path works.** When `base_url` points at localhost / 127.x / ::1, the empty-key check is skipped — required for the documented fully-offline workflow.
 - **Globs compile once, not per file.** Pre-fix `matchGlob` re-compiled the regex inside the per-file loop; a 500-file diff with 5 globs cost 2,500 compiles. Plus: `**/dist/**` now correctly anchors to a path-segment boundary (was matching `src/mydist/file`), and bracket character classes (`[0-9]`, `[!a-z]`) actually work.
 - **Fail-closed on all-invalid include globs.** Previously `include: ["[!]"]` (and other compile-error patterns) silently *expanded* the review to every file because the empty `includeRE` was treated as "no include filter".
-- **`Authorization` / `--json` / `--min-severity` / `--max-findings` ignored in multi-LLM** — README now states this explicitly instead of "passes them through with a warning". Multi-LLM emits a stderr warning when those flags are set but otherwise drops them; the structured-JSON multi-LLM mode is on the v0.7 roadmap.
+- **`Authorization` / `--json` / `--min-severity` / `--max-findings` ignored in multi-LLM** — README now states this explicitly instead of "passes them through with a warning". Multi-LLM emits a stderr warning when those flags are set but otherwise drops them; the structured-JSON multi-LLM mode is on the post-v0.7 roadmap (deferred from v0.7.0; unparking when the third user asks).
 - **`mergeAndPrint` truncates per-review output to 8 KB** before feeding the merger, defending against verbose reviewers blowing the merger's context window. Independent gate signal scans the full per-LLM Output to catch findings past the cutoff.
 - **Git refs are validated** — `--`-prefixed refs (e.g. `local-review commit -c`) and refs with NUL/newline are rejected to defend against `git` flag-injection.
 - **Output write errors propagate** — `WriteText` and `configCmd` no longer silently exit 0 on broken pipe / disk full.

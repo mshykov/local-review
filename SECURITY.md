@@ -4,17 +4,17 @@
 
 | Version | Supported                            |
 | ------- | ------------------------------------ |
-| 0.6.x   | ✅ active line — fixes shipped        |
-| 0.5.x   | ⚠️ exception-only — see policy below |
-| < 0.5   | ❌ unsupported                        |
+| 0.7.x   | ✅ active line — fixes shipped        |
+| 0.6.x   | ⚠️ exception-only — see policy below |
+| < 0.6   | ❌ unsupported                        |
 
-**Active line (0.6.x):** every reported vulnerability gets a fix in a
+**Active line (0.7.x):** every reported vulnerability gets a fix in a
 patch release; the "Security Update Process" below applies as written.
 
-**Exception-only (0.5.x):** a fix is *not* guaranteed. The maintainer
+**Exception-only (0.6.x):** a fix is *not* guaranteed. The maintainer
 may backport at their discretion when the impact is severe (remote
 code execution, credential disclosure, supply-chain compromise) AND
-the patch is small. Anything else: upgrade to 0.6.x.
+the patch is small. Anything else: upgrade to 0.7.x.
 
 **Unsupported:** report against the last active line. We won't
 investigate or patch.
