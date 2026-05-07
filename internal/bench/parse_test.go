@@ -101,3 +101,39 @@ func TestParseFindings_GitHubLAnchor(t *testing.T) {
 		t.Errorf("L-anchor not parsed: got %+v", got)
 	}
 }
+
+func TestParseFindings_ExtensionlessFilenames(t *testing.T) {
+	// Dockerfile / Makefile / etc. don't have file extensions but
+	// reviewers absolutely flag findings on them. The earlier regex
+	// only accepted `path.ext:LINE` shapes — codex flagged this in
+	// self-review on the v0.7-bench commit.
+	cases := []struct {
+		md   string
+		path string
+		line int
+	}{
+		{"## Major Issues\n\n- Dockerfile:12 — running as root\n", "Dockerfile", 12},
+		{"## Major Issues\n\n- Makefile:8 — recipe lacks .PHONY\n", "Makefile", 8},
+		{"## Warnings\n\n- ops/Dockerfile:3 — old base image\n", "ops/Dockerfile", 3},
+		{"## Major Issues\n\n- `Jenkinsfile:42` — credential leak\n", "Jenkinsfile", 42},
+	}
+	for _, tc := range cases {
+		got := ParseFindings(tc.md)
+		if len(got) != 1 {
+			t.Errorf("md=%q → got %d findings, want 1: %+v", tc.md, len(got), got)
+			continue
+		}
+		if got[0].File != tc.path || got[0].Line != tc.line {
+			t.Errorf("md=%q → got %s:%d, want %s:%d", tc.md, got[0].File, got[0].Line, tc.path, tc.line)
+		}
+	}
+}
+
+func TestParseFindings_ExtensionlessRequiresWordBoundary(t *testing.T) {
+	// "MyDockerfile:42" should NOT match the extensionless filename
+	// alternation — that's a sub-string of a longer custom name.
+	got := ParseFindings("## Major Issues\n\n- MyDockerfile:42 — fake\n")
+	if len(got) != 0 {
+		t.Errorf("MyDockerfile:42 should not match extensionless rule, got %+v", got)
+	}
+}

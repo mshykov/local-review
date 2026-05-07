@@ -18,14 +18,27 @@ import (
 //	src/foo.go line 42
 //	src/foo.go:L42             (GitHub-style anchor)
 //
-// The regex is anchored to a path-extension boundary (`\.[a-zA-Z]+`)
-// so we don't match arbitrary "name:42" tokens like git SHAs or
-// "version: 0.42" text in headings.
+// The first two alternations require a path-extension boundary
+// (`\.[a-zA-Z]+`) so we don't match arbitrary "name:42" tokens like
+// git SHAs or "version: 0.42" text in headings.
+//
+// The trailing alternation matches a curated set of well-known
+// extensionless filenames (Dockerfile, Makefile, Rakefile, Procfile,
+// Gemfile, Jenkinsfile) so findings on those files aren't silently
+// dropped. Adding a new extensionless filename is a one-line edit;
+// adding broad extensionless-anywhere matching would create too many
+// false positives ("repo: 42 commits" → finding).
 var fileLineRE = regexp.MustCompile(
 	`(?:` + // outer alternation
 		`([\w./\-+]+\.[a-zA-Z]+):L?(\d+)` + // path.ext:42 or path.ext:L42
 		`|` +
 		`([\w./\-+]+\.[a-zA-Z]+)\s+line\s+(\d+)` + // path.ext line 42
+		`|` +
+		// Curated extensionless filenames, optionally with a leading
+		// directory path. Word boundary on the left rejects matches
+		// where the filename appears as a suffix of a longer token
+		// (e.g. "MyDockerfile" should not match).
+		`(?:^|[^\w/])((?:[\w./\-+]+/)?(?:Dockerfile|Makefile|Rakefile|Procfile|Gemfile|Jenkinsfile)):L?(\d+)` +
 		`)`,
 )
 
@@ -86,14 +99,17 @@ func ParseFindings(markdown string) []ProducedFinding {
 }
 
 // pickPathAndLine pulls the non-empty (path, line) pair out of the
-// regex submatch. fileLineRE has two alternations and Go's regexp
-// returns "" for the unused branch, so we just grab whichever side
+// regex submatch. fileLineRE has three alternations and Go's regexp
+// returns "" for the unused branches, so we just grab whichever side
 // fired.
 func pickPathAndLine(m []string) (string, string) {
 	if m[1] != "" {
 		return m[1], m[2]
 	}
-	return m[3], m[4]
+	if m[3] != "" {
+		return m[3], m[4]
+	}
+	return m[5], m[6]
 }
 
 // inferSeverity normalises a heading line into one of the canonical

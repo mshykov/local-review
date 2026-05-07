@@ -175,6 +175,13 @@ func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (s
 //     sum TP, FP, FN over the dataset, then compute. This weights big
 //     cases more than small ones, matching what users actually care
 //     about ("did we catch most of the bugs across all diffs?").
+//   - When no non-clean case scored successfully (every fixture
+//     errored, or the dataset has only clean cases), all three drop
+//     to 0. The previous shape returned Recall=1.0 in this case —
+//     matching CaseScore.Recall's "no expected findings = perfect
+//     recall" rule but actively misleading at the dataset level: a
+//     run where every reviewer crashed would proudly report 100 %
+//     recall and hide the regression.
 //   - Noise rate is the mean number of findings produced per clean
 //     case. Zero clean cases → 0.
 //   - Median + p95 use only successful runs; an LLM that errors on
@@ -184,6 +191,7 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 	var tp, fp, fn int
 	cleanCases := 0
 	cleanFindings := 0
+	nonCleanScored := 0
 
 	for _, cs := range lr.Cases {
 		if cs.Error != "" {
@@ -199,21 +207,28 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 			cleanFindings += cs.Produced
 			continue
 		}
+		nonCleanScored++
 		tp += cs.TruePositives
 		fp += cs.FalsePositives
 		fn += cs.FalseNegatives
 	}
 
-	lr.Precision = ratio(tp, tp+fp)
-	if tp+fn == 0 {
-		lr.Recall = 1
-	} else {
-		lr.Recall = ratio(tp, tp+fn)
-	}
-	if lr.Precision+lr.Recall == 0 {
+	if nonCleanScored == 0 {
+		// Leave Precision/Recall/F1 at their zero values. A consumer
+		// can detect "no measurement" by checking that nonCleanScored
+		// is reflected in the per-case array (every entry has Error
+		// set, or the dataset truly has no non-clean cases).
+		lr.Precision = 0
+		lr.Recall = 0
 		lr.F1 = 0
 	} else {
-		lr.F1 = 2 * lr.Precision * lr.Recall / (lr.Precision + lr.Recall)
+		lr.Precision = ratio(tp, tp+fp)
+		lr.Recall = ratio(tp, tp+fn)
+		if lr.Precision+lr.Recall == 0 {
+			lr.F1 = 0
+		} else {
+			lr.F1 = 2 * lr.Precision * lr.Recall / (lr.Precision + lr.Recall)
+		}
 	}
 	if cleanCases > 0 {
 		lr.NoiseRate = float64(cleanFindings) / float64(cleanCases)

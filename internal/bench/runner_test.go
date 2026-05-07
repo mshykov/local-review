@@ -124,6 +124,53 @@ func TestRun_ReplayWithoutDirIsError(t *testing.T) {
 	}
 }
 
+func TestRun_RecallZeroWhenAllNonCleanCasesError(t *testing.T) {
+	// Regression: prior fillAggregates returned Recall=1.0 when
+	// tp+fn==0, which masked the failure mode where every non-clean
+	// fixture errored. The aggregate should now stay at 0 so a
+	// regression is visible.
+	dataset := t.TempDir()
+	mkCase(t, dataset, "case-x", `id: case-x
+title: x
+language: go
+expected:
+  - file: x.go
+    line: 1
+`)
+	mkCase(t, dataset, "clean-y", `id: clean-y
+title: clean
+language: go
+clean: true
+`)
+
+	fixtures := t.TempDir()
+	// Only the clean case has a fixture; case-x will error.
+	mkFixture(t, fixtures, "clean-y", "claude", "## Info / Notes\n\n*(None)*\n")
+
+	cases, err := LoadDataset(dataset)
+	if err != nil {
+		t.Fatalf("LoadDataset: %v", err)
+	}
+
+	rep, err := Run(context.Background(), cases, Options{
+		LLMs:      []cli.LLM{{Name: "claude"}},
+		Source:    SourceReplay,
+		ReplayDir: fixtures,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(rep.LLMReports) != 1 {
+		t.Fatalf("expected 1 llm report, got %d", len(rep.LLMReports))
+	}
+	lr := rep.LLMReports[0]
+	if lr.Precision != 0 || lr.Recall != 0 || lr.F1 != 0 {
+		t.Errorf("when no non-clean case scored, all aggregates should be 0; got P=%v R=%v F1=%v",
+			lr.Precision, lr.Recall, lr.F1)
+	}
+}
+
 func mkCase(t *testing.T, root, id, yaml string) {
 	t.Helper()
 	dir := filepath.Join(root, id)
