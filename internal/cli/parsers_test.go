@@ -8,16 +8,39 @@ import (
 func TestParseClaudeJSON_Success(t *testing.T) {
 	// Anthropic's documented shape from `claude --output-format json`:
 	// see https://docs.anthropic.com/en/docs/claude-code/sdk
-	body := []byte(`{"type":"result","subtype":"success","result":"# Review\n## Major\n- bug","usage":{"input_tokens":12300,"output_tokens":4500,"cache_read_input_tokens":2000}}`)
+	//
+	// v0.7.1: cache_read + cache_creation tokens are summed into
+	// InputTokens. Pre-fix the displayed "in" excluded both, so a
+	// re-review of the same diff (almost everything served from
+	// cache) collapsed to single-digit input — read as broken on a
+	// real ~10k-token prompt.
+	body := []byte(`{"type":"result","subtype":"success","result":"# Review\n## Major\n- bug","usage":{"input_tokens":12300,"output_tokens":4500,"cache_read_input_tokens":2000,"cache_creation_input_tokens":500}}`)
 	text, usage := parseClaudeJSON(body)
 	if !strings.Contains(text, "# Review") {
 		t.Errorf("text not extracted: %q", text)
 	}
-	if usage.InputTokens != 12300 {
-		t.Errorf("InputTokens = %d, want 12300", usage.InputTokens)
+	const wantIn = 12300 + 2000 + 500 // input + cache_read + cache_creation
+	if usage.InputTokens != wantIn {
+		t.Errorf("InputTokens = %d, want %d (input+cache_read+cache_creation)", usage.InputTokens, wantIn)
 	}
 	if usage.OutputTokens != 4500 {
 		t.Errorf("OutputTokens = %d, want 4500", usage.OutputTokens)
+	}
+}
+
+func TestParseClaudeJSON_HighCacheRatio(t *testing.T) {
+	// The exact regression that prompted the v0.7.1 fix: a re-review
+	// of the same diff. Almost the entire prompt is served from
+	// cache — `input_tokens` (new spend) is in the single digits
+	// while `cache_read_input_tokens` carries the full prompt size.
+	// Pre-fix this rendered as "9 in / 5.2k out" which read as a
+	// broken parser; post-fix the user sees "10k in / 5.2k out"
+	// — the actual prompt size they sent.
+	body := []byte(`{"type":"result","subtype":"success","result":"# Review","usage":{"input_tokens":9,"output_tokens":5200,"cache_read_input_tokens":10000,"cache_creation_input_tokens":0}}`)
+	_, usage := parseClaudeJSON(body)
+	const wantIn = 9 + 10000
+	if usage.InputTokens != wantIn {
+		t.Errorf("InputTokens = %d, want %d (cache_read should be summed in)", usage.InputTokens, wantIn)
 	}
 }
 
@@ -139,7 +162,10 @@ func TestParseGeminiJSON_FallbackOnPlainText(t *testing.T) {
 }
 
 func TestParseCodexStdoutTokens_SplitShape(t *testing.T) {
-	// codex v0.128+: "tokens: <in> input, <out> output"
+	// Hypothetical/future "tokens: <in> input, <out> output" shape.
+	// v0.128 doesn't actually emit this (see _NewlineShape test
+	// below), but if/when codex starts splitting, we don't want
+	// to lose the signal — pattern stays in the matcher chain.
 	stdout := `[2026-05-07T12:00:00Z] OpenAI Codex v0.128.0
 [2026-05-07T12:00:01Z] running review
 [2026-05-07T12:00:42Z] tokens: 12,345 input, 6,789 output
@@ -150,6 +176,61 @@ func TestParseCodexStdoutTokens_SplitShape(t *testing.T) {
 	}
 	if usage.OutputTokens != 6789 {
 		t.Errorf("OutputTokens = %d, want 6789", usage.OutputTokens)
+	}
+}
+
+func TestParseCodexStdoutTokens_NewlineShape(t *testing.T) {
+	// Real codex v0.128 stdout — verified by running `codex exec`
+	// against the live binary on 2026-05-07. The "tokens used"
+	// label and the number are on *separate lines*, no colon between.
+	// Pre-v0.7.1 our regex required a colon and missed this entirely;
+	// when it did "match" something, it was usually a context-window
+	// indicator elsewhere in the banner ("Total tokens: 800") which
+	// produced nonsense "800 total" output on real runs.
+	stdout := `OpenAI Codex v0.128.0 (research preview)
+--------
+workdir: /Users/x/Projects/local-review
+model: gpt-5.5
+session id: 019e0266-9d5b-7551-821f-f3ce0d822c97
+--------
+codex
+hello
+tokens used
+2,415
+hello`
+	usage := parseCodexStdoutTokens(stdout)
+	if usage.InputTokens != 2415 {
+		t.Errorf("InputTokens = %d, want 2415 (newline-shape total)", usage.InputTokens)
+	}
+	if !usage.TotalOnly {
+		t.Errorf("TotalOnly = false, want true — newline shape gives no input/output split")
+	}
+}
+
+func TestParseCodexStdoutTokens_DoesNotMatchContextIndicators(t *testing.T) {
+	// Pre-v0.7.1 the permissive regex matched any "tokens:" or
+	// "Total tokens:" line — including context-window indicators
+	// near the start of the banner. A user reported "codex ✓ ·
+	// 800 total" on a real review where the actual usage was much
+	// higher; the 800 came from a "Total tokens: 800" context-
+	// remaining line, not the session summary. Pin that we don't
+	// match the misleading shapes.
+	cases := []struct {
+		name   string
+		stdout string
+	}{
+		{"context-tokens prefix", "Available context tokens: 800\nhello world"},
+		{"total-tokens prefix", "Total tokens: 800\nhello world"},
+		{"tokens-without-input-or-used", "tokens: 800\nhello world"},
+		{"capitalised tokens-no-used", "Tokens: 800 remaining"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			usage := parseCodexStdoutTokens(tc.stdout)
+			if !usage.IsZero() {
+				t.Errorf("%s should not match, got %+v", tc.name, usage)
+			}
+		})
 	}
 }
 

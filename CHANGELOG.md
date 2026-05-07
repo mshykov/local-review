@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-07
+
+### Fixed
+
+- **Claude token display: cache-served prompts no longer collapse to single-digit input.** Pre-fix, `parseClaudeJSON` excluded `cache_read_input_tokens` and `cache_creation_input_tokens` from the displayed input count on the theory that "those represent reuse, not new spend." In practice that meant a re-review of the same diff (where almost the whole prompt is served from Anthropic's prompt cache) rendered as `claude ✓ · 9 in / 5.2k out` — which read as a broken parser. v0.7.1 sums all three input components (`input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`) so the displayed `· N in` answers the question users actually have ("how big was my prompt?") rather than "how much was uncached new spend?" — that latter number lives in the vendor's billing dashboard, not the CLI summary line.
+
+- **Codex token display: regex was matching context-window indicators instead of the actual usage summary.** Pre-fix, `parseCodexStdoutTokens` used a single permissive regex `(?i)tokens(?:\s+used)?:\s*(\d[\d,]*)...` that matched *any* line containing "tokens:" — including context-window indicators (`Total tokens: 800`, `Available context tokens: 800`) elsewhere in the codex banner. On real runs this surfaced as the misleading `codex ✓ · 800 total` line on prompts that were clearly larger than 800 tokens. Worse: the regex also failed to match codex v0.128's *actual* token-summary format, which puts the label and number on **separate lines**:
+  ```
+  tokens used
+  2,415
+  ```
+  v0.7.1 splits the matcher into three strict patterns tried in order — split shape (`tokens: <in> input, <out> output`), v0.128 newline shape (`tokens used\n<total>`), and pre-v0.128 single-line legacy (`tokens used: <total>`) — each anchored with `\b` so misleading prefixes like "Total tokens" don't false-positive. Real codex v0.128 stdout was captured to write the regression test against actual output.
+
 ## [0.7.0] - 2026-05-07
 
 **Theme: smarter, more visible reviews.**

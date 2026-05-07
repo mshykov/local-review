@@ -15,10 +15,10 @@ import (
 //	  "subtype": "success",
 //	  "result": "<the assistant's reply>",
 //	  "usage": {
-//	    "input_tokens": N,
+//	    "input_tokens": N,                  // new (uncached) input
 //	    "output_tokens": M,
-//	    "cache_read_input_tokens": ...,
-//	    "cache_creation_input_tokens": ...
+//	    "cache_read_input_tokens": ...,     // re-used from prompt cache
+//	    "cache_creation_input_tokens": ...  // newly added to cache
 //	  },
 //	  ...
 //	}
@@ -29,17 +29,25 @@ import (
 // --output-format — those exit non-zero and never reach this parser;
 // see ClaudeInvoker.run for the version-baseline rationale.
 //
-// Cache-read/creation tokens are NOT included in the input count we
-// surface — those represent reuse, not new spend. If we're going to
-// ever expose them, it should be as a separate "cached" field in
-// TokenUsage.
+// **Cache-read and cache-creation tokens are summed into InputTokens.**
+// Pre-v0.7.1 we excluded them on the theory that "they represent reuse,
+// not new spend" — but in practice that meant the displayed input was
+// only the *novel* portion of a cached prompt. On a re-review of the
+// same diff the displayed value collapsed to single digits ("9 in /
+// 5.2k out"), which read as broken. The user-visible "in" should
+// answer "how big was the prompt I sent?" — that's the sum of all
+// three input components. Cost accounting (where cache reads are
+// discounted ~10x) is not what this number is for; that lives in
+// the vendor's billing dashboard.
 func parseClaudeJSON(output []byte) (string, TokenUsage) {
 	var resp struct {
 		Type   string  `json:"type"`
 		Result *string `json:"result"`
 		Usage  *struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(output, &resp); err != nil || resp.Result == nil {
@@ -47,7 +55,9 @@ func parseClaudeJSON(output []byte) (string, TokenUsage) {
 	}
 	usage := TokenUsage{}
 	if resp.Usage != nil {
-		usage.InputTokens = resp.Usage.InputTokens
+		usage.InputTokens = resp.Usage.InputTokens +
+			resp.Usage.CacheReadInputTokens +
+			resp.Usage.CacheCreationInputTokens
 		usage.OutputTokens = resp.Usage.OutputTokens
 	}
 	return *resp.Result, usage
@@ -109,44 +119,54 @@ func parseGeminiJSON(output []byte) (string, TokenUsage) {
 	return string(output), TokenUsage{}
 }
 
-// codexTokensRE captures the input/output token counts from the
-// session-metadata block codex exec writes to stdout (intermixed
-// with the assistant's reply, which is why we route the reply
-// through --output-last-message). The pattern handles both shapes
-// codex has used across recent versions:
+// Codex stdout has used three different token-summary shapes across
+// versions. We try each in order and stop at the first match. Each
+// pattern is anchored strictly enough that lines like "Total tokens:
+// 800" or "Available tokens: 800" elsewhere in the stdout banner
+// (context-window indicators, not usage) don't false-positive — the
+// v0.7.0 regex was permissive enough to do that, which surfaced
+// nonsense like "codex ✓ · 800 total" on real runs.
 //
-//	"tokens used: <total>"            (just total, before v0.120)
-//	"tokens: <in> input, <out> output" (split, v0.128+)
+//	"tokens: <in> input, <out> output"   — split shape, hypothetical/future
+//	"tokens used\n<total>"               — codex v0.128.0+ (label and
+//	                                       number on separate lines, no
+//	                                       colon between them)
+//	"tokens used: <total>"               — pre-v0.128 single-line legacy
 //
-// Matches case-insensitive because codex's banner capitalisation
-// has drifted historically.
-var codexTokensRE = regexp.MustCompile(`(?i)tokens(?:\s+used)?:\s*(\d[\d,]*)(?:\s+input(?:\s*,\s*(\d[\d,]*)\s+output)?)?`)
+// Patterns ordered most-specific → least-specific. The split shape is
+// what we'd want long-term but codex v0.128 doesn't actually emit it;
+// kept anyway for forward-compat — if/when codex starts splitting,
+// we don't lose the signal.
+var (
+	codexSplitRE   = regexp.MustCompile(`(?i)\btokens:\s*(\d[\d,]*)\s+input\s*,\s*(\d[\d,]*)\s+output`)
+	codexNewlineRE = regexp.MustCompile(`(?i)\btokens used\s*\r?\n\s*(\d[\d,]*)`)
+	codexLegacyRE  = regexp.MustCompile(`(?i)\btokens used:\s*(\d[\d,]*)`)
+)
 
 // parseCodexStdoutTokens scans codex exec's combined stdout/stderr
-// for the token-usage line. Returns TokenUsage{} when no match —
-// preferable to inventing numbers when the format changes.
+// for the token-usage summary. Returns TokenUsage{} when no match —
+// preferable to inventing numbers when the format changes again.
 //
-// The split-counts shape (v0.128+) populates both Input and Output;
-// the legacy single-total shape (older) populates only Total via
-// InputTokens — we don't have enough signal to attribute split, so
-// reporting "all input" is a deliberate under-report on the output
-// side rather than a fabricated split.
+// Split shape populates both Input and Output. The two single-total
+// shapes (newline and legacy) fold their value into InputTokens and
+// flag TotalOnly so display callers render "Nk total" rather than
+// "Nk in / 0 out" — the latter would mislead users into thinking
+// the model produced no output when really we just don't have the
+// breakdown.
 func parseCodexStdoutTokens(combined string) TokenUsage {
-	m := codexTokensRE.FindStringSubmatch(combined)
-	if m == nil {
-		return TokenUsage{}
+	if m := codexSplitRE.FindStringSubmatch(combined); m != nil {
+		return TokenUsage{
+			InputTokens:  atoiNoCommas(m[1]),
+			OutputTokens: atoiNoCommas(m[2]),
+		}
 	}
-	first := atoiNoCommas(m[1])
-	if len(m) >= 3 && m[2] != "" {
-		// Split shape: m[1] = input, m[2] = output.
-		return TokenUsage{InputTokens: first, OutputTokens: atoiNoCommas(m[2])}
+	if m := codexNewlineRE.FindStringSubmatch(combined); m != nil {
+		return TokenUsage{InputTokens: atoiNoCommas(m[1]), TotalOnly: true}
 	}
-	// Legacy single-total shape — codex pre-v0.128 doesn't split
-	// input vs output. Fold into InputTokens (so Total() math still
-	// works) and flag TotalOnly so the formatter renders "Nk total"
-	// instead of "Nk in / 0 out". The "/ 0 out" form would lie:
-	// the model produced output, we just don't know how much.
-	return TokenUsage{InputTokens: first, TotalOnly: true}
+	if m := codexLegacyRE.FindStringSubmatch(combined); m != nil {
+		return TokenUsage{InputTokens: atoiNoCommas(m[1]), TotalOnly: true}
+	}
+	return TokenUsage{}
 }
 
 // atoiNoCommas parses an integer that may have thousand separators
