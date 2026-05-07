@@ -233,11 +233,13 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 // attribute value or inject newlines / quotes. Used by
 // sanitizeLLMNameForAttr to make the `llm="..."` attribute on the
 // `<review>` tag in merge_prompt.md robust against config-supplied
-// agent names. The character class is deliberately narrow: real LLM
-// names are ascii alnum + `_-./` and live within the merge prompt's
-// presentation layer. Anything else gets replaced with `-` so the
-// rendered attribute stays well-formed even if the user names an
-// agent something exotic.
+// agent names. The allow-list is deliberately narrow: ascii alnum
+// + `._-`. Path separators are intentionally excluded — LLM names
+// also flow into storage paths (see internal/multi/storage.go's
+// sanitizeFilenameComponent) and an agent named `acme/claude` would
+// create a subdirectory escape there. Anything outside the allow-
+// list gets replaced with `-` so the rendered attribute stays
+// well-formed even if the user names an agent something exotic.
 var llmAttrUnsafeChars = regexp.MustCompile(`[^A-Za-z0-9._\-]`)
 
 // sanitizeLLMNameForAttr returns name safe to embed inside the
