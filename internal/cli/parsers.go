@@ -153,20 +153,42 @@ var (
 // "Nk in / 0 out" — the latter would mislead users into thinking
 // the model produced no output when really we just don't have the
 // breakdown.
+//
+// **Last-match per pattern, not first.** Codex emits the session
+// summary near the end of stdout, but the assistant's reply (also
+// in `combined`, since codex intermixes metadata and response) can
+// contain pattern-matching text — e.g., a review of code that
+// handles token counters might literally say "tokens used\n123".
+// FindStringSubmatch returns the FIRST match, which would be the
+// assistant text; FindAllStringSubmatch + last lets us pick the
+// real summary. This costs one extra scan of the pattern but
+// avoids the most likely false-positive in production.
 func parseCodexStdoutTokens(combined string) TokenUsage {
-	if m := codexSplitRE.FindStringSubmatch(combined); m != nil {
+	if m := lastMatch(codexSplitRE, combined); m != nil {
 		return TokenUsage{
 			InputTokens:  atoiNoCommas(m[1]),
 			OutputTokens: atoiNoCommas(m[2]),
 		}
 	}
-	if m := codexNewlineRE.FindStringSubmatch(combined); m != nil {
+	if m := lastMatch(codexNewlineRE, combined); m != nil {
 		return TokenUsage{InputTokens: atoiNoCommas(m[1]), TotalOnly: true}
 	}
-	if m := codexLegacyRE.FindStringSubmatch(combined); m != nil {
+	if m := lastMatch(codexLegacyRE, combined); m != nil {
 		return TokenUsage{InputTokens: atoiNoCommas(m[1]), TotalOnly: true}
 	}
 	return TokenUsage{}
+}
+
+// lastMatch returns the last submatch of re in s, or nil if no
+// match. Used by parseCodexStdoutTokens to prefer the session
+// summary near end-of-stdout over any pattern-shaped text earlier
+// in the assistant's reply.
+func lastMatch(re *regexp.Regexp, s string) []string {
+	all := re.FindAllStringSubmatch(s, -1)
+	if len(all) == 0 {
+		return nil
+	}
+	return all[len(all)-1]
 }
 
 // atoiNoCommas parses an integer that may have thousand separators

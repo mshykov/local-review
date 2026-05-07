@@ -207,6 +207,31 @@ hello`
 	}
 }
 
+func TestParseCodexStdoutTokens_PrefersLastMatch(t *testing.T) {
+	// Assistant replies sometimes contain pattern-matching text
+	// — e.g., a review of code that handles token counters might
+	// literally include "tokens used\n123" inside its prose. The
+	// codex session summary is *also* in the same combined
+	// stdout/stderr blob, near the end. Pre-fix used
+	// FindStringSubmatch (first match), which would surface the
+	// assistant snippet's number as the run's usage. Last-match
+	// strategy picks the real summary.
+	stdout := `codex
+The function reports "tokens used
+123"
+when the user has used 123 tokens.
+tokens used
+2,415
+hello`
+	usage := parseCodexStdoutTokens(stdout)
+	if usage.InputTokens != 2415 {
+		t.Errorf("InputTokens = %d, want 2415 (last match, not first)", usage.InputTokens)
+	}
+	if !usage.TotalOnly {
+		t.Errorf("TotalOnly = false, want true")
+	}
+}
+
 func TestParseCodexStdoutTokens_DoesNotMatchContextIndicators(t *testing.T) {
 	// Pre-v0.7.1 the permissive regex matched any "tokens:" or
 	// "Total tokens:" line — including context-window indicators
