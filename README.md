@@ -263,14 +263,22 @@ See [`docs/prompt-packs.md`](docs/prompt-packs.md) for how to write or override 
 
 - **No multi-file refactor reasoning.** local-review reviews diffs, not architectures.
 - **No auto-fix / auto-PR.** Findings are advisory.
-- **No GitHub integration in the binary.** The `--json` output is structured for piping into your CI's PR-comment tool of choice. (A `local-review github` mode is on the roadmap.)
+- **No GitHub integration in the binary.** The `--json` output is structured for piping into your CI's PR-comment tool of choice. A native `local-review github` mode is parked — open an issue if you need it.
 - **No telemetry.** None. Ever.
+
+### On the roadmap
+
+These are queued and will land in priority order; ping the issue tracker if you want to influence the sequence.
+
+1. **Org-config fetching** *(near-term)* — `org.config_url:` in your `.local-review.yml` will fetch + cache an org-wide policy YAML, so a team can ship a single `.local-review.yml` to every repo with one line.
+2. **Structured JSON multi-LLM output** — the merger will emit markdown plus a JSON envelope so CI integrations don't have to text-scrape. Demand-pull: open an issue if you need it.
+3. **Cosign release signing** — `install.sh` already verifies SHA-256 checksums; cosign signatures will add compromised-release-key defense for enterprise installs.
 
 ## For organizations
 
 Distributing to a few hundred engineers? Two patterns work:
 
-1. **Org config repo.** Drop a `.local-review.yml` in each project that sets `org.config_url: https://your-internal-host/local-review.yml`. (Org-config fetching is on the roadmap; today, just commit the YAML to each repo.)
+1. **Org config repo.** Drop a `.local-review.yml` in each project that sets `org.config_url: https://your-internal-host/local-review.yml`. (Org-config fetching is the next planned feature — see "On the roadmap" above; today, just commit the YAML to each repo.)
 2. **One install command in onboarding.** `curl -fsSL <install.sh> | sh` plus an env var = done.
 
 ## Privacy
