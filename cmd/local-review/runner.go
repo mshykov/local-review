@@ -535,11 +535,22 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 	}
 	for _, llm := range active {
 		model := modelFor(llm.Name, cfg)
+		// Surface the per-agent timeout on the roster line so users
+		// know up-front "if this agent doesn't return within Ns,
+		// we'll mark it failed." Pre-v0.7 the timeout was invisible
+		// until the failure line displayed it as part of the hint;
+		// having it visible at run-start lets users notice "wait, my
+		// timeout is still 120s — that's why claude on a big diff
+		// keeps failing" before they spend tokens on the run.
+		timeout := llm.TimeoutSec
+		if timeout == 0 {
+			timeout = 600
+		}
 		if model != "" {
 			// agent_<model> reads as a single identifier (think
 			// docker image names) so users see "what model is
 			// running" at a glance.
-			fmt.Printf("  • %s_%s (CLI v%s)\n", llm.Name, model, llm.Version)
+			fmt.Printf("  • %s_%s (CLI v%s) | timeout: %ds\n", llm.Name, model, llm.Version, timeout)
 		} else {
 			// No model pinned → the invoker doesn't pass --model and
 			// the vendor CLI picks its own current default. We can't
@@ -547,7 +558,7 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 			// portable way), so we say so explicitly and tell the
 			// user how to take control. Pre-fix this said "model: CLI
 			// default" which the user reported as a non-answer.
-			fmt.Printf("  • %s (CLI v%s) — using vendor's default model; pin via `llms.%s.model:`\n", llm.Name, llm.Version, llm.Name)
+			fmt.Printf("  • %s (CLI v%s) | timeout: %ds — using vendor's default model; pin via `llms.%s.model:`\n", llm.Name, llm.Version, timeout, llm.Name)
 		}
 	}
 	if len(configDisabled) > 0 {
