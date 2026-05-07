@@ -215,22 +215,30 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)
 
-	results, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
+	resultsCh, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
 	if err != nil {
 		return fmt.Errorf("run reviews: %w", err)
 	}
 
+	// Stream per-agent completion lines as each agent finishes. The
+	// channel closes after all agents report, so the loop also serves
+	// as the synchronisation point before merge. Emission order =
+	// completion order; we dropped the [N/M] numeric prefix so the
+	// non-roster order doesn't read as a bug. Lines look like:
+	//   claude ✓ (51.5s) · 12.3k in / 4.5k out
+	//   codex ✗ timeout — try `local-review commit HEAD` for ...
+	results := make([]multi.ReviewResult, 0, len(active))
 	anyFailed := false
-	for i, r := range results {
+	for r := range resultsCh {
+		results = append(results, r)
 		if r.Error != nil {
 			anyFailed = true
 			// r.Error is the invoker's ClassifyExit output — already
 			// has the actionable hint inline. No "review failed:"
-			// prefix or "(output: )" wrapping; "[N/M] agent ✗ <msg>"
-			// reads clean.
-			fmt.Printf("[%d/%d] %s ✗ %s%s\n", i+1, len(results), r.LLM, r.Error, formatTokenSuffix(r.Tokens))
+			// prefix or "(output: )" wrapping.
+			fmt.Printf("%s ✗ %s%s\n", r.LLM, r.Error, formatTokenSuffix(r.Tokens))
 		} else {
-			fmt.Printf("[%d/%d] %s ✓ (%.1fs)%s\n", i+1, len(results), r.LLM, r.Duration.Seconds(), formatTokenSuffix(r.Tokens))
+			fmt.Printf("%s ✓ (%.1fs)%s\n", r.LLM, r.Duration.Seconds(), formatTokenSuffix(r.Tokens))
 		}
 	}
 	fmt.Println()
