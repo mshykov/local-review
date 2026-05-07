@@ -3,6 +3,7 @@ package bench
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,54 +45,75 @@ expected:
 	}
 }
 
+// writeCase is a t.Helper that creates one case directory under dir
+// with the given subdir name, case.yaml body, and diff.patch body.
+// Setup errors fail the test immediately rather than being silently
+// swallowed — without this a dataset that failed to materialize
+// (transient FS error, restrictive umask, etc.) would make a "no
+// cases" / "duplicate id" test pass for the wrong reason.
+func writeCase(t *testing.T, dir, subdir, yamlBody, patchBody string) {
+	t.Helper()
+	cd := filepath.Join(dir, subdir)
+	if err := os.Mkdir(cd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cd, "case.yaml"), []byte(yamlBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cd, "diff.patch"), []byte(patchBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadCase_RejectsCleanWithExpected(t *testing.T) {
 	dir := t.TempDir()
-	caseDir := filepath.Join(dir, "bad")
-	_ = os.Mkdir(caseDir, 0o755)
-	_ = os.WriteFile(filepath.Join(caseDir, "case.yaml"), []byte(`clean: true
+	writeCase(t, dir, "bad", `clean: true
 expected:
   - file: foo.go
     line: 1
-`), 0o644)
-	_ = os.WriteFile(filepath.Join(caseDir, "diff.patch"), []byte("x"), 0o644)
+`, "x")
 
-	if _, err := LoadCase(caseDir); err == nil {
+	_, err := LoadCase(filepath.Join(dir, "bad"))
+	if err == nil {
 		t.Fatal("expected error for clean=true with non-empty expected")
+	}
+	if !strings.Contains(err.Error(), "clean") {
+		t.Errorf("error should mention 'clean', got: %v", err)
 	}
 }
 
 func TestLoadCase_RejectsNonCleanWithoutExpected(t *testing.T) {
 	dir := t.TempDir()
-	caseDir := filepath.Join(dir, "bad2")
-	_ = os.Mkdir(caseDir, 0o755)
-	_ = os.WriteFile(filepath.Join(caseDir, "case.yaml"), []byte(`title: empty case`), 0o644)
-	_ = os.WriteFile(filepath.Join(caseDir, "diff.patch"), []byte("x"), 0o644)
+	writeCase(t, dir, "bad2", `title: empty case`, "x")
 
-	if _, err := LoadCase(caseDir); err == nil {
+	_, err := LoadCase(filepath.Join(dir, "bad2"))
+	if err == nil {
 		t.Fatal("expected error for non-clean case with no expected findings")
+	}
+	if !strings.Contains(err.Error(), "expected") && !strings.Contains(err.Error(), "clean") {
+		t.Errorf("error should mention 'expected' or 'clean', got: %v", err)
 	}
 }
 
 func TestLoadDataset_SortsAndSkipsHidden(t *testing.T) {
 	dir := t.TempDir()
 	mkCase := func(id string, clean bool) {
-		cd := filepath.Join(dir, id)
-		_ = os.Mkdir(cd, 0o755)
 		yamlBody := "title: " + id + "\n"
 		if clean {
 			yamlBody += "clean: true\n"
 		} else {
 			yamlBody += "expected:\n  - file: x.go\n    line: 1\n"
 		}
-		_ = os.WriteFile(filepath.Join(cd, "case.yaml"), []byte(yamlBody), 0o644)
-		_ = os.WriteFile(filepath.Join(cd, "diff.patch"), []byte("x"), 0o644)
+		writeCase(t, dir, id, yamlBody, "x")
 	}
 	mkCase("z-last", false)
 	mkCase("a-first", false)
 	mkCase("clean-1", true)
 
 	// Hidden directory should be ignored.
-	_ = os.Mkdir(filepath.Join(dir, ".cache"), 0o755)
+	if err := os.Mkdir(filepath.Join(dir, ".cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	cases, err := LoadDataset(dir)
 	if err != nil {
@@ -110,25 +132,25 @@ func TestLoadDataset_SortsAndSkipsHidden(t *testing.T) {
 
 func TestLoadDataset_EmptyIsError(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := LoadDataset(dir); err == nil {
+	_, err := LoadDataset(dir)
+	if err == nil {
 		t.Fatal("expected error for empty dataset directory")
+	}
+	if !strings.Contains(err.Error(), "no cases") {
+		t.Errorf("error should mention 'no cases', got: %v", err)
 	}
 }
 
 func TestLoadDataset_DuplicateIDIsError(t *testing.T) {
 	dir := t.TempDir()
-	mk := func(subdir, id string) {
-		cd := filepath.Join(dir, subdir)
-		_ = os.Mkdir(cd, 0o755)
-		yamlBody := "id: " + id + "\nclean: true\n"
-		_ = os.WriteFile(filepath.Join(cd, "case.yaml"), []byte(yamlBody), 0o644)
-		_ = os.WriteFile(filepath.Join(cd, "diff.patch"), []byte("x"), 0o644)
-	}
-	mk("dir-a", "shared-id")
-	mk("dir-b", "shared-id")
+	writeCase(t, dir, "dir-a", "id: shared-id\nclean: true\n", "x")
+	writeCase(t, dir, "dir-b", "id: shared-id\nclean: true\n", "x")
 
 	_, err := LoadDataset(dir)
 	if err == nil {
 		t.Fatal("expected error when two case directories declare the same id")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error should mention 'duplicate', got: %v", err)
 	}
 }
