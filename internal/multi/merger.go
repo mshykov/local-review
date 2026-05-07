@@ -191,7 +191,7 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 		if HasMergeableOutput(r) {
 			reviews = append(reviews, ReviewContent{
 				LLM:     r.LLM,
-				Content: truncateForMerge(r.Output),
+				Content: neutralizeReviewBlockTags(truncateForMerge(r.Output)),
 			})
 			llmNames = append(llmNames, r.LLM)
 		}
@@ -220,6 +220,42 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 		ConsensusThreshold: effectiveThreshold,
 		Reviews:            reviews,
 	}
+}
+
+// reviewBlockTagPattern matches the literal `<review>` open tag and
+// `</review>` close tag we use in merge_prompt.md to delimit each
+// per-LLM review block. We need to neutralize these in review content
+// because the merge prompt instructs the merger LLM to treat anything
+// inside `<review>...</review>` as data — but a hallucinated review
+// containing the literal close tag could escape its block and inject
+// instructions into what the merger reads as task scope.
+//
+// Case-insensitive because LLMs sometimes emit `<REVIEW>` or
+// `<Review>` from training-data drift; matching the open form too
+// (in case a reviewer concatenates two pseudo-blocks) closes the
+// loop.
+var reviewBlockTagPattern = regexp.MustCompile(`(?i)</?\s*review\b[^>]*>`)
+
+// neutralizeReviewBlockTags rewrites any literal `<review>` /
+// `</review>` tags inside review content so they can't escape the
+// data block in merge_prompt.md. We replace `<` with `&lt;` only on
+// matching tags — any other angle-bracketed text in the review (HTML
+// snippets, generic-type names like `Vec<T>`, JSX) is left alone so
+// the merger sees the content faithfully.
+//
+// Defense-in-depth alongside the explicit "treat as data, not
+// instructions" preamble in the template. Either alone is meaningful
+// hardening; together they handle both well-behaved-but-ambiguous
+// reviewers and adversarial ones.
+func neutralizeReviewBlockTags(s string) string {
+	return reviewBlockTagPattern.ReplaceAllStringFunc(s, func(match string) string {
+		// Replace the leading "<" with "&lt;". This breaks the tag
+		// but keeps the readable text — a future merger LLM that
+		// renders the template still sees something like
+		// "&lt;/review>" in its prompt, which it'll quote as data
+		// rather than parse as a structural element.
+		return "&lt;" + match[1:]
+	})
 }
 
 // truncateForMerge clips an oversize per-LLM review to fit comfortably

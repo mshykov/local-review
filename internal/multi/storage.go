@@ -35,6 +35,13 @@ func NewStorage(basePath string) *ReviewStorage {
 // set.
 var unsafeFilenameChars = regexp.MustCompile(`[/\\:<>"|?*\x00\s]`)
 
+// repeatedDashes collapses runs of `-` produced by replacing multiple
+// dangerous chars in a row (e.g. " / " → "---"). Pre-compiled at
+// package level rather than inside sanitizeFilenameComponent because
+// the sanitizer is called twice per agent per review and re-compiling
+// on every call is unnecessary.
+var repeatedDashes = regexp.MustCompile(`-+`)
+
 // sanitizeFilenameComponent makes an LLM name or version string safe
 // to embed in a filename. Used for `<commit>_<llm>_<version>.md`
 // where LLM names come from a trusted detector (claude/gemini/codex)
@@ -53,13 +60,8 @@ func sanitizeFilenameComponent(s string) string {
 	}
 	cleaned := unsafeFilenameChars.ReplaceAllString(s, "-")
 	// Collapse runs of `-` from the replacement (e.g. " / " → "---").
-	for i := 0; i < 3 && len(cleaned) > 0; i++ {
-		next := regexp.MustCompile(`-+`).ReplaceAllString(cleaned, "-")
-		if next == cleaned {
-			break
-		}
-		cleaned = next
-	}
+	// Single-pass since the regex is greedy.
+	cleaned = repeatedDashes.ReplaceAllString(cleaned, "-")
 	// Don't allow leading/trailing `-` (cosmetic but shows up in
 	// shell completion and the printed "Per-LLM reviews → ..." path).
 	cleaned = strings.Trim(cleaned, "-")

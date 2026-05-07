@@ -239,27 +239,42 @@ func parseCodexStdoutTokens(combined, response string) TokenUsage {
 	return best.usage
 }
 
-// stripTrailingDuplicate returns combined with any trailing copy of
-// `response` removed. Codex exec writes the assistant reply twice —
-// once during streaming and once at the end as the duplicate of the
-// tempfile contents — so pattern-shaped text in the reply appears
-// BOTH before and after the real "tokens used" summary. Removing the
-// trailing duplicate restores the invariant that the real summary is
-// the rightmost match.
+// stripTrailingDuplicate returns combined with the trailing copy of
+// `response` removed if and only if the response IS the suffix.
+// Codex exec writes the assistant reply twice — once during streaming
+// and once at end-of-stdout as the duplicate of the tempfile contents
+// — so pattern-shaped text in the reply appears BOTH before and after
+// the real "tokens used" summary. Removing the trailing duplicate
+// restores the invariant that the real summary is the rightmost match.
+//
+// **Suffix-only.** Pre-fix used `LastIndex` blindly, which would also
+// strip when the response appeared only once in combined (no trailing
+// duplicate). In that case `LastIndex` finds the streamed reply and
+// cuts everything after it — including the real summary — silently
+// returning zero usage on a perfectly valid run. The fix: only strip
+// when `combined` actually ends with the response (after trimming
+// trailing whitespace, since codex sometimes adds a final newline
+// after the duplicate).
 //
 // Empty response → no-op (callers in tests sometimes hand-build
-// stdout fixtures without a separate response). Trimmed response
-// not found in combined → no-op (codex format change; degrade
-// gracefully rather than mangle).
+// stdout fixtures without a separate response). Combined doesn't
+// end with response → no-op (codex format change or single-copy
+// stdout; degrade gracefully rather than mangle).
 func stripTrailingDuplicate(combined, response string) string {
 	resp := strings.TrimSpace(response)
 	if resp == "" {
 		return combined
 	}
-	if i := strings.LastIndex(combined, resp); i != -1 {
-		return combined[:i]
+	// We want to find the start position of the trailing duplicate
+	// (if any) and truncate there. Trailing whitespace on combined
+	// is fine to ignore — codex sometimes adds a final \n after the
+	// duplicated reply, which we don't want to fail the suffix check.
+	trimmedTail := strings.TrimRight(combined, "\r\n\t ")
+	if !strings.HasSuffix(trimmedTail, resp) {
+		return combined
 	}
-	return combined
+	cut := len(trimmedTail) - len(resp)
+	return combined[:cut]
 }
 
 // atoiNoCommas parses an integer that may have thousand separators

@@ -296,6 +296,30 @@ func TestParseCodexStdoutTokens_StripIsNoOpWhenResponseEmpty(t *testing.T) {
 	}
 }
 
+func TestParseCodexStdoutTokens_StripIsNoOpWhenResponseNotASuffix(t *testing.T) {
+	// Iteration-2 self-review caught a major bug in v0.7.2's first
+	// stripTrailingDuplicate: when codex outputs the response only
+	// ONCE (no trailing duplicate), LastIndex would still find the
+	// streamed copy and cut everything after — including the real
+	// summary. Fix: only strip when response IS the suffix of
+	// combined (after trimming trailing whitespace).
+	//
+	// Stdout layout: <streamed reply> → <real summary>. No
+	// duplicate at the end. Pre-fix this returned zero usage;
+	// post-fix it returns the real summary.
+	stdout := `codex
+hello
+tokens used
+2,415`
+	usage := parseCodexStdoutTokens(stdout, "hello")
+	if usage.InputTokens != 2415 {
+		t.Errorf("InputTokens = %d, want 2415 — strip should be no-op when response is not the trailing suffix", usage.InputTokens)
+	}
+	if !usage.TotalOnly {
+		t.Errorf("TotalOnly = false, want true (newline shape)")
+	}
+}
+
 func TestParseCodexStdoutTokens_StripIsNoOpWhenResponseAbsent(t *testing.T) {
 	// If the response can't be located in combined (codex format
 	// change, prefix/suffix mismatch from codex re-formatting), the
