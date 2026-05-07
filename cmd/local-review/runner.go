@@ -228,9 +228,9 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 			// has the actionable hint inline. No "review failed:"
 			// prefix or "(output: )" wrapping; "[N/M] agent ✗ <msg>"
 			// reads clean.
-			fmt.Printf("[%d/%d] %s ✗ %s\n", i+1, len(results), r.LLM, r.Error)
+			fmt.Printf("[%d/%d] %s ✗ %s%s\n", i+1, len(results), r.LLM, r.Error, formatTokenSuffix(r.Tokens))
 		} else {
-			fmt.Printf("[%d/%d] %s ✓ (%.1fs)\n", i+1, len(results), r.LLM, r.Duration.Seconds())
+			fmt.Printf("[%d/%d] %s ✓ (%.1fs)%s\n", i+1, len(results), r.LLM, r.Duration.Seconds(), formatTokenSuffix(r.Tokens))
 		}
 	}
 	fmt.Println()
@@ -296,7 +296,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		}
 	}
 
-	mergedPath, mergedContent := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
+	mergedPath, mergedContent, mergeTokens := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
 	if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to save metadata: %v\n", err)
 	}
@@ -308,7 +308,17 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// drifted from the rest of the surface — a SaveReview-failed-
 	// with-output run would print "0/3 succeeded" while the merger
 	// happily consolidated all 3 outputs and the gate fired correctly.
-	fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", mergeable, len(results), time.Since(startTime).Round(time.Second))
+	//
+	// Token total aggregates per-LLM review tokens + merge-step
+	// tokens. Omitted entirely when every agent reported zero (CLI
+	// version too old to surface usage) — printing "0 tokens" would
+	// mislead users into thinking the call was free.
+	totalTokens := aggregateTokens(results, mergeTokens)
+	if totalTokens > 0 {
+		fmt.Printf("✓ %d/%d LLMs produced output · total %s · ~%s tokens\n", mergeable, len(results), time.Since(startTime).Round(time.Second), humanTokens(totalTokens))
+	} else {
+		fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", mergeable, len(results), time.Since(startTime).Round(time.Second))
+	}
 	if mergedPath != "" {
 		// Report-path label uses `rmode` (computed above alongside `mergeable`)
 		// so we don't call CountWithOutput a second time. Degraded/solo runs
@@ -585,6 +595,43 @@ func pluralS(n int) string {
 	return "s"
 }
 
+// aggregateTokens returns the sum of input+output tokens across all
+// per-LLM reviews plus the merge step's own usage. Used by the
+// closing-line "~Nk tokens" summary. Returns 0 when nothing was
+// reported — the closing-line caller checks for this and omits the
+// "tokens" suffix entirely so users don't see "0 tokens" and assume
+// the call was free.
+func aggregateTokens(results []multi.ReviewResult, mergeTokens cli.TokenUsage) int {
+	total := mergeTokens.Total()
+	for _, r := range results {
+		total += r.Tokens.Total()
+	}
+	return total
+}
+
+// humanTokens formats a token count with a "k" suffix above 10k for
+// quick scannability. Below 10k we keep digits because the
+// difference between 1234 and 1500 tokens is meaningful at small
+// scales but invisible at "1k" rounding.
+func humanTokens(n int) string {
+	if n < 10_000 {
+		return fmt.Sprintf("%d", n)
+	}
+	rounded := (n + 500) / 1000
+	return fmt.Sprintf("%dk", rounded)
+}
+
+// formatTokenSuffix returns " · 12.3k in / 4.5k out" for the per-LLM
+// completion line, or "" when usage wasn't reported (CLI version
+// too old). Mirrors the closing-line "omit when zero" rule so users
+// don't see misleading "0 in / 0 out" rows.
+func formatTokenSuffix(u cli.TokenUsage) string {
+	if u.IsZero() {
+		return ""
+	}
+	return fmt.Sprintf(" · %s in / %s out", humanTokens(u.InputTokens), humanTokens(u.OutputTokens))
+}
+
 // resolveCommitBranch resolves the commit hash and branch name for the
 // current invocation. In detached-HEAD environments (CI checkouts,
 // `git checkout <tag>`, bisect) git returns "HEAD" as the branch name
@@ -685,7 +732,7 @@ func classifyRunMode(results []multi.ReviewResult) runMode {
 // the saved path and the merged content; both are "" on skip/failure.
 // The content is returned so the caller can run the blocking-finding
 // gate without re-reading from disk.
-func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) (string, string) {
+func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) (mergedPath, mergedContent string, mergeTokens cli.TokenUsage) {
 	mode := classifyRunMode(results)
 
 	switch mode {
@@ -706,7 +753,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	if mergeLLM == nil {
 		fmt.Println("Warning: no LLM available for merging (skipping merge)")
 		metadata.Merge.Status = "skipped"
-		return "", ""
+		return "", "", cli.TokenUsage{}
 	}
 	switch mode {
 	case runModeDegraded:
@@ -722,7 +769,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 		fmt.Printf("Warning: failed to create merger: %v\n", err)
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return "", ""
+		return "", "", cli.TokenUsage{}
 	}
 
 	mergeInput := multi.BuildMergeInput(results, cfg.Merge.ConsensusThreshold)
@@ -741,17 +788,17 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	defer cancel()
 
 	mergeStart := time.Now()
-	merged, err := merger.Merge(mergeCtx, mergeInput)
+	merged, mergeTokens, err := merger.Merge(mergeCtx, mergeInput)
 	mergeDuration := time.Since(mergeStart)
 
 	if err != nil {
 		fmt.Printf("Warning: merge failed: %v\n", err)
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return "", ""
+		return "", "", cli.TokenUsage{}
 	}
 
-	mergedPath, err := storage.SaveMerged(branch, commit, merged)
+	savedPath, err := storage.SaveMerged(branch, commit, merged)
 	if err != nil {
 		// SaveMerged failed (read-only mount, full disk, permission
 		// denied on .local-review/) — but the merger DID produce
@@ -775,15 +822,19 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
 		metadata.Merge.DurationMs = mergeDuration.Milliseconds()
+		metadata.Merge.InputTokens = mergeTokens.InputTokens
+		metadata.Merge.OutputTokens = mergeTokens.OutputTokens
 		fmt.Println("─── Findings (not persisted) ───")
 		fmt.Println(merged)
 		fmt.Println("─── End ───")
-		return "", merged
+		return "", merged, mergeTokens
 	}
 
 	metadata.Merge.LLM = mergeLLM.Name
 	metadata.Merge.Status = "success"
 	metadata.Merge.DurationMs = mergeDuration.Milliseconds()
+	metadata.Merge.InputTokens = mergeTokens.InputTokens
+	metadata.Merge.OutputTokens = mergeTokens.OutputTokens
 
 	switch mode {
 	case runModeDegraded:
@@ -799,7 +850,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	fmt.Println(merged)
 	fmt.Println("─── End ───")
 
-	return mergedPath, merged
+	return savedPath, merged, mergeTokens
 }
 
 // runSingleLLMFallback is the v0 path: hit the configured provider's
@@ -868,13 +919,15 @@ func buildMetadata(commit, branch string, results []multi.ReviewResult, startTim
 			errMsg = r.Error.Error()
 		}
 		meta.Reviews[i] = multi.ReviewMeta{
-			LLM:        r.LLM,
-			Version:    r.Version,
-			Mode:       r.Mode,
-			Status:     status,
-			DurationMs: r.Duration.Milliseconds(),
-			OutputFile: r.FilePath,
-			Error:      errMsg,
+			LLM:          r.LLM,
+			Version:      r.Version,
+			Mode:         r.Mode,
+			Status:       status,
+			DurationMs:   r.Duration.Milliseconds(),
+			OutputFile:   r.FilePath,
+			Error:        errMsg,
+			InputTokens:  r.Tokens.InputTokens,
+			OutputTokens: r.Tokens.OutputTokens,
 		}
 	}
 	return meta

@@ -25,6 +25,14 @@ type ReviewMeta struct {
 	FindingsCount int    `json:"findings_count,omitempty"`
 	OutputFile    string `json:"output_file,omitempty"`
 	Error         string `json:"error,omitempty"`
+	// InputTokens / OutputTokens come from the CLI's structured
+	// output (claude / gemini JSON, codex stdout metadata) when
+	// available. Both 0 means usage was indeterminate — typically
+	// because the user is on an older CLI version that doesn't
+	// surface token counts. omitempty keeps backward-compat for
+	// readers that don't know about these fields.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 // MergeMeta holds details about the merge operation.
@@ -35,6 +43,11 @@ type MergeMeta struct {
 	DeduplicationRemoved int    `json:"deduplication_removed,omitempty"`
 	DurationMs           int64  `json:"duration_ms,omitempty"`
 	Error                string `json:"error,omitempty"`
+	// InputTokens / OutputTokens for the merge step's own LLM call,
+	// same shape and semantics as ReviewMeta. Sum with each
+	// ReviewMeta to get total per-PR token spend.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 }
 
 // Save writes the metadata to a JSON file.

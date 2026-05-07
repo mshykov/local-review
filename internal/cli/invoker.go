@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-// Invoker runs an LLM CLI with a diff and returns the review output.
+// Invoker runs an LLM CLI with a diff and returns the review output
+// plus token-usage metadata.
 //
 // Review takes a `systemPrompt` (the language-specific prompt pack
 // content the runner has already loaded via lang.Dominant +
@@ -16,10 +17,16 @@ import (
 // severity tiering, and hard rules the single-LLM path uses. Empty
 // systemPrompt means "fall back to the agent's built-in generic
 // prompt" — useful for tests and as a defensive default.
+//
+// Returns the review text, a TokenUsage from the CLI's structured
+// output (zero values when the CLI version or invocation didn't
+// surface token counts), and any error.
 type Invoker interface {
-	Review(ctx context.Context, systemPrompt, diff string) (string, error)
-	// RunPrompt sends a raw prompt to the LLM without wrapping it in a code-review context
-	RunPrompt(ctx context.Context, prompt string) (string, error)
+	Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error)
+	// RunPrompt sends a raw prompt to the LLM without wrapping it
+	// in a code-review context. Used by the merger; tokens returned
+	// for cost-attribution symmetry with Review.
+	RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error)
 }
 
 // multiLLMOutputOverride tells the agent to respond in markdown
@@ -119,12 +126,12 @@ type CodexInvoker struct {
 	apiKey string // injected as OPENAI_API_KEY into subprocess env
 }
 
-func (c *CodexInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, error) {
+func (c *CodexInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
 	prompt := buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff
 	return c.runExec(ctx, prompt, "codex review")
 }
 
-func (c *CodexInvoker) RunPrompt(ctx context.Context, prompt string) (string, error) {
+func (c *CodexInvoker) RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error) {
 	return c.runExec(ctx, prompt, "codex")
 }
 
@@ -141,10 +148,18 @@ func (c *CodexInvoker) RunPrompt(ctx context.Context, prompt string) (string, er
 // so we accept the disk I/O — one temp file per review, deleted via
 // defer — as the price of a stable contract. If codex ever ships a
 // stdout-only flag, drop the file.
-func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (string, error) {
+//
+// Token usage: codex exec doesn't have a JSON-output flag (verified
+// against `codex exec --help` on v0.128.0). We parse the same stdout
+// metadata block we already capture (for stderr tail on errors) for
+// the "tokens used" line. parseCodexStdoutTokens returns TokenUsage{}
+// when the line isn't found, so a future codex version that drops
+// the line silently degrades to "no token info" rather than failing
+// the whole review.
+func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (string, TokenUsage, error) {
 	tmp, err := os.CreateTemp("", "codex-out-*.txt")
 	if err != nil {
-		return "", fmt.Errorf("%s: create temp output file: %w", errLabel, err)
+		return "", TokenUsage{}, fmt.Errorf("%s: create temp output file: %w", errLabel, err)
 	}
 	tmpPath := tmp.Name()
 	tmp.Close()
@@ -157,7 +172,8 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 	cmd := exec.CommandContext(ctx, c.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["codex"], c.apiKey)
-	if combined, err := cmd.CombinedOutput(); err != nil {
+	combined, err := cmd.CombinedOutput()
+	if err != nil {
 		// ClassifyExit produces the user-facing summary with an
 		// actionable hint (smaller diff for SIGKILL, raise timeout for
 		// deadline, surface stderr tail for non-zero exit). The
@@ -165,14 +181,15 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 		// already prefixes the agent name, so prefixing it again would
 		// just produce "codex ✗ codex review failed: ..." duplication.
 		_ = errLabel
-		return "", fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "codex"))
+		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "codex"))
 	}
 
 	out, err := os.ReadFile(tmpPath)
 	if err != nil {
-		return "", fmt.Errorf("%s: read codex output: %w", errLabel, err)
+		return "", TokenUsage{}, fmt.Errorf("%s: read codex output: %w", errLabel, err)
 	}
-	return string(out), nil
+	usage := parseCodexStdoutTokens(string(combined))
+	return string(out), usage, nil
 }
 
 // GeminiInvoker runs the Google Gemini CLI.
@@ -183,37 +200,29 @@ type GeminiInvoker struct {
 	apiKey string // injected as GEMINI_API_KEY into subprocess env
 }
 
-func (g *GeminiInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, error) {
-	// gemini's `-p` is appended to stdin in headless mode (per its
-	// --help). Put a marker in -p, route the full pack-prompt + diff
-	// via stdin to dodge ARG_MAX on long pack content.
-	args := []string{"-p", "Follow the instructions in stdin."}
-	if g.model != "" {
-		args = append(args, "-m", g.model)
-	}
-	cmd := exec.CommandContext(ctx, g.path, args...)
-	cmd.Stdin = strings.NewReader(buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff)
-	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["gemini"], g.apiKey)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Classified message includes the actionable hint inline; no
-		// "gemini review failed:" prefix because the caller's per-LLM
-		// line already names the agent.
-		return "", fmt.Errorf("%s", ClassifyExit(ctx, err, output, "gemini"))
-	}
-
-	return string(output), nil
+func (g *GeminiInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
+	return g.run(ctx, buildReviewPrompt(systemPrompt)+"\n\n# Diff\n\n"+diff)
 }
 
-func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, error) {
-	// gemini's --help: "-p, --prompt: Run in non-interactive mode with
-	// the given prompt. Appended to input on stdin (if any)." So a tiny
-	// marker via -p activates headless mode and the real prompt body
-	// goes via stdin — sidestepping ARG_MAX (~256KB on macOS, ~2MB on
-	// Linux) that the previous "whole prompt via -p" implementation hit
-	// on merger prompts that aggregate multiple per-LLM reviews.
-	args := []string{"-p", "Follow the instructions in stdin."}
+func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error) {
+	return g.run(ctx, prompt)
+}
+
+// run is the shared driver for Review and RunPrompt.
+//
+// gemini's --help: "-p, --prompt: Run in non-interactive mode with
+// the given prompt. Appended to input on stdin (if any)." A tiny
+// marker via -p activates headless mode; the real prompt body goes
+// via stdin — sidestepping ARG_MAX (~256KB on macOS, ~2MB on Linux)
+// the "whole prompt via -p" implementation hit on merger prompts.
+//
+// `-o json` requests structured output. The CLI returns either a
+// JSON object with token counts in usageMetadata, or — if too old —
+// plain text. parseGeminiJSON handles both: returns the parsed text
+// and tokens on success, or the raw output with TokenUsage{} on
+// failure (graceful degradation: lose tokens, keep the review).
+func (g *GeminiInvoker) run(ctx context.Context, prompt string) (string, TokenUsage, error) {
+	args := []string{"-p", "Follow the instructions in stdin.", "-o", "json"}
 	if g.model != "" {
 		args = append(args, "-m", g.model)
 	}
@@ -222,9 +231,13 @@ func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, e
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["gemini"], g.apiKey)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%s", ClassifyExit(ctx, err, output, "gemini"))
+		// Classified message includes the actionable hint inline; no
+		// "gemini review failed:" prefix because the caller's per-LLM
+		// line already names the agent.
+		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, output, "gemini"))
 	}
-	return string(output), nil
+	text, usage := parseGeminiJSON(output)
+	return text, usage, nil
 }
 
 // ClaudeInvoker runs the Anthropic Claude CLI.
@@ -235,19 +248,25 @@ type ClaudeInvoker struct {
 	apiKey string // injected as ANTHROPIC_API_KEY into subprocess env
 }
 
-func (c *ClaudeInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, error) {
+func (c *ClaudeInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
 	prompt := buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff
 	return c.run(ctx, prompt, "claude review")
 }
 
-func (c *ClaudeInvoker) RunPrompt(ctx context.Context, prompt string) (string, error) {
+func (c *ClaudeInvoker) RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error) {
 	return c.run(ctx, prompt, "claude")
 }
 
 // run is the shared driver. Splits args into "model + stdin prompt" so
 // per-agent --claude-model overrides reach the CLI.
-func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (string, error) {
-	var args []string
+//
+// Uses `--print --output-format json` so the response is a single
+// JSON object containing both the assistant's reply and a usage
+// block we can extract token counts from. If the CLI is too old to
+// support the flag, output won't parse as JSON and we fall back to
+// treating the whole stdout as plain text with TokenUsage{}.
+func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (string, TokenUsage, error) {
+	args := []string{"--print", "--output-format", "json"}
 	if c.model != "" {
 		args = append(args, "--model", c.model)
 	}
@@ -262,7 +281,8 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (strin
 		// — the caller's per-LLM line already names the agent so the
 		// prefix would duplicate.
 		_ = errLabel
-		return "", fmt.Errorf("%s", ClassifyExit(ctx, err, output, "claude"))
+		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, output, "claude"))
 	}
-	return string(output), nil
+	text, usage := parseClaudeJSON(output)
+	return text, usage, nil
 }

@@ -55,26 +55,31 @@ type ReviewContent struct {
 }
 
 // Merge consolidates multiple reviews into one using an LLM.
-func (m *Merger) Merge(ctx context.Context, input MergeInput) (string, error) {
+//
+// Returns the merged markdown report, the merge step's own token
+// usage (for cost-attribution alongside per-LLM review usage), and
+// any error. Tokens may be zero when the merge LLM's CLI doesn't
+// surface usage data.
+func (m *Merger) Merge(ctx context.Context, input MergeInput) (string, cli.TokenUsage, error) {
 	// Render the template
 	var buf bytes.Buffer
 	if err := m.template.Execute(&buf, input); err != nil {
-		return "", fmt.Errorf("execute template: %w", err)
+		return "", cli.TokenUsage{}, fmt.Errorf("execute template: %w", err)
 	}
 
 	prompt := buf.String()
 
 	// Send to LLM for merging (use RunPrompt, not Review, to avoid double-wrapping)
-	merged, err := m.invoker.RunPrompt(ctx, prompt)
+	merged, tokens, err := m.invoker.RunPrompt(ctx, prompt)
 	if err != nil {
-		return "", fmt.Errorf("merge review: %w", err)
+		return "", cli.TokenUsage{}, fmt.Errorf("merge review: %w", err)
 	}
 
 	// Some merger LLMs ignore "Return ONLY the merged markdown report"
 	// and wrap their output in a ```markdown ... ``` fence. Without
 	// this strip, every multi-LLM run prints literal triple-backticks
 	// to the terminal AND saves them to disk in <commit>_merged.md.
-	return stripFenceWrapper(merged), nil
+	return stripFenceWrapper(merged), tokens, nil
 }
 
 // fenceOpener matches the leading ```markdown / ```md / bare ```
