@@ -5,6 +5,41 @@ import (
 	"testing"
 )
 
+func TestEstimatePromptPayload_IncludesWrapperAndSeparator(t *testing.T) {
+	// The invokers wrap systemPrompt with buildReviewPrompt
+	// (appends multiLLMOutputOverride) and prepend "\n\n# Diff\n\n"
+	// before the diff. Preflight has to estimate the *actual* sent
+	// payload, not just systemPrompt+diff in isolation — pre-fix,
+	// estimate undercounted by ~1k tokens for an empty prompt
+	// (the override alone is ~400 chars / ~115 tokens), letting
+	// near-the-limit diffs pass that would 4xx in the real call.
+	systemPrompt := "review this"
+	diff := "--- a/x\n+++ b/x\n@@\n+hi\n"
+	rawSum := EstimateTokens(systemPrompt) + EstimateTokens(diff)
+	wrapped := EstimatePromptPayload(systemPrompt, diff)
+	if wrapped <= rawSum {
+		t.Errorf("EstimatePromptPayload should be larger than raw sum (it includes the wrapper + separator); got wrapped=%d, raw=%d", wrapped, rawSum)
+	}
+}
+
+func TestEstimateTokens_UpperBoundCeil(t *testing.T) {
+	// 36 bytes / 3.5 = 10.28… — math.Ceil → 11 tokens. Pre-fix
+	// int() truncated to 10, contradicting the "conservative /
+	// upper bound" claim in the doc comment. The bytes-just-above-
+	// a-multiple-of-3.5 case is what the gate actually cares about
+	// (a single extra byte should round UP to one more token).
+	got := EstimateTokens(strings.Repeat("a", 36))
+	if got != 11 {
+		t.Errorf("EstimateTokens(36 bytes) = %d, want 11 (Ceil(36/3.5))", got)
+	}
+	// 35 bytes / 3.5 = exactly 10. Both Floor and Ceil agree here;
+	// just makes sure we didn't introduce off-by-one for the exact
+	// case.
+	if got := EstimateTokens(strings.Repeat("a", 35)); got != 10 {
+		t.Errorf("EstimateTokens(35 bytes) = %d, want 10", got)
+	}
+}
+
 func TestEstimateTokens(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -165,7 +200,7 @@ func TestPreflightFilter_SafetyMarginBlocksJustUnderLimit(t *testing.T) {
 }
 
 func TestFormatSkipReason_HasActionableHint(t *testing.T) {
-	s := SkippedAgent{Name: "claude", EstimatedTokens: 280_000, ContextWindow: 200_000}
+	s := SkippedAgent{Name: "claude", PromptDiffTokens: 280_000, ContextWindow: 200_000}
 	got := FormatSkipReason(s)
 	for _, want := range []string{"local-review commit HEAD", "local-review staged", "claude"} {
 		if !strings.Contains(got, want) {
@@ -182,8 +217,8 @@ func TestSkipSummary_EmptyWhenNoneSkipped(t *testing.T) {
 
 func TestSkipSummary_OneLinePerAgent(t *testing.T) {
 	skipped := []SkippedAgent{
-		{Name: "claude", EstimatedTokens: 280_000, ContextWindow: 200_000},
-		{Name: "codex", EstimatedTokens: 280_000, ContextWindow: 128_000},
+		{Name: "claude", PromptDiffTokens: 280_000, ContextWindow: 200_000},
+		{Name: "codex", PromptDiffTokens: 280_000, ContextWindow: 128_000},
 	}
 	got := SkipSummary(skipped)
 	if !strings.Contains(got, "claude") || !strings.Contains(got, "codex") {

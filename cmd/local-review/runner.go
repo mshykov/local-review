@@ -128,10 +128,13 @@ func applyConfig(llm cli.LLM, cfg config.Config) cli.LLM {
 		}
 	}
 	if llm.TimeoutSec <= 0 {
-		// 10 minutes — matches config.Defaults() and the orchestrator's
-		// fallback in RunParallel. A future refactor could lift this to
-		// a shared constant; for now we keep them in sync by convention.
-		llm.TimeoutSec = 600
+		// Falls back to cli.DefaultTimeoutSec — same constant the
+		// orchestrator's RunParallel fallback and the roster's
+		// display fallback use, so what the user sees ("timeout:
+		// Ns") matches what actually fires.
+		// `<= 0` (rather than `== 0`) protects against a negative
+		// `timeout_seconds: -1` typo in user config.
+		llm.TimeoutSec = cli.DefaultTimeoutSec
 	}
 	return llm
 }
@@ -196,7 +199,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// Catching this here means: predictable up-front skip with an
 	// actionable "use a smaller scope" hint, no tokens spent on a
 	// call that would 4xx.
-	active, skipped, estimatedTokens := cli.PreflightFilter(active, systemPrompt, diffStr)
+	active, skipped, promptDiffTokens := cli.PreflightFilter(active, systemPrompt, diffStr)
 	if len(skipped) > 0 {
 		fmt.Fprint(os.Stderr, cli.SkipSummary(skipped))
 		fmt.Fprintln(os.Stderr)
@@ -205,7 +208,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		// Every agent's context was too small. Bailing here saves
 		// the user a 2-minute fan-out where each agent fails
 		// individually with a vague stderr.
-		return fmt.Errorf("diff is too large for every active agent: ~%d tokens estimated; try a smaller scope (`local-review commit HEAD` or `local-review staged`)", estimatedTokens)
+		return fmt.Errorf("prompt+diff is too large for every active agent: ~%d tokens estimated; try a smaller scope (`local-review commit HEAD` or `local-review staged`)", promptDiffTokens)
 	}
 
 	startTime := time.Now()
@@ -544,7 +547,7 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 		// keeps failing" before they spend tokens on the run.
 		timeout := llm.TimeoutSec
 		if timeout == 0 {
-			timeout = 600
+			timeout = cli.DefaultTimeoutSec
 		}
 		if model != "" {
 			// agent_<model> reads as a single identifier (think
@@ -732,10 +735,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	// Negative timeouts (e.g., a `timeout_seconds: -1` typo) would otherwise
 	// produce an already-expired context that cancels the merge instantly.
 	if mergeLLM.TimeoutSec <= 0 {
-		// Same 10-minute default as per-agent reviews — merge prompts
-		// are typically smaller than reviews but a slow merger LLM on
-		// a many-reviewer run can still creep past the old 120s cap.
-		mergeTimeout = 600 * time.Second
+		mergeTimeout = time.Duration(cli.DefaultTimeoutSec) * time.Second
 	}
 	mergeCtx, cancel := context.WithTimeout(ctx, mergeTimeout)
 	defer cancel()

@@ -2,20 +2,40 @@ package cli
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
-// charsPerToken is the rough byte-to-token ratio for code-heavy
-// English. Real tokenisers (tiktoken, sentencepiece) give exact
+// DefaultTimeoutSec is the per-agent timeout in seconds used when
+// the resolved LLMConfig has no explicit value. Single source of
+// truth shared across the runner's applyConfig fallback, the
+// orchestrator's RunParallel fallback, the merge-step fallback,
+// and the roster line that shows "timeout: Ns" on the pre-run
+// roster. Centralising prevents drift between what the user sees
+// ("timeout: Ns") and what actually fires.
+//
+// 10 minutes accommodates worst-case agents (Anthropic Sonnet on a
+// thinking model) on worst-case diffs. Users wanting shorter
+// timeouts override per-agent via `llms.<agent>.timeout_seconds:`
+// in `.local-review.yml`.
+const DefaultTimeoutSec = 600
+
+// bytesPerToken is the rough byte-to-token ratio used by
+// EstimateTokens. The implementation reads `len(s)` (bytes, not
+// runes), so the constant name now reflects what's actually
+// measured. Real tokenisers (tiktoken, sentencepiece) give exact
 // counts but require pulling vendor SDKs we deliberately don't
-// depend on. The 3.5 ratio is conservative — it slightly over-
-// estimates token count, which biases the preflight toward
-// skipping rather than feeding an oversized prompt to a model that
-// will OOM or 4xx.
+// depend on; this approximation only needs to be good enough to
+// decide "fit or skip."
+//
+// 3.5 is conservative for code-heavy English. Combined with
+// math.Ceil rounding in EstimateTokens, the result is a true
+// upper bound, which biases preflight toward skipping rather than
+// feeding an oversized prompt to a model that will OOM or 4xx.
 //
 // If a future user reports "preflight skipped my agent but the
 // real call would have fit", lower this number.
-const charsPerToken = 3.5
+const bytesPerToken = 3.5
 
 // responseSafetyMargin reserves capacity for the LLM's own response
 // inside the context window. A code review reply typically runs
@@ -62,15 +82,40 @@ func ContextWindow(agent string) int {
 // SkippedAgent describes one agent that was preflight-skipped, with
 // enough detail for the user to understand why and what to do about
 // it.
+//
+// PromptDiffTokens is the upper-bound estimate of the *combined*
+// payload sent to the CLI: the system prompt (after wrapping by
+// buildReviewPrompt) plus the diff, with the "# Diff" header glue
+// included. Named "PromptDiffTokens" rather than "EstimatedTokens"
+// so the user-facing message can't accidentally claim "diff is X
+// tokens" when X is actually prompt+diff.
 type SkippedAgent struct {
 	Name             string
-	EstimatedTokens  int
+	PromptDiffTokens int
 	ContextWindow    int
 }
 
-// PreflightFilter takes the active agent list and the prompt+diff
-// payload, returns the subset that fits in each agent's context
-// window plus a list of skipped agents with their numbers.
+// diffSeparator is the literal glue the invokers put between the
+// system prompt and the diff before sending. Keep this in sync
+// with each Review() implementation in invoker.go — currently all
+// three (claude, gemini, codex) use the same shape.
+const diffSeparator = "\n\n# Diff\n\n"
+
+// EstimatePromptPayload returns an upper-bound token estimate for
+// the exact bytes the invokers ship to the CLI: the wrapped system
+// prompt + separator + diff. Using this — rather than estimating
+// systemPrompt + diff in isolation — prevents preflight from
+// passing an agent that will then 4xx because the actual sent
+// payload was bigger than what we measured.
+func EstimatePromptPayload(systemPrompt, diff string) int {
+	full := buildReviewPrompt(systemPrompt) + diffSeparator + diff
+	return EstimateTokens(full)
+}
+
+// PreflightFilter takes the active agent list and the system-prompt
+// + diff that will be sent to each agent, returns the subset that
+// fits in each agent's context window plus a list of skipped
+// agents with their numbers.
 //
 // The filter is purely based on length — we don't know the user's
 // model precisely (CLIs may pick their own default) so we use the
@@ -79,10 +124,10 @@ type SkippedAgent struct {
 // what we don't know").
 //
 // Returns the filtered active list, the skipped-agent details, and
-// the estimated token count of the input (useful for the caller's
-// summary line).
-func PreflightFilter(active []LLM, prompt, diff string) (kept []LLM, skipped []SkippedAgent, estimatedTokens int) {
-	estimatedTokens = EstimateTokens(prompt) + EstimateTokens(diff)
+// the prompt+diff token estimate (useful for the caller's summary
+// line on the all-skipped path).
+func PreflightFilter(active []LLM, systemPrompt, diff string) (kept []LLM, skipped []SkippedAgent, promptDiffTokens int) {
+	promptDiffTokens = EstimatePromptPayload(systemPrompt, diff)
 	for _, a := range active {
 		window := ContextWindow(a.Name)
 		if window == 0 {
@@ -91,41 +136,52 @@ func PreflightFilter(active []LLM, prompt, diff string) (kept []LLM, skipped []S
 			kept = append(kept, a)
 			continue
 		}
-		if estimatedTokens+responseSafetyMargin > window {
+		if promptDiffTokens+responseSafetyMargin > window {
 			skipped = append(skipped, SkippedAgent{
-				Name:            a.Name,
-				EstimatedTokens: estimatedTokens,
-				ContextWindow:   window,
+				Name:             a.Name,
+				PromptDiffTokens: promptDiffTokens,
+				ContextWindow:    window,
 			})
 			continue
 		}
 		kept = append(kept, a)
 	}
-	return kept, skipped, estimatedTokens
+	return kept, skipped, promptDiffTokens
 }
 
 // EstimateTokens approximates the token count of s using a fixed
-// byte-to-token ratio. Conservative (over-estimates) for code-heavy
-// English — see charsPerToken.
+// byte-to-token ratio. Returns a true upper bound (math.Ceil over
+// the byte/3.5 division) so preflight biases toward skipping rather
+// than feeding an oversized prompt to a model that will 4xx.
 //
 // We don't pull in a real tokeniser (tiktoken, sentencepiece): they
 // require SDK dependencies we deliberately avoid (vendor lock-in,
-// binary bloat) and the preflight only needs an order-of-magnitude
-// answer to decide "fit or skip". Off-by-20% is fine.
+// binary bloat) and the preflight only needs an upper bound to
+// decide "fit or skip". Off-by-20% in the conservative direction
+// is fine.
 func EstimateTokens(s string) int {
 	if s == "" {
 		return 0
 	}
-	return int(float64(len(s)) / charsPerToken)
+	return int(math.Ceil(float64(len(s)) / bytesPerToken))
 }
 
 // FormatSkipReason returns the user-facing one-liner explaining why
 // an agent was preflight-skipped, with the same actionable-hint
 // shape as ClassifyExit's failure messages: numbers + concrete fix.
+//
+// "prompt+diff" rather than "diff" because the estimate covers the
+// full payload (system prompt + glue + diff) — saying only "diff is
+// X tokens" misled users into thinking the raw diff alone exceeded
+// the context window. Both the prompt+diff total AND the
+// response-reservation appear because the gate is "payload + margin
+// > window" — saying only "payload exceeds window" is factually
+// wrong near the limit.
 func FormatSkipReason(s SkippedAgent) string {
 	return fmt.Sprintf(
-		"diff is ~%s tokens, exceeds %s's %s context window — try a smaller diff: `local-review commit HEAD` (last commit) or `local-review staged` (staged only)",
-		humanInt(s.EstimatedTokens),
+		"prompt+diff is ~%s tokens; with ~%s reserved for the response, would exceed %s's %s context window — try a smaller diff: `local-review commit HEAD` (last commit) or `local-review staged` (staged only)",
+		humanInt(s.PromptDiffTokens),
+		humanInt(responseSafetyMargin),
 		s.Name,
 		humanInt(s.ContextWindow),
 	)
