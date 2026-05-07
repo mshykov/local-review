@@ -120,12 +120,11 @@ func parseGeminiJSON(output []byte) (string, TokenUsage) {
 }
 
 // Codex stdout has used three different token-summary shapes across
-// versions. We try each in order and stop at the first match. Each
-// pattern is anchored strictly enough that lines like "Total tokens:
-// 800" or "Available tokens: 800" elsewhere in the stdout banner
-// (context-window indicators, not usage) don't false-positive — the
-// v0.7.0 regex was permissive enough to do that, which surfaced
-// nonsense like "codex ✓ · 800 total" on real runs.
+// versions. Each pattern is anchored strictly enough that lines like
+// "Total tokens: 800" or "Available tokens: 800" elsewhere in the
+// stdout banner (context-window indicators, not usage) don't
+// false-positive — the v0.7.0 regex was permissive enough to do that,
+// which surfaced nonsense like "codex ✓ · 800 total" on real runs.
 //
 //	"tokens: <in> input, <out> output"   — split shape, hypothetical/future
 //	"tokens used\n<total>"               — codex v0.128.0+ (label and
@@ -133,10 +132,12 @@ func parseGeminiJSON(output []byte) (string, TokenUsage) {
 //	                                       colon between them)
 //	"tokens used: <total>"               — pre-v0.128 single-line legacy
 //
-// Patterns ordered most-specific → least-specific. The split shape is
-// what we'd want long-term but codex v0.128 doesn't actually emit it;
-// kept anyway for forward-compat — if/when codex starts splitting,
-// we don't lose the signal.
+// **Selection logic is latest-position-across-all-three patterns**, not
+// first-match. See parseCodexStdoutTokens for the rationale (assistant
+// prose can contain pattern-shaped text, so we can't trust the first
+// match — only the rightmost match is guaranteed to be the real session
+// summary). The split shape is what we'd want long-term but codex v0.128
+// doesn't actually emit it; kept anyway for forward-compat.
 var (
 	codexSplitRE   = regexp.MustCompile(`(?i)\btokens:\s*(\d[\d,]*)\s+input\s*,\s*(\d[\d,]*)\s+output`)
 	codexNewlineRE = regexp.MustCompile(`(?i)\btokens used\s*\r?\n\s*(\d[\d,]*)`)

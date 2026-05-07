@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tokens used
   2,415
   ```
-  v0.7.1 splits the matcher into three strict patterns tried in order — split shape (`tokens: <in> input, <out> output`), v0.128 newline shape (`tokens used\n<total>`), and pre-v0.128 single-line legacy (`tokens used: <total>`) — each anchored with `\b` so misleading prefixes like "Total tokens" don't false-positive. Real codex v0.128 stdout was captured to write the regression test against actual output.
+  v0.7.1 splits the matcher into three strict patterns — split shape (`tokens: <in> input, <out> output`), v0.128 newline shape (`tokens used\n<total>`), and pre-v0.128 single-line legacy (`tokens used: <total>`) — each anchored with `\b` so misleading prefixes like "Total tokens" don't false-positive. Selection is **latest-position-across-all-three-patterns** rather than first-match: the assistant's reply is in the same combined buffer as the metadata and can contain pattern-shaped text, so only the rightmost match is reliably the real session summary. Real codex v0.128 stdout was captured to write the regression tests against actual output.
 
 ## [0.7.0] - 2026-05-07
 
