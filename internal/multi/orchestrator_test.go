@@ -21,8 +21,15 @@ type fakeInvoker struct {
 }
 
 func (f *fakeInvoker) Review(ctx context.Context, _, _ string) (string, cli.TokenUsage, error) {
+	// time.NewTimer + Stop instead of time.After: if ctx wins the
+	// select, the unstoppable time.After timer would linger until
+	// expiry — harmless in production-shape code but flagged by
+	// review for test hygiene since fakes can be invoked in tight
+	// loops.
+	timer := time.NewTimer(f.delay)
+	defer timer.Stop()
 	select {
-	case <-time.After(f.delay):
+	case <-timer.C:
 		return f.output, f.tokens, f.err
 	case <-ctx.Done():
 		return "", cli.TokenUsage{}, ctx.Err()

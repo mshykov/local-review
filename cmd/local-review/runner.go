@@ -1016,11 +1016,15 @@ func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred
 			return &llm
 		}
 	}
-	for _, r := range results {
-		if multi.HasMergeableOutput(r) {
-			if llm, ok := eligible[r.LLM]; ok {
-				return &llm
-			}
+	// Final fallback: pick the first eligible agent in *roster* order,
+	// not results order. With v0.6.7 streaming, `results` is in
+	// completion order — iterating it for the fallback would make
+	// merge-LLM selection timing-dependent for custom-named agents
+	// (where the auto claude>codex>gemini chain doesn't match).
+	// Roster order (`available`) is deterministic across runs.
+	for _, llm := range available {
+		if l, ok := eligible[llm.Name]; ok {
+			return &l
 		}
 	}
 	return nil
