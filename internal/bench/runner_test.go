@@ -148,6 +148,30 @@ func TestFillAggregates_P95UsesCeilNearestRank(t *testing.T) {
 	}
 }
 
+func TestReadFixture_RejectsPathTraversal(t *testing.T) {
+	// Replay-mode fixture lookups must refuse identifiers that
+	// could escape the replay root. The case id and llm name flow
+	// from --only and from on-disk directory names, both of which
+	// are user-controlled; a malicious "../../etc/passwd" id used
+	// to read whatever the bench process could.
+	cases := []struct{ caseID, llmName string }{
+		{"../etc", "claude"},
+		{"normal", "../passwd"},
+		{".", "claude"},
+		{"..", "claude"},
+		{"a/b", "claude"},
+		{"normal", "claude/x"},
+		{"normal", ""},
+		{"", "claude"},
+	}
+	for _, tc := range cases {
+		_, err := readFixture(t.TempDir(), tc.caseID, tc.llmName)
+		if err == nil {
+			t.Errorf("readFixture(%q, %q) should reject as unsafe identifier", tc.caseID, tc.llmName)
+		}
+	}
+}
+
 func TestRun_RecallZeroWhenAllNonCleanCasesError(t *testing.T) {
 	// Regression: prior fillAggregates returned Recall=1.0 when
 	// tp+fn==0, which masked the failure mode where every non-clean

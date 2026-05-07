@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"time"
 
@@ -133,13 +134,40 @@ func obtainReview(ctx context.Context, c Case, llm cli.LLM, opts Options) (strin
 // <replayDir>/<caseID>/<llmName>.md. Missing fixtures are an error
 // rather than a silent skip — caller almost always wants to know
 // "you forgot to record a fixture for the new case".
+//
+// Both caseID and llmName are validated against safeIdentifierRE
+// before path construction. Without that guard a `--only "../etc"`
+// or a malicious case directory name would let the bench read
+// arbitrary files outside replayDir. Identifiers are required to be
+// alphanumeric plus dash/underscore/dot — covers everything our
+// real cases and LLM names use, refuses path separators and `..`.
 func readFixture(replayDir, caseID, llmName string) (string, error) {
+	if err := validateIdentifier("case id", caseID); err != nil {
+		return "", err
+	}
+	if err := validateIdentifier("llm name", llmName); err != nil {
+		return "", err
+	}
 	path := filepath.Join(replayDir, caseID, llmName+".md")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read fixture %s: %w", path, err)
 	}
 	return string(b), nil
+}
+
+// safeIdentifierRE bounds what we accept as a case id or llm name
+// for fixture lookups. Allows: A-Z, a-z, 0-9, dash, underscore, dot.
+// Refuses: path separators, leading dot (rejects "."/".."), spaces,
+// shell metacharacters. Conservative on purpose — every real case
+// id and llm name in this project fits the restricted set.
+var safeIdentifierRE = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]*$`)
+
+func validateIdentifier(kind, v string) error {
+	if !safeIdentifierRE.MatchString(v) {
+		return fmt.Errorf("invalid %s %q: must match [A-Za-z0-9._-] and not start with a dot", kind, v)
+	}
+	return nil
 }
 
 // runLive invokes the LLM CLI with the case's diff and returns the

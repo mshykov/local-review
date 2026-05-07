@@ -99,9 +99,20 @@ func ParseFindings(markdown string) []ProducedFinding {
 }
 
 // pickPathAndLine pulls the non-empty (path, line) pair out of the
-// regex submatch. fileLineRE has three alternations and Go's regexp
-// returns "" for the unused branches, so we just grab whichever side
-// fired.
+// regex submatch.
+//
+// fileLineRE has three alternations; the resulting capture-group
+// layout is (m[0] is the full match):
+//
+//	m[1], m[2] — path.ext:N or path.ext:LN
+//	m[3], m[4] — path.ext line N
+//	m[5], m[6] — extensionless filename (Dockerfile, Makefile, …) :N
+//
+// Go's regexp engine returns "" for unused branches, so we walk the
+// pairs and return the first populated one. **If you add an
+// alternation to fileLineRE, add a branch here** — silently dropping
+// the pair would just stop emitting that finding shape with no
+// other signal.
 func pickPathAndLine(m []string) (string, string) {
 	if m[1] != "" {
 		return m[1], m[2]

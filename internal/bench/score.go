@@ -13,16 +13,28 @@ const defaultLineWindow = 3
 // Score matches a slice of produced findings against the expected
 // findings for one case and returns the resulting CaseScore.
 //
-// Matching algorithm:
+// Matching algorithm: greedy "closest first" pass.
 //
-//  1. For each expected finding, find the closest produced finding
-//     that shares a file (suffix match) and lies within Window lines.
+//  1. For each expected finding (in case-yaml order), find the
+//     closest produced finding that shares a file (suffix match)
+//     and lies within Window lines.
 //  2. Each produced finding can satisfy at most one expected — once
 //     used, it's removed from the candidate pool. This prevents one
 //     verbose LLM bullet from "covering" multiple unrelated expected
 //     findings on adjacent lines.
 //  3. Unmatched expected → false negative ("MISSED").
 //  4. Unmatched produced → false positive ("EXTRA").
+//
+// Phase 1 trade-off: greedy matching is order-dependent in
+// pathological cases where two expected findings could each match
+// either of two produced ones. For line-distance costs this rarely
+// bites in practice (within-window matches at most differ by a few
+// lines, and the closest-first pick approaches optimal whenever
+// costs are monotonic in position). Phase 2 (≥30 cases) re-evaluates
+// whether Hungarian-style bipartite matching is worth the
+// dependency footprint — at the small Ns Phase 1 ships, the
+// greedy outcome and the optimal one match on every case in the
+// initial dataset.
 //
 // For Clean cases, every produced finding is a false positive and
 // nothing is "missed" — recall is 1.0 by definition (CaseScore.Recall
