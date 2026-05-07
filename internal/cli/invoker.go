@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -229,6 +230,14 @@ func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, T
 // graceful plain-text fall-through. The v0.6.6 CLI-version baseline
 // is documented in CHANGELOG and fails-fast rather than producing
 // token-less reviews.
+//
+// Stdout and stderr are captured separately so JSON parsing only
+// sees the structured response. Pre-fix this used CombinedOutput
+// and any stderr noise (deprecation banners, "new version available"
+// nags, Node-version warnings) interleaved into the JSON, breaking
+// json.Unmarshal and silently dropping tokens via the raw-text
+// fallback. On error we concatenate stdout+stderr for ClassifyExit
+// so the user-facing message still includes the stderr tail.
 func (g *GeminiInvoker) run(ctx context.Context, prompt string) (string, TokenUsage, error) {
 	args := []string{"-p", "Follow the instructions in stdin.", "-o", "json"}
 	if g.model != "" {
@@ -237,14 +246,14 @@ func (g *GeminiInvoker) run(ctx context.Context, prompt string) (string, TokenUs
 	cmd := exec.CommandContext(ctx, g.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["gemini"], g.apiKey)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Classified message includes the actionable hint inline; no
-		// "gemini review failed:" prefix because the caller's per-LLM
-		// line already names the agent.
-		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, output, "gemini"))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		combined := append(stdout.Bytes(), stderr.Bytes()...)
+		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "gemini"))
 	}
-	text, usage := parseGeminiJSON(output)
+	text, usage := parseGeminiJSON(stdout.Bytes())
 	return text, usage, nil
 }
 
@@ -280,6 +289,15 @@ func (c *ClaudeInvoker) RunPrompt(ctx context.Context, prompt string) (string, T
 // fall-through to plain text. Older CLIs are unsupported by design;
 // the documented v0.6.6 CLI-version baseline fails-fast rather than
 // silently producing token-less reviews.
+//
+// Stdout and stderr are captured separately so JSON parsing only
+// sees the structured response. Pre-fix this used CombinedOutput
+// and any stderr noise (Anthropic auth-refresh notices, npm-install
+// "new version available" banners) interleaved into the JSON,
+// breaking json.Unmarshal and silently dropping tokens via the raw-
+// text fallback. On error we concatenate stdout+stderr for
+// ClassifyExit so the user-facing message still includes the
+// stderr tail.
 func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (string, TokenUsage, error) {
 	args := []string{"--print", "--output-format", "json"}
 	if c.model != "" {
@@ -288,16 +306,17 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (strin
 	cmd := exec.CommandContext(ctx, c.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["claude"], c.apiKey)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Classified message includes actionable hints (OOM → smaller
-		// diff, timeout → raise timeout_sec, non-zero → stderr tail).
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
 		// errLabel was the old "claude review failed:" / "claude:" prefix
 		// — the caller's per-LLM line already names the agent so the
 		// prefix would duplicate.
 		_ = errLabel
-		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, output, "claude"))
+		combined := append(stdout.Bytes(), stderr.Bytes()...)
+		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "claude"))
 	}
-	text, usage := parseClaudeJSON(output)
+	text, usage := parseClaudeJSON(stdout.Bytes())
 	return text, usage, nil
 }
