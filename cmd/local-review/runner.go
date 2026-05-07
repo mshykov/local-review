@@ -188,6 +188,26 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return err
 	}
 
+	// Preflight: drop agents whose context window can't fit the
+	// (prompt + diff) payload. Pre-v0.7 every agent saw the diff
+	// regardless of size; oversized prompts surfaced as model-
+	// specific failures (claude SIGKILL, codex 4xx, gemini quietly
+	// surviving via its larger window) — confusing and expensive.
+	// Catching this here means: predictable up-front skip with an
+	// actionable "use a smaller scope" hint, no tokens spent on a
+	// call that would 4xx.
+	active, skipped, estimatedTokens := cli.PreflightFilter(active, systemPrompt, diffStr)
+	if len(skipped) > 0 {
+		fmt.Fprint(os.Stderr, cli.SkipSummary(skipped))
+		fmt.Fprintln(os.Stderr)
+	}
+	if len(active) == 0 {
+		// Every agent's context was too small. Bailing here saves
+		// the user a 2-minute fan-out where each agent fails
+		// individually with a vague stderr.
+		return fmt.Errorf("diff is too large for every active agent: ~%d tokens estimated; try a smaller scope (`local-review commit HEAD` or `local-review staged`)", estimatedTokens)
+	}
+
 	startTime := time.Now()
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)

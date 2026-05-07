@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-07
+
+### Added
+- **Diff-too-large preflight.** Before fanning the diff out to agents, `local-review review` now estimates the token count (`bytes ÷ 3.5` — conservative for code) and compares against a per-agent context window: claude 200K, gemini 1M (floor for 2.5+/3.x), codex 128K (floor for gpt-4o-class). If the prompt + diff plus a 10K response margin would exceed an agent's window, the agent is skipped with a one-line warning explaining what fits and how to scope the run smaller (`local-review commit HEAD` or `local-review staged`). If *every* agent's context would overflow, the run errors out before any subprocess runs — saving the user the 2-minute fan-out + N opaque failures previously seen on squash-merged release branches and vendored-blob diffs. Agents whose name isn't in our context-window table (a future LLM, a hypothetical org-pack) pass through preflight unchanged so the rollout of a new agent type is never silently dropped.
+
 ## [0.6.4] - 2026-05-06
 
 ### Changed
