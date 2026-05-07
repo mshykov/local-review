@@ -68,14 +68,16 @@ func (o *Orchestrator) RunParallel(ctx context.Context, systemPrompt, diff, comm
 				return
 			}
 
-			// Create context with timeout from config (default: 600s)
+			// Create context with timeout from config; falls back to
+			// cli.DefaultTimeoutSec — same constant the runner's
+			// applyConfig fallback and the roster's display fallback
+			// use, so what the user sees ("timeout: Ns") matches
+			// what actually fires. `<= 0` (rather than `== 0`)
+			// protects against a negative `timeout_seconds: -1`
+			// typo in user config.
 			timeout := time.Duration(l.TimeoutSec) * time.Second
 			if l.TimeoutSec <= 0 {
-				// 10 minutes. Matches config.Defaults() and the runner's
-				// applyConfig fallback. The 120s pre-v0.6.4 default
-				// surfaced as user-reported timeouts on the most common
-				// review path (claude on a branch-sized diff).
-				timeout = 600 * time.Second
+				timeout = time.Duration(cli.DefaultTimeoutSec) * time.Second
 			}
 			reviewCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
