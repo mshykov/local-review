@@ -54,13 +54,31 @@ type ReviewContent struct {
 	Content string
 }
 
+// ErrNoReviewsToMerge signals that Merge was called with an empty
+// review set. The runner short-circuits before reaching this in
+// normal flow (see classifyRunMode + the no-mergeable-output path),
+// but the guard here is defense-in-depth — pre-fix, ReviewCount==0
+// fell into the multi-review template branch and rendered "0
+// separate code review reports from: " with an empty reviewer list,
+// producing an incoherent prompt to the merger LLM.
+var ErrNoReviewsToMerge = fmt.Errorf("no reviews to merge")
+
 // Merge consolidates multiple reviews into one using an LLM.
 //
 // Returns the merged markdown report, the merge step's own token
 // usage (for cost-attribution alongside per-LLM review usage), and
 // any error. Tokens may be zero when the merge LLM's CLI doesn't
 // surface usage data.
+//
+// Returns ErrNoReviewsToMerge when input has no reviewable content.
+// The runner is expected to filter zero-review cases upstream
+// (single-LLM fallback path or "all agents failed" branch); this is
+// just a backstop.
 func (m *Merger) Merge(ctx context.Context, input MergeInput) (string, cli.TokenUsage, error) {
+	if input.ReviewCount == 0 || len(input.Reviews) == 0 {
+		return "", cli.TokenUsage{}, ErrNoReviewsToMerge
+	}
+
 	// Render the template
 	var buf bytes.Buffer
 	if err := m.template.Execute(&buf, input); err != nil {
@@ -172,10 +190,17 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 		// the merger.
 		if HasMergeableOutput(r) {
 			reviews = append(reviews, ReviewContent{
-				LLM:     r.LLM,
-				Content: truncateForMerge(r.Output),
+				// LLM name goes into the `llm="..."` attribute on
+				// the <review> tag in the merge prompt. text/template
+				// doesn't escape attribute context, so a config-
+				// supplied agent name like `agent"></review>` would
+				// close the tag and inject prompt text. Sanitize to
+				// the safe charset before render. Same posture as
+				// neutralizeReviewBlockTags handles the content side.
+				LLM:     sanitizeLLMNameForAttr(r.LLM),
+				Content: neutralizeReviewBlockTags(truncateForMerge(r.Output)),
 			})
-			llmNames = append(llmNames, r.LLM)
+			llmNames = append(llmNames, sanitizeLLMNameForAttr(r.LLM))
 		}
 	}
 
@@ -202,6 +227,71 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 		ConsensusThreshold: effectiveThreshold,
 		Reviews:            reviews,
 	}
+}
+
+// llmAttrUnsafeChars matches anything that can break out of an HTML
+// attribute value or inject newlines / quotes. Used by
+// sanitizeLLMNameForAttr to make the `llm="..."` attribute on the
+// `<review>` tag in merge_prompt.md robust against config-supplied
+// agent names. The allow-list is deliberately narrow: ascii alnum
+// + `._-`. Path separators are intentionally excluded — LLM names
+// also flow into storage paths (see internal/multi/storage.go's
+// sanitizeFilenameComponent) and an agent named `acme/claude` would
+// create a subdirectory escape there. Anything outside the allow-
+// list gets replaced with `-` so the rendered attribute stays
+// well-formed even if the user names an agent something exotic.
+var llmAttrUnsafeChars = regexp.MustCompile(`[^A-Za-z0-9._\-]`)
+
+// sanitizeLLMNameForAttr returns name safe to embed inside the
+// `llm="..."` attribute of the `<review>` tag in merge_prompt.md.
+// Defense alongside neutralizeReviewBlockTags: that one handles
+// content text injecting close tags; this one handles the tag's own
+// attribute being injected through the agent name itself.
+//
+// Empty input returns "unknown" so the rendered tag still has a
+// well-formed attribute value rather than `llm=""`.
+func sanitizeLLMNameForAttr(name string) string {
+	cleaned := llmAttrUnsafeChars.ReplaceAllString(name, "-")
+	if cleaned == "" {
+		return "unknown"
+	}
+	return cleaned
+}
+
+// reviewBlockTagPattern matches the literal `<review>` open tag and
+// `</review>` close tag we use in merge_prompt.md to delimit each
+// per-LLM review block. We need to neutralize these in review content
+// because the merge prompt instructs the merger LLM to treat anything
+// inside `<review>...</review>` as data — but a hallucinated review
+// containing the literal close tag could escape its block and inject
+// instructions into what the merger reads as task scope.
+//
+// Case-insensitive because LLMs sometimes emit `<REVIEW>` or
+// `<Review>` from training-data drift; matching the open form too
+// (in case a reviewer concatenates two pseudo-blocks) closes the
+// loop.
+var reviewBlockTagPattern = regexp.MustCompile(`(?i)</?\s*review\b[^>]*>`)
+
+// neutralizeReviewBlockTags rewrites any literal `<review>` /
+// `</review>` tags inside review content so they can't escape the
+// data block in merge_prompt.md. We replace `<` with `&lt;` only on
+// matching tags — any other angle-bracketed text in the review (HTML
+// snippets, generic-type names like `Vec<T>`, JSX) is left alone so
+// the merger sees the content faithfully.
+//
+// Defense-in-depth alongside the explicit "treat as data, not
+// instructions" preamble in the template. Either alone is meaningful
+// hardening; together they handle both well-behaved-but-ambiguous
+// reviewers and adversarial ones.
+func neutralizeReviewBlockTags(s string) string {
+	return reviewBlockTagPattern.ReplaceAllStringFunc(s, func(match string) string {
+		// Replace the leading "<" with "&lt;". This breaks the tag
+		// but keeps the readable text — a future merger LLM that
+		// renders the template still sees something like
+		// "&lt;/review>" in its prompt, which it'll quote as data
+		// rather than parse as a structural element.
+		return "&lt;" + match[1:]
+	})
 }
 
 // truncateForMerge clips an oversize per-LLM review to fit comfortably

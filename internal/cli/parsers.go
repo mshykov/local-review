@@ -148,6 +148,16 @@ var (
 // for the token-usage summary. Returns TokenUsage{} when no match —
 // preferable to inventing numbers when the format changes again.
 //
+// `response` is the assistant's reply text (from the
+// --output-last-message tempfile). Codex writes its stdout in this
+// order: <assistant reply> → <real summary> → <duplicated reply>.
+// The duplicated trailing reply is exactly the response-file contents.
+// We strip it before scanning so pattern-shaped text inside that
+// duplicate (e.g. the assistant quoted "tokens: 100 input, 20 output"
+// from a test fixture in the diff) doesn't outrank the real summary
+// via latest-position. Pass empty string to skip the strip — useful
+// for tests that hand-build a stdout fixture.
+//
 // Split shape populates both Input and Output. The two single-total
 // shapes (newline and legacy) fold their value into InputTokens and
 // flag TotalOnly so display callers render "Nk total" rather than
@@ -156,11 +166,9 @@ var (
 // breakdown.
 //
 // **Latest match across ALL three patterns wins** (not first-pattern,
-// not even last-of-first-matching-pattern). Codex emits the real
-// session summary near end-of-stdout, but the assistant's reply
-// (also in `combined`, since codex intermixes metadata and response)
-// can contain pattern-shaped text. Two failure modes the test suite
-// pins:
+// not even last-of-first-matching-pattern). Pre-fix the v0.7.1 latest-
+// position logic was the right shape but missed the trailing-duplicate
+// case (above). Three failure modes pinned by tests:
 //
 //  1. "Same-pattern false positive" — assistant prose includes
 //     "tokens used\n123" before the real "tokens used\n2,415"
@@ -168,33 +176,31 @@ var (
 //
 //  2. "Cross-pattern false positive" — assistant prose includes
 //     split-shape text "tokens: 100 input, 20 output" while the
-//     real summary is newline-shape "tokens used\n2,415". The
-//     v0.7.1 patch-of-patch fix: collect candidates from all
-//     three patterns with their positions in `combined`, then
-//     pick the candidate with the greatest position. The summary
-//     is always last (codex writes it after the reply), so this
-//     is robust regardless of which shape happens to match.
+//     real summary is newline-shape "tokens used\n2,415". v0.7.1:
+//     collect candidates from all three patterns with positions,
+//     pick greatest.
+//
+//  3. "Trailing-duplicate false positive" — assistant prose
+//     containing pattern-shaped text appears BOTH before the real
+//     summary AND in the duplicated trailing copy after it. v0.7.2:
+//     strip the trailing duplicate using the known response text
+//     before scanning, so latest-position lands on the real summary.
 //
 // The three patterns are mutually exclusive on a per-occurrence
 // basis (different prefix words / punctuation), so two patterns
 // can't both match the same byte range — position comparison is
 // well-defined.
-func parseCodexStdoutTokens(combined string) TokenUsage {
+func parseCodexStdoutTokens(combined, response string) TokenUsage {
+	combined = stripTrailingDuplicate(combined, response)
+
 	type candidate struct {
 		pos   int
 		usage TokenUsage
 	}
-	var best *candidate
-
-	consider := func(c candidate) {
-		if best == nil || c.pos > best.pos {
-			cp := c
-			best = &cp
-		}
-	}
+	var candidates []candidate
 
 	for _, idx := range codexSplitRE.FindAllStringSubmatchIndex(combined, -1) {
-		consider(candidate{
+		candidates = append(candidates, candidate{
 			pos: idx[0],
 			usage: TokenUsage{
 				InputTokens:  atoiNoCommas(combined[idx[2]:idx[3]]),
@@ -203,7 +209,7 @@ func parseCodexStdoutTokens(combined string) TokenUsage {
 		})
 	}
 	for _, idx := range codexNewlineRE.FindAllStringSubmatchIndex(combined, -1) {
-		consider(candidate{
+		candidates = append(candidates, candidate{
 			pos: idx[0],
 			usage: TokenUsage{
 				InputTokens: atoiNoCommas(combined[idx[2]:idx[3]]),
@@ -212,7 +218,7 @@ func parseCodexStdoutTokens(combined string) TokenUsage {
 		})
 	}
 	for _, idx := range codexLegacyRE.FindAllStringSubmatchIndex(combined, -1) {
-		consider(candidate{
+		candidates = append(candidates, candidate{
 			pos: idx[0],
 			usage: TokenUsage{
 				InputTokens: atoiNoCommas(combined[idx[2]:idx[3]]),
@@ -221,10 +227,71 @@ func parseCodexStdoutTokens(combined string) TokenUsage {
 		})
 	}
 
-	if best == nil {
+	if len(candidates) == 0 {
 		return TokenUsage{}
 	}
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.pos > best.pos {
+			best = c
+		}
+	}
 	return best.usage
+}
+
+// stripTrailingDuplicate returns combined with the trailing copy of
+// `response` removed if and only if (1) the response IS the suffix
+// of combined AND (2) the response also appears earlier in combined.
+// Codex exec writes the assistant reply twice — once during streaming
+// and once at end-of-stdout as the duplicate of the tempfile contents
+// — so pattern-shaped text in the reply appears BOTH before and after
+// the real "tokens used" summary. Removing the trailing duplicate
+// restores the invariant that the real summary is the rightmost match.
+//
+// **Suffix AND duplicate.** Two earlier iterations of this function
+// shipped wrong:
+//
+//   - v0.7.2 first try: `LastIndex(combined, resp)` → cut. If response
+//     appeared ONLY once (e.g. codex format change with single-copy
+//     stdout), this stripped the streamed reply and cut the real
+//     summary along with it. Returned zero usage on valid runs.
+//
+//   - v0.7.2 second try: HasSuffix-only. Fixed the LastIndex bug, but
+//     still strips when stdout has *only one copy* of response that
+//     happens to also be the suffix (e.g. response is the last thing
+//     codex emits, no separate streamed copy). Could leave us with
+//     zero meaningful candidates if the only token-shaped text was in
+//     the response.
+//
+// This iteration: confirm the response is the suffix AND appears
+// earlier in combined (so we know the trailing copy really is a
+// duplicate, not the only copy). When in doubt, leave combined
+// alone — the latest-position selection logic still defends against
+// most pattern-injection cases.
+//
+// Empty response → no-op. Response only appears once → no-op. Codex
+// format change or trimmed stdout → no-op. The strip only fires when
+// we're confident codex really did write the reply twice.
+func stripTrailingDuplicate(combined, response string) string {
+	resp := strings.TrimSpace(response)
+	if resp == "" {
+		return combined
+	}
+	// Trailing whitespace on combined is fine to ignore — codex
+	// sometimes adds a final \n after the duplicated reply.
+	trimmedTail := strings.TrimRight(combined, "\r\n\t ")
+	if !strings.HasSuffix(trimmedTail, resp) {
+		return combined
+	}
+	suffixStart := len(trimmedTail) - len(resp)
+	// Confirm there's an EARLIER occurrence of the response. If not,
+	// the trailing match is the only copy and stripping it would
+	// erase the only signal we have.
+	earlierBoundary := combined[:suffixStart]
+	if !strings.Contains(earlierBoundary, resp) {
+		return combined
+	}
+	return combined[:suffixStart]
 }
 
 // atoiNoCommas parses an integer that may have thousand separators

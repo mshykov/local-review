@@ -170,7 +170,7 @@ func TestParseCodexStdoutTokens_SplitShape(t *testing.T) {
 [2026-05-07T12:00:01Z] running review
 [2026-05-07T12:00:42Z] tokens: 12,345 input, 6,789 output
 [2026-05-07T12:00:42Z] session complete`
-	usage := parseCodexStdoutTokens(stdout)
+	usage := parseCodexStdoutTokens(stdout, "")
 	if usage.InputTokens != 12345 {
 		t.Errorf("InputTokens = %d, want 12345", usage.InputTokens)
 	}
@@ -198,7 +198,7 @@ hello
 tokens used
 2,415
 hello`
-	usage := parseCodexStdoutTokens(stdout)
+	usage := parseCodexStdoutTokens(stdout, "")
 	if usage.InputTokens != 2415 {
 		t.Errorf("InputTokens = %d, want 2415 (newline-shape total)", usage.InputTokens)
 	}
@@ -218,7 +218,7 @@ when the user has used 123 tokens.
 tokens used
 2,415
 hello`
-	usage := parseCodexStdoutTokens(stdout)
+	usage := parseCodexStdoutTokens(stdout, "")
 	if usage.InputTokens != 2415 {
 		t.Errorf("InputTokens = %d, want 2415 (latest match, not first)", usage.InputTokens)
 	}
@@ -241,7 +241,7 @@ The model output was: tokens: 100 input, 20 output
 tokens used
 2,415
 hello`
-	usage := parseCodexStdoutTokens(stdout)
+	usage := parseCodexStdoutTokens(stdout, "")
 	if usage.InputTokens != 2415 {
 		t.Errorf("InputTokens = %d, want 2415 (real summary), not %d (assistant split-shape)",
 			usage.InputTokens, 100)
@@ -254,6 +254,103 @@ hello`
 	}
 }
 
+func TestParseCodexStdoutTokens_StripsTrailingDuplicate(t *testing.T) {
+	// The exact regression that prompted v0.7.2. Codex exec writes
+	// the assistant reply, then the real "tokens used" summary, then
+	// duplicates the reply at the very end (it's the same content
+	// the --output-last-message tempfile holds). If the reply
+	// contains pattern-shaped text — say, quoted from a test fixture
+	// in the reviewed diff — the duplicated trailing copy outranks
+	// the real summary via latest-position. Real-world hit: the
+	// v0.7 audit run printed "codex ✓ · 100 in / 20 out" on a multi-
+	// thousand-token diff because the reviewed code contained a
+	// fixture string `tokens: 100 input, 20 output`.
+	//
+	// Fix: pass the response text to the parser so it can strip
+	// the trailing duplicate before scanning. Real summary then
+	// becomes the rightmost match again.
+	response := `Here is my review.
+Note: the test fixture says tokens: 100 input, 20 output but that's not real usage.`
+	stdout := `codex
+` + response + `
+tokens used
+54,321
+` + response // codex's trailing duplicate
+	usage := parseCodexStdoutTokens(stdout, response)
+	if usage.InputTokens != 54321 {
+		t.Errorf("InputTokens = %d, want 54321 (real summary), not 100 (fixture quote in trailing duplicate)", usage.InputTokens)
+	}
+	if !usage.TotalOnly {
+		t.Errorf("TotalOnly = false, want true (newline shape — codex v0.128 doesn't split)")
+	}
+}
+
+func TestParseCodexStdoutTokens_StripIsNoOpWhenResponseEmpty(t *testing.T) {
+	// Test fixtures hand-build stdout without a separate response
+	// payload. Empty-response should skip the strip and not break
+	// the existing test corpus. Pin the no-op contract.
+	stdout := `tokens: 100 input, 50 output`
+	usage := parseCodexStdoutTokens(stdout, "")
+	if usage.InputTokens != 100 || usage.OutputTokens != 50 {
+		t.Errorf("got %+v, want {100, 50}", usage)
+	}
+}
+
+func TestParseCodexStdoutTokens_StripIsNoOpWhenResponseNotASuffix(t *testing.T) {
+	// Iteration-2 self-review caught a major bug in v0.7.2's first
+	// stripTrailingDuplicate: when codex outputs the response only
+	// ONCE (no trailing duplicate), LastIndex would still find the
+	// streamed copy and cut everything after — including the real
+	// summary. Fix: only strip when response IS the suffix of
+	// combined (after trimming trailing whitespace).
+	//
+	// Stdout layout: <streamed reply> → <real summary>. No
+	// duplicate at the end. Pre-fix this returned zero usage;
+	// post-fix it returns the real summary.
+	stdout := `codex
+hello
+tokens used
+2,415`
+	usage := parseCodexStdoutTokens(stdout, "hello")
+	if usage.InputTokens != 2415 {
+		t.Errorf("InputTokens = %d, want 2415 — strip should be no-op when response is not the trailing suffix", usage.InputTokens)
+	}
+	if !usage.TotalOnly {
+		t.Errorf("TotalOnly = false, want true (newline shape)")
+	}
+}
+
+func TestParseCodexStdoutTokens_StripIsNoOpWhenResponseAppearsOnce(t *testing.T) {
+	// Iteration-3 self-review caught: the v0.7.2 second-try strip
+	// (suffix-only) still over-stripped when the response equals
+	// the entire end of stdout but appears only once. Example: a
+	// future codex format that puts the reply at the end with no
+	// streamed copy, and the only parseable token text happens to
+	// be inside that reply. Pre-fix would strip the reply and lose
+	// the only candidate. Post-fix: require an earlier occurrence
+	// before stripping.
+	stdout := `tokens: 100 input, 20 output
+some response`
+	usage := parseCodexStdoutTokens(stdout, "some response")
+	if usage.InputTokens != 100 || usage.OutputTokens != 20 {
+		t.Errorf("InputTokens=%d, OutputTokens=%d, want 100/20 — strip should be no-op when response appears only once",
+			usage.InputTokens, usage.OutputTokens)
+	}
+}
+
+func TestParseCodexStdoutTokens_StripIsNoOpWhenResponseAbsent(t *testing.T) {
+	// If the response can't be located in combined (codex format
+	// change, prefix/suffix mismatch from codex re-formatting), the
+	// strip should be a no-op rather than mangle the input. Pin
+	// graceful degradation.
+	stdout := `tokens used
+2,415`
+	usage := parseCodexStdoutTokens(stdout, "completely different text not in stdout")
+	if usage.InputTokens != 2415 {
+		t.Errorf("InputTokens = %d, want 2415 (response-not-found should skip strip)", usage.InputTokens)
+	}
+}
+
 func TestParseCodexStdoutTokens_AssistantSplitOnly(t *testing.T) {
 	// Edge case: assistant prose contains split-shape text and
 	// there's NO real session summary anywhere (e.g., codex was
@@ -263,7 +360,7 @@ func TestParseCodexStdoutTokens_AssistantSplitOnly(t *testing.T) {
 	// less useful than the imperfect signal we do have.
 	stdout := `codex
 The model said tokens: 100 input, 20 output earlier`
-	usage := parseCodexStdoutTokens(stdout)
+	usage := parseCodexStdoutTokens(stdout, "")
 	if usage.InputTokens != 100 || usage.OutputTokens != 20 {
 		t.Errorf("InputTokens=%d, OutputTokens=%d, want 100/20 (only candidate)",
 			usage.InputTokens, usage.OutputTokens)
@@ -289,7 +386,7 @@ func TestParseCodexStdoutTokens_DoesNotMatchContextIndicators(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			usage := parseCodexStdoutTokens(tc.stdout)
+			usage := parseCodexStdoutTokens(tc.stdout, "")
 			if !usage.IsZero() {
 				t.Errorf("%s should not match, got %+v", tc.name, usage)
 			}
@@ -305,7 +402,7 @@ func TestParseCodexStdoutTokens_LegacyTotalShape(t *testing.T) {
 	// output, we just don't know how much.
 	stdout := `[2026-05-04T12:00:00Z] tokens used: 18000
 [2026-05-04T12:00:00Z] done`
-	usage := parseCodexStdoutTokens(stdout)
+	usage := parseCodexStdoutTokens(stdout, "")
 	if usage.InputTokens != 18000 {
 		t.Errorf("InputTokens = %d, want 18000 (legacy total folded here)", usage.InputTokens)
 	}
@@ -325,7 +422,7 @@ func TestParseCodexStdoutTokens_SplitShapeNotTotalOnly(t *testing.T) {
 	// have real input vs output numbers and the formatter should
 	// render "Nk in / Mk out" honestly.
 	stdout := "tokens: 100 input, 50 output"
-	usage := parseCodexStdoutTokens(stdout)
+	usage := parseCodexStdoutTokens(stdout, "")
 	if usage.TotalOnly {
 		t.Errorf("split-shape codex output should not set TotalOnly: got %+v", usage)
 	}
@@ -335,7 +432,7 @@ func TestParseCodexStdoutTokens_NoMatch(t *testing.T) {
 	// Future codex version drops the line entirely. Better to
 	// return zero usage than to fabricate.
 	stdout := "no metadata at all"
-	usage := parseCodexStdoutTokens(stdout)
+	usage := parseCodexStdoutTokens(stdout, "")
 	if !usage.IsZero() {
 		t.Errorf("expected zero on no-match, got %+v", usage)
 	}

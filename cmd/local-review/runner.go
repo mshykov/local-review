@@ -299,7 +299,15 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// in the loose Error == nil sense.
 	if mergeable == 0 {
 		metadata.Merge.Status = "skipped"
-		_, _ = storage.SaveMetadata(branch, commit, metadata)
+		if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
+			// Best-effort: per-LLM markdown saves either succeeded or
+			// would already have surfaced their own errors via the
+			// streaming completion lines. Surface the metadata failure
+			// to stderr so the user knows provenance is missing, but
+			// don't fail the run — they came here for the gate exit
+			// code, not for metadata.json.
+			fmt.Fprintf(os.Stderr, "Warning: failed to save metadata.json (review markdown still on disk): %v\n", err)
+		}
 		failed := len(results) - successCount
 		empty := successCount // succeeded (Error nil) but no Output; classifier already counted these as non-mergeable
 		switch {
@@ -318,7 +326,14 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 
 	mergedPath, mergedContent, mergeTokens := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
 	if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to save metadata: %v\n", err)
+		// Same posture as the no-mergeable-output branch above: review
+		// markdown files are already on disk, the gate's exit code is
+		// the value the user came for, so we don't fail the run on a
+		// metadata.json save error. Print a clear stderr warning so
+		// the user knows provenance + token totals are missing for
+		// this run and can investigate (full disk, read-only fs,
+		// permission denied).
+		fmt.Fprintf(os.Stderr, "Warning: failed to save metadata.json (review markdown still on disk): %v\n", err)
 	}
 
 	fmt.Println()

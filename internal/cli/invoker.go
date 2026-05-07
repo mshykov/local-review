@@ -189,7 +189,11 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 	if err != nil {
 		return "", TokenUsage{}, fmt.Errorf("%s: read codex output: %w", errLabel, err)
 	}
-	usage := parseCodexStdoutTokens(string(combined))
+	// Pass the response text so the parser can strip the trailing
+	// duplicate codex writes at end-of-stdout. Without this, pattern-
+	// shaped text in the reply (e.g. quoted test fixtures) bypasses
+	// our latest-position logic by appearing AFTER the real summary.
+	usage := parseCodexStdoutTokens(string(combined), string(out))
 	return string(out), usage, nil
 }
 

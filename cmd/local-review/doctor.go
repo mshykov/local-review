@@ -137,10 +137,10 @@ func (ew *errWriter) Write(p []byte) (int, error) {
 type llmStatus int
 
 const (
-	statusReady          llmStatus = iota // installed, version-detected, authenticated
-	statusBrokenInstall                   // binary found, version probe failed
-	statusNotAuthed                       // installed + version-detected, but no credentials
-	statusNotInstalled                    // binary not in PATH
+	statusReady         llmStatus = iota // installed, version-detected, authenticated
+	statusBrokenInstall                  // binary found, version probe failed
+	statusNotAuthed                      // installed + version-detected, but no credentials
+	statusNotInstalled                   // binary not in PATH
 )
 
 // classify returns both the bucket and the underlying authStatus so
