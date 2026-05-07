@@ -1,0 +1,40 @@
+## File: store/user_store.go
+@@ -1,30 +1,28 @@
+ package store
+
+ import (
+ 	"context"
+ 	"database/sql"
+ 	"log"
+ )
+
+ type User struct {
+ 	ID    int64
+ 	Email string
+ }
+
+ func GetUserEmails(ctx context.Context, db *sql.DB) ([]string, error) {
+ 	rows, err := db.QueryContext(ctx, "SELECT id FROM users")
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	defer rows.Close()
+
+ 	var out []string
+ 	for rows.Next() {
+ 		var id int64
+ 		if err := rows.Scan(&id); err != nil {
+ 			return nil, err
+ 		}
+ 		u, err := fetchUser(ctx, db, id)
+-		if err != nil {
+-			return nil, err
+-		}
+-		out = append(out, u.Email)
++		if err != nil {
++			log.Printf("fetchUser(%d): %v", u.ID, err)
++		}
++		out = append(out, u.Email)
+ 	}
+ 	return out, rows.Err()
+ }

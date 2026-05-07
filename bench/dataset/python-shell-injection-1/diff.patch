@@ -1,0 +1,19 @@
+## File: scripts/archive.py
+@@ -1,15 +1,15 @@
+ import subprocess
+ from pathlib import Path
+
+
+-def archive_repo(repo: str, out: Path) -> None:
+-    src = Path("/var/repos") / repo
+-    subprocess.run(
+-        ["tar", "-czf", str(out), "-C", str(src.parent), src.name],
+-        check=True,
+-    )
++def archive_repo(repo: str, out: Path) -> None:
++    src = f"/var/repos/{repo}"
++    subprocess.run(
++        f"tar -czf {out} -C $(dirname {src}) $(basename {src})",
++        shell=True,
++        check=True,
++    )

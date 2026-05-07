@@ -136,6 +136,7 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.AddCommand(configCmd(&sf))
 	root.AddCommand(doctorCmd())
 	root.AddCommand(initCmd())
+	root.AddCommand(benchCmd())
 
 	if err := root.Execute(); err != nil {
 		// errBlockingFindings is a sentinel — review found major/critical

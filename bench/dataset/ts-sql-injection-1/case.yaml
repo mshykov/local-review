@@ -1,0 +1,13 @@
+id: ts-sql-injection-1
+title: SQL injection via template-string interpolation
+language: typescript
+description: |
+  The query is built by interpolating req.query.id directly into a
+  template string. Any non-numeric input (or a SQLi payload) flows
+  straight into the SQL. The fix is parameterised queries.
+expected:
+  - file: src/api/users.ts
+    line: 12
+    category: security
+    severity: critical
+    note: SQL injection via template string interpolation
