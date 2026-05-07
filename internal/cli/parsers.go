@@ -83,11 +83,7 @@ func parseGeminiJSON(output []byte) (string, TokenUsage) {
 			in += m.Tokens.Prompt
 			out += m.Tokens.Candidates
 		}
-		text := ""
-		if shapeA.Response != nil {
-			text = *shapeA.Response
-		}
-		return text, TokenUsage{InputTokens: in, OutputTokens: out}
+		return *shapeA.Response, TokenUsage{InputTokens: in, OutputTokens: out}
 	}
 
 	// Shape B: older Vertex-style usageMetadata.
@@ -99,16 +95,12 @@ func parseGeminiJSON(output []byte) (string, TokenUsage) {
 		} `json:"usageMetadata"`
 	}
 	if err := json.Unmarshal(output, &shapeB); err == nil && shapeB.Text != nil {
-		text := ""
-		if shapeB.Text != nil {
-			text = *shapeB.Text
-		}
 		usage := TokenUsage{}
 		if shapeB.UsageMetadata != nil {
 			usage.InputTokens = shapeB.UsageMetadata.PromptTokenCount
 			usage.OutputTokens = shapeB.UsageMetadata.CandidatesTokenCount
 		}
-		return text, usage
+		return *shapeB.Text, usage
 	}
 
 	// Neither shape: not valid JSON or different structure. Fall
