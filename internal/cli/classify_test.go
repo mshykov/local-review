@@ -17,8 +17,11 @@ func TestClassifyExit_ContextDeadlineExceeded(t *testing.T) {
 	if !strings.Contains(got, "timeout") {
 		t.Errorf("want classification to mention 'timeout', got: %q", got)
 	}
-	if !strings.Contains(got, "llms.claude.timeout_sec") {
-		t.Errorf("want hint to reference per-agent timeout_sec config, got: %q", got)
+	// The YAML key is `timeout_seconds` (see internal/config/config.go);
+	// pin the exact substring so a future drift breaks the test instead
+	// of shipping a hint that points at a non-existent config field.
+	if !strings.Contains(got, "llms.claude.timeout_seconds") {
+		t.Errorf("want hint to reference per-agent timeout_seconds config, got: %q", got)
 	}
 	if !strings.Contains(got, "smaller diff") {
 		t.Errorf("want hint to suggest smaller diff, got: %q", got)

@@ -245,7 +245,18 @@ npm install -g @anthropic-ai/claude-code
       "mode": "cli",
       "status": "success",
       "duration_ms": 4500,
-      "findings_count": 12
+      "findings_count": 12,
+      "input_tokens": 12300,
+      "output_tokens": 4500
+    },
+    {
+      "llm": "codex",
+      "version": "0.120",
+      "mode": "cli",
+      "status": "success",
+      "duration_ms": 9800,
+      "input_tokens": 18000,
+      "total_only_tokens": true
     },
     {
       "llm": "gemini",
@@ -258,10 +269,18 @@ npm install -g @anthropic-ai/claude-code
   "merge": {
     "llm": "claude",
     "status": "success",
-    "final_findings_count": 8
+    "final_findings_count": 8,
+    "input_tokens": 8500,
+    "output_tokens": 2100
   }
 }
 ```
+
+Token fields shipped in v0.6.6. `input_tokens`/`output_tokens` are
+omitempty — absent on runs where the CLI version didn't surface
+usage. `total_only_tokens: true` (codex pre-v0.128) means
+`input_tokens` holds the combined total and the split is unknown;
+display layers should render "Nk total" rather than "Nk in / 0 out".
 
 ## Single-LLM Fallback Path
 
