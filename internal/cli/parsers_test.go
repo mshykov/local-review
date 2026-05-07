@@ -208,14 +208,9 @@ hello`
 }
 
 func TestParseCodexStdoutTokens_PrefersLastMatch(t *testing.T) {
-	// Assistant replies sometimes contain pattern-matching text
-	// — e.g., a review of code that handles token counters might
-	// literally include "tokens used\n123" inside its prose. The
-	// codex session summary is *also* in the same combined
-	// stdout/stderr blob, near the end. Pre-fix used
-	// FindStringSubmatch (first match), which would surface the
-	// assistant snippet's number as the run's usage. Last-match
-	// strategy picks the real summary.
+	// Same-pattern case: assistant prose contains "tokens used\n123"
+	// (newline shape) before the real "tokens used\n2,415" summary.
+	// Latest-position-wins picks the summary.
 	stdout := `codex
 The function reports "tokens used
 123"
@@ -225,10 +220,53 @@ tokens used
 hello`
 	usage := parseCodexStdoutTokens(stdout)
 	if usage.InputTokens != 2415 {
-		t.Errorf("InputTokens = %d, want 2415 (last match, not first)", usage.InputTokens)
+		t.Errorf("InputTokens = %d, want 2415 (latest match, not first)", usage.InputTokens)
 	}
 	if !usage.TotalOnly {
 		t.Errorf("TotalOnly = false, want true")
+	}
+}
+
+func TestParseCodexStdoutTokens_CrossPatternPrecedence(t *testing.T) {
+	// Cross-pattern case: assistant prose contains split-shape text
+	// ("tokens: 100 input, 20 output") while the real summary is
+	// newline-shape ("tokens used\n2,415"). Pre-fix the matcher
+	// tried codexSplitRE first and returned on hit — so the
+	// assistant's "100 input, 20 output" wins despite occurring
+	// EARLIER in stdout than the real summary. Latest-position-
+	// across-all-patterns fixes this: the summary at greater byte
+	// offset beats the split-shape match at lower offset.
+	stdout := `codex
+The model output was: tokens: 100 input, 20 output
+tokens used
+2,415
+hello`
+	usage := parseCodexStdoutTokens(stdout)
+	if usage.InputTokens != 2415 {
+		t.Errorf("InputTokens = %d, want 2415 (real summary), not %d (assistant split-shape)",
+			usage.InputTokens, 100)
+	}
+	if usage.OutputTokens != 0 {
+		t.Errorf("OutputTokens = %d, want 0 (newline shape has no split)", usage.OutputTokens)
+	}
+	if !usage.TotalOnly {
+		t.Errorf("TotalOnly = false, want true (newline shape, not split)")
+	}
+}
+
+func TestParseCodexStdoutTokens_AssistantSplitOnly(t *testing.T) {
+	// Edge case: assistant prose contains split-shape text and
+	// there's NO real session summary anywhere (e.g., codex was
+	// killed mid-run, output truncated). We have only the
+	// assistant's split-shape match — return it. There's nothing
+	// better to fall back to, and "no usage at all" would be
+	// less useful than the imperfect signal we do have.
+	stdout := `codex
+The model said tokens: 100 input, 20 output earlier`
+	usage := parseCodexStdoutTokens(stdout)
+	if usage.InputTokens != 100 || usage.OutputTokens != 20 {
+		t.Errorf("InputTokens=%d, OutputTokens=%d, want 100/20 (only candidate)",
+			usage.InputTokens, usage.OutputTokens)
 	}
 }
 

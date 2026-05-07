@@ -154,41 +154,76 @@ var (
 // the model produced no output when really we just don't have the
 // breakdown.
 //
-// **Last-match per pattern, not first.** Codex emits the session
-// summary near the end of stdout, but the assistant's reply (also
-// in `combined`, since codex intermixes metadata and response) can
-// contain pattern-matching text — e.g., a review of code that
-// handles token counters might literally say "tokens used\n123".
-// FindStringSubmatch returns the FIRST match, which would be the
-// assistant text; FindAllStringSubmatch + last lets us pick the
-// real summary. This costs one extra scan of the pattern but
-// avoids the most likely false-positive in production.
+// **Latest match across ALL three patterns wins** (not first-pattern,
+// not even last-of-first-matching-pattern). Codex emits the real
+// session summary near end-of-stdout, but the assistant's reply
+// (also in `combined`, since codex intermixes metadata and response)
+// can contain pattern-shaped text. Two failure modes the test suite
+// pins:
+//
+//  1. "Same-pattern false positive" — assistant prose includes
+//     "tokens used\n123" before the real "tokens used\n2,415"
+//     summary. Solved by FindAll across each pattern.
+//
+//  2. "Cross-pattern false positive" — assistant prose includes
+//     split-shape text "tokens: 100 input, 20 output" while the
+//     real summary is newline-shape "tokens used\n2,415". The
+//     v0.7.1 patch-of-patch fix: collect candidates from all
+//     three patterns with their positions in `combined`, then
+//     pick the candidate with the greatest position. The summary
+//     is always last (codex writes it after the reply), so this
+//     is robust regardless of which shape happens to match.
+//
+// The three patterns are mutually exclusive on a per-occurrence
+// basis (different prefix words / punctuation), so two patterns
+// can't both match the same byte range — position comparison is
+// well-defined.
 func parseCodexStdoutTokens(combined string) TokenUsage {
-	if m := lastMatch(codexSplitRE, combined); m != nil {
-		return TokenUsage{
-			InputTokens:  atoiNoCommas(m[1]),
-			OutputTokens: atoiNoCommas(m[2]),
+	type candidate struct {
+		pos   int
+		usage TokenUsage
+	}
+	var best *candidate
+
+	consider := func(c candidate) {
+		if best == nil || c.pos > best.pos {
+			cp := c
+			best = &cp
 		}
 	}
-	if m := lastMatch(codexNewlineRE, combined); m != nil {
-		return TokenUsage{InputTokens: atoiNoCommas(m[1]), TotalOnly: true}
-	}
-	if m := lastMatch(codexLegacyRE, combined); m != nil {
-		return TokenUsage{InputTokens: atoiNoCommas(m[1]), TotalOnly: true}
-	}
-	return TokenUsage{}
-}
 
-// lastMatch returns the last submatch of re in s, or nil if no
-// match. Used by parseCodexStdoutTokens to prefer the session
-// summary near end-of-stdout over any pattern-shaped text earlier
-// in the assistant's reply.
-func lastMatch(re *regexp.Regexp, s string) []string {
-	all := re.FindAllStringSubmatch(s, -1)
-	if len(all) == 0 {
-		return nil
+	for _, idx := range codexSplitRE.FindAllStringSubmatchIndex(combined, -1) {
+		consider(candidate{
+			pos: idx[0],
+			usage: TokenUsage{
+				InputTokens:  atoiNoCommas(combined[idx[2]:idx[3]]),
+				OutputTokens: atoiNoCommas(combined[idx[4]:idx[5]]),
+			},
+		})
 	}
-	return all[len(all)-1]
+	for _, idx := range codexNewlineRE.FindAllStringSubmatchIndex(combined, -1) {
+		consider(candidate{
+			pos: idx[0],
+			usage: TokenUsage{
+				InputTokens: atoiNoCommas(combined[idx[2]:idx[3]]),
+				TotalOnly:   true,
+			},
+		})
+	}
+	for _, idx := range codexLegacyRE.FindAllStringSubmatchIndex(combined, -1) {
+		consider(candidate{
+			pos: idx[0],
+			usage: TokenUsage{
+				InputTokens: atoiNoCommas(combined[idx[2]:idx[3]]),
+				TotalOnly:   true,
+			},
+		})
+	}
+
+	if best == nil {
+		return TokenUsage{}
+	}
+	return best.usage
 }
 
 // atoiNoCommas parses an integer that may have thousand separators
