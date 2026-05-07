@@ -25,11 +25,17 @@ type ReviewMeta struct {
 	FindingsCount int    `json:"findings_count,omitempty"`
 	OutputFile    string `json:"output_file,omitempty"`
 	Error         string `json:"error,omitempty"`
-	// InputTokens / OutputTokens come from the CLI's structured
-	// output (claude / gemini JSON, codex stdout metadata) when
-	// available. Both 0 means usage was indeterminate. omitempty
-	// keeps backward-compat for readers that don't know about
-	// these fields.
+	// InputTokens / OutputTokens are prompt and response *size* in
+	// tokens — not billing numbers. Sourced from each CLI's
+	// structured output (claude / gemini JSON, codex stdout
+	// metadata) when available. For Anthropic, InputTokens
+	// includes cache-read and cache-creation tokens (Anthropic
+	// discounts cache reads ~10× at the billing layer, but for
+	// "how big was the prompt" we want the full count). Sum with
+	// MergeMeta values for total token volume per PR; for actual
+	// dollar spend, use the vendor's billing dashboard. Both 0
+	// means usage was indeterminate. omitempty keeps backward-
+	// compat for readers that don't know about these fields.
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 	// TotalOnlyTokens=true means input/output split is unknown and
@@ -50,8 +56,10 @@ type MergeMeta struct {
 	DurationMs           int64  `json:"duration_ms,omitempty"`
 	Error                string `json:"error,omitempty"`
 	// InputTokens / OutputTokens for the merge step's own LLM call,
-	// same shape and semantics as ReviewMeta. Sum with each
-	// ReviewMeta to get total per-PR token spend.
+	// same shape and semantics as ReviewMeta — prompt/response
+	// *size*, not billed amount. Sum with each ReviewMeta to get
+	// total per-PR token volume; for dollar spend, see the vendor
+	// billing dashboard.
 	InputTokens     int  `json:"input_tokens,omitempty"`
 	OutputTokens    int  `json:"output_tokens,omitempty"`
 	TotalOnlyTokens bool `json:"total_only_tokens,omitempty"`
