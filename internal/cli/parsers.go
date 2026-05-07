@@ -76,7 +76,7 @@ func parseGeminiJSON(output []byte) (string, TokenUsage) {
 			} `json:"models"`
 		} `json:"stats"`
 	}
-	if err := json.Unmarshal(output, &shapeA); err == nil && (shapeA.Response != nil || len(shapeA.Stats.Models) > 0) {
+	if err := json.Unmarshal(output, &shapeA); err == nil && shapeA.Response != nil {
 		// Sum tokens across all models reported (typically one).
 		var in, out int
 		for _, m := range shapeA.Stats.Models {
@@ -98,7 +98,7 @@ func parseGeminiJSON(output []byte) (string, TokenUsage) {
 			CandidatesTokenCount int `json:"candidatesTokenCount"`
 		} `json:"usageMetadata"`
 	}
-	if err := json.Unmarshal(output, &shapeB); err == nil && (shapeB.Text != nil || shapeB.UsageMetadata != nil) {
+	if err := json.Unmarshal(output, &shapeB); err == nil && shapeB.Text != nil {
 		text := ""
 		if shapeB.Text != nil {
 			text = *shapeB.Text

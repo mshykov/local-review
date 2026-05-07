@@ -632,8 +632,9 @@ func humanTokens(n int) string {
 		return fmt.Sprintf("%d", n)
 	}
 	if n < 100_000 {
-		if n%1_000 == 0 {
-			return fmt.Sprintf("%dk", n/1_000)
+		k := n / 1_000
+		if n == k*1_000 {
+			return fmt.Sprintf("%dk", k)
 		}
 		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
 	}
