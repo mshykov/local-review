@@ -92,9 +92,20 @@ func TestRunParallel_StreamsCompletionOrder(t *testing.T) {
 			t.Fatalf("timed out waiting for %s emission", name)
 		}
 	}
-	// Channel should now be closed.
-	if _, ok := <-ch; ok {
-		t.Errorf("channel still has results after all agents released")
+	// Channel should now be closed. Use a timeout-bounded select
+	// instead of a bare `<-ch`: the orchestrator's outer goroutine
+	// closes the channel only after wg.Wait() returns, which races
+	// in microseconds with the last worker's wg.Done(). Normally
+	// imperceptible, but under heavy CI load a bare receive could
+	// hang briefly and turn this assertion into a flaky timeout.
+	// 2s matches the rest of this file's "test never hangs" budget.
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Errorf("channel still has results after all agents released")
+		}
+	case <-time.After(2 * time.Second):
+		t.Errorf("channel never closed within 2s after all agents released")
 	}
 }
 
