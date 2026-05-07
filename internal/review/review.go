@@ -329,12 +329,13 @@ func matchesAny(path string, patterns []string) bool {
 //
 // Semantics:
 //
-//   - matches any chars except '/'
-//     **/ matches zero or more path segments (anchored to a path
-//     boundary, so **/dist/** does NOT match src/mydist/file)
-//     **  matches any chars (including '/'); only at end of pattern
-//     ?   matches one char except '/'
-//     [ab] / [a-z] / [!ab] character classes (glob-native, [!...] → [^...])
+//   - `*` matches any chars except '/'
+//   - `**/` matches zero or more path segments (anchored to a path
+//     boundary, so `**/dist/**` does NOT match src/mydist/file)
+//   - `**` matches any chars (including '/'); only at end of pattern
+//   - `?` matches one char except '/'
+//   - `[ab]` / `[a-z]` / `[!ab]` character classes (glob-native,
+//     `[!...]` → `[^...]`)
 func matchGlob(path, pattern string) bool {
 	re, err := regexp.Compile(globToRegex(pattern))
 	if err != nil {
