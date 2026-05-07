@@ -253,9 +253,9 @@ func TestParseOnlyList(t *testing.T) {
 		{"claude", []string{"claude"}},
 		{"claude,gemini", []string{"claude", "gemini"}},
 		{" claude , gemini ", []string{"claude", "gemini"}},
-		{"", nil},          // empty input → empty set, callers don't need a separate guard
-		{" ", nil},         // whitespace-only → empty set
-		{",,, ", nil},      // delimiters with no names → empty set
+		{"", nil},     // empty input → empty set, callers don't need a separate guard
+		{" ", nil},    // whitespace-only → empty set
+		{",,, ", nil}, // delimiters with no names → empty set
 		{"claude,,", []string{"claude"}},
 	}
 	for _, tc := range cases {
@@ -628,11 +628,11 @@ func TestValidateMergeWith(t *testing.T) {
 		mergeWith string
 		wantErr   bool
 	}{
-		{"", false},        // unset is fine
-		{"auto", false},    // sentinel is fine
-		{"claude", false},  // member of active set
-		{"codex", true},    // not active — typo or misconfig
-		{"claud", true},    // typo — must error, not silently fall through
+		{"", false},       // unset is fine
+		{"auto", false},   // sentinel is fine
+		{"claude", false}, // member of active set
+		{"codex", true},   // not active — typo or misconfig
+		{"claud", true},   // typo — must error, not silently fall through
 	}
 	for _, tc := range cases {
 		err := validateMergeWith(&sharedFlags{mergeWith: tc.mergeWith}, active)
@@ -651,14 +651,15 @@ func TestHumanTokens_FormatBands(t *testing.T) {
 	// the CHANGELOG showed "12.3k" but the prior implementation
 	// emitted "12k". This test fails if either drifts again.
 	cases := map[int]string{
-		0:      "0",
-		456:    "456",
-		999:    "999",
-		1_000:  "1.0k",
-		1_234:  "1.2k",
-		4_500:  "4.5k",
-		12_300: "12.3k",
-		99_999: "100.0k",  // edge of decimal band; renders as 100.0k by float-to-string
+		0:       "0",
+		456:     "456",
+		999:     "999",
+		1_000:   "1k",
+		1_234:   "1.2k",
+		4_500:   "4.5k",
+		12_300:  "12.3k",
+		99_999:  "100.0k", // edge of decimal band; renders as 100.0k by float-to-string
+		15_000:  "15k",
 		100_000: "100k",
 		120_000: "120k",
 		543_210: "543k",
@@ -678,7 +679,7 @@ func TestFormatTokenSuffix_BehaviorByShape(t *testing.T) {
 	}{
 		{"zero usage → empty (no misleading 0/0)", cli.TokenUsage{}, ""},
 		{"split shape → in/out", cli.TokenUsage{InputTokens: 12300, OutputTokens: 4500}, " · 12.3k in / 4.5k out"},
-		{"total-only (codex legacy) → total", cli.TokenUsage{InputTokens: 18000, TotalOnly: true}, " · 18.0k total"},
+		{"total-only (codex legacy) → total", cli.TokenUsage{InputTokens: 18000, TotalOnly: true}, " · 18k total"},
 		{"small split", cli.TokenUsage{InputTokens: 800, OutputTokens: 200}, " · 800 in / 200 out"},
 	}
 	for _, tc := range cases {

@@ -612,13 +612,14 @@ func aggregateTokens(results []multi.ReviewResult, mergeTokens cli.TokenUsage) i
 // humanTokens formats a token count for the per-LLM and closing
 // summary lines. Three bands:
 //   - Below 1000:   raw integer (e.g. "456") because at small scales
-//                   "0.5k" hides meaningful precision.
-//   - 1k to 99,999: one decimal "k" (e.g. "1.2k", "12.3k") because
-//                   cost-sensitive users need the tens-of-tokens
-//                   resolution here, where the gap between 4.5k and
-//                   5.0k is real money on a paid tier.
+//     "0.5k" hides meaningful precision.
+//   - 1k to 99,999: "k" values with one decimal only when needed
+//     (e.g. "1k", "1.2k", "12.3k") because cost-
+//     sensitive users need the tens-of-tokens
+//     resolution here, where the gap between 4.5k and
+//     5.0k is real money on a paid tier.
 //   - 100k and up:  rounded "k" (e.g. "120k") because at six figures
-//                   the decimal is just noise.
+//     the decimal is just noise.
 //
 // CodeRabbit's auto-fix proposed a simpler "always divide by 1000,
 // drop .0 for whole thousands" form. Rejected: that path renders
@@ -631,6 +632,9 @@ func humanTokens(n int) string {
 		return fmt.Sprintf("%d", n)
 	}
 	if n < 100_000 {
+		if n%1_000 == 0 {
+			return fmt.Sprintf("%dk", n/1_000)
+		}
 		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
 	}
 	rounded := (n + 500) / 1000

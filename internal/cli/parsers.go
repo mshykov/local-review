@@ -35,20 +35,22 @@ import (
 // TokenUsage.
 func parseClaudeJSON(output []byte) (string, TokenUsage) {
 	var resp struct {
-		Type   string `json:"type"`
-		Result string `json:"result"`
-		Usage  struct {
+		Type   string  `json:"type"`
+		Result *string `json:"result"`
+		Usage  *struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
 	}
-	if err := json.Unmarshal(output, &resp); err != nil || resp.Result == "" {
+	if err := json.Unmarshal(output, &resp); err != nil || resp.Result == nil {
 		return string(output), TokenUsage{}
 	}
-	return resp.Result, TokenUsage{
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
+	usage := TokenUsage{}
+	if resp.Usage != nil {
+		usage.InputTokens = resp.Usage.InputTokens
+		usage.OutputTokens = resp.Usage.OutputTokens
 	}
+	return *resp.Result, usage
 }
 
 // parseGeminiJSON unwraps the JSON object gemini -o json returns.
@@ -64,7 +66,7 @@ func parseClaudeJSON(output []byte) (string, TokenUsage) {
 func parseGeminiJSON(output []byte) (string, TokenUsage) {
 	// Shape A: the structure recent gemini-cli uses.
 	var shapeA struct {
-		Response string `json:"response"`
+		Response *string `json:"response"`
 		Stats    struct {
 			Models map[string]struct {
 				Tokens struct {
@@ -74,29 +76,39 @@ func parseGeminiJSON(output []byte) (string, TokenUsage) {
 			} `json:"models"`
 		} `json:"stats"`
 	}
-	if err := json.Unmarshal(output, &shapeA); err == nil && shapeA.Response != "" {
+	if err := json.Unmarshal(output, &shapeA); err == nil && (shapeA.Response != nil || len(shapeA.Stats.Models) > 0) {
 		// Sum tokens across all models reported (typically one).
 		var in, out int
 		for _, m := range shapeA.Stats.Models {
 			in += m.Tokens.Prompt
 			out += m.Tokens.Candidates
 		}
-		return shapeA.Response, TokenUsage{InputTokens: in, OutputTokens: out}
+		text := ""
+		if shapeA.Response != nil {
+			text = *shapeA.Response
+		}
+		return text, TokenUsage{InputTokens: in, OutputTokens: out}
 	}
 
 	// Shape B: older Vertex-style usageMetadata.
 	var shapeB struct {
-		Text          string `json:"text"`
-		UsageMetadata struct {
+		Text          *string `json:"text"`
+		UsageMetadata *struct {
 			PromptTokenCount     int `json:"promptTokenCount"`
 			CandidatesTokenCount int `json:"candidatesTokenCount"`
 		} `json:"usageMetadata"`
 	}
-	if err := json.Unmarshal(output, &shapeB); err == nil && shapeB.Text != "" {
-		return shapeB.Text, TokenUsage{
-			InputTokens:  shapeB.UsageMetadata.PromptTokenCount,
-			OutputTokens: shapeB.UsageMetadata.CandidatesTokenCount,
+	if err := json.Unmarshal(output, &shapeB); err == nil && (shapeB.Text != nil || shapeB.UsageMetadata != nil) {
+		text := ""
+		if shapeB.Text != nil {
+			text = *shapeB.Text
 		}
+		usage := TokenUsage{}
+		if shapeB.UsageMetadata != nil {
+			usage.InputTokens = shapeB.UsageMetadata.PromptTokenCount
+			usage.OutputTokens = shapeB.UsageMetadata.CandidatesTokenCount
+		}
+		return text, usage
 	}
 
 	// Neither shape: not valid JSON or different structure. Fall

@@ -51,6 +51,17 @@ func TestParseClaudeJSON_FallbackOnMissingResult(t *testing.T) {
 	}
 }
 
+func TestParseClaudeJSON_EmptyResultPreservesUsage(t *testing.T) {
+	body := []byte(`{"type":"result","subtype":"success","result":"","usage":{"input_tokens":1200,"output_tokens":300}}`)
+	text, usage := parseClaudeJSON(body)
+	if text != "" {
+		t.Errorf("empty result should stay empty, got %q", text)
+	}
+	if usage.InputTokens != 1200 || usage.OutputTokens != 300 {
+		t.Errorf("usage = %+v, want {1200, 300}", usage)
+	}
+}
+
 func TestParseGeminiJSON_ShapeA(t *testing.T) {
 	// Newer gemini-cli structure with stats.models.<id>.tokens
 	body := []byte(`{"response":"# Review\n- finding","stats":{"models":{"gemini-2.5-pro":{"tokens":{"prompt":15000,"candidates":3000}}}}}`)
@@ -66,12 +77,34 @@ func TestParseGeminiJSON_ShapeA(t *testing.T) {
 	}
 }
 
+func TestParseGeminiJSON_ShapeA_EmptyResponsePreservesUsage(t *testing.T) {
+	body := []byte(`{"response":"","stats":{"models":{"gemini-2.5-pro":{"tokens":{"prompt":15000,"candidates":3000}}}}}`)
+	text, usage := parseGeminiJSON(body)
+	if text != "" {
+		t.Errorf("empty response should stay empty, got %q", text)
+	}
+	if usage.InputTokens != 15000 || usage.OutputTokens != 3000 {
+		t.Errorf("usage = %+v, want {15000, 3000}", usage)
+	}
+}
+
 func TestParseGeminiJSON_ShapeB(t *testing.T) {
 	// Older Vertex-style usageMetadata shape
 	body := []byte(`{"text":"# Review","usageMetadata":{"promptTokenCount":15000,"candidatesTokenCount":3000}}`)
 	text, usage := parseGeminiJSON(body)
 	if text != "# Review" {
 		t.Errorf("text not extracted: %q", text)
+	}
+	if usage.InputTokens != 15000 || usage.OutputTokens != 3000 {
+		t.Errorf("usage = %+v, want {15000, 3000}", usage)
+	}
+}
+
+func TestParseGeminiJSON_ShapeB_EmptyTextPreservesUsage(t *testing.T) {
+	body := []byte(`{"text":"","usageMetadata":{"promptTokenCount":15000,"candidatesTokenCount":3000}}`)
+	text, usage := parseGeminiJSON(body)
+	if text != "" {
+		t.Errorf("empty text should stay empty, got %q", text)
 	}
 	if usage.InputTokens != 15000 || usage.OutputTokens != 3000 {
 		t.Errorf("usage = %+v, want {15000, 3000}", usage)
@@ -93,7 +126,8 @@ func TestParseGeminiJSON_FallbackOnUnknownShape(t *testing.T) {
 }
 
 func TestParseGeminiJSON_FallbackOnPlainText(t *testing.T) {
-	// Older gemini-cli without -o json returns plain text
+	// If we ever see plain text instead of JSON (schema drift, wrapper,
+	// etc.), preserve the review text and just lose token visibility.
 	plain := []byte("# Review\n- finding\n")
 	text, usage := parseGeminiJSON(plain)
 	if text != string(plain) {
@@ -165,11 +199,11 @@ func TestParseCodexStdoutTokens_NoMatch(t *testing.T) {
 
 func TestAtoiNoCommas(t *testing.T) {
 	cases := map[string]int{
-		"":         0,
-		"123":      123,
-		"12,345":   12345,
+		"":          0,
+		"123":       123,
+		"12,345":    12345,
 		"1,234,567": 1234567,
-		"abc":      0, // parse failure → 0, not panic
+		"abc":       0, // parse failure → 0, not panic
 	}
 	for in, want := range cases {
 		if got := atoiNoCommas(in); got != want {
