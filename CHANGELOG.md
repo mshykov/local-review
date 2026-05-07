@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-05-07
+
+### Added
+- **Live progress streaming for multi-LLM runs.** Per-agent completion lines now print as each agent finishes instead of all-at-once after the slowest one. Pre-fix, when one agent (commonly gemini-3.x-preview at 5+ min) dominated runtime, users saw the roster, then a blank terminal for minutes, then every result + the merge step + findings in a single burst — no way to tell whether the tool was working, hung, or stuck on a specific agent. Now:
+
+  ```
+  Reviewing feat/v0.6.7-live-progress (3016d29) with 3 LLMs...
+    • claude_claude-opus-4-7 (CLI v2.1.132) | timeout: 600s
+    • gemini_gemini-3.1-pro-preview (CLI v0.40.1) | timeout: 600s
+    • codex_gpt-5.3-codex (CLI v0.128.0) | timeout: 600s
+
+  codex ✓ (10.4s) · 14k in / 4k out         ← appears at t=10.4s
+  claude ✓ (51.5s) · 12.3k in / 4.5k out    ← appears at t=51.5s
+  gemini ✓ (287.1s) · 15k in / 3k out       ← appears at t=287.1s
+
+  Merging reviews...
+  ```
+
+  Emission order = completion order. The previous `[N/M]` numeric prefix was dropped because with streaming it would track "how many agents have finished" rather than roster position — visually the same but semantically different, and we'd rather drop the number than have it silently change meaning.
+
+### Internal
+- `Orchestrator.RunParallel` now returns `(<-chan ReviewResult, error)` instead of `([]ReviewResult, error)`. The channel is buffered to `len(llms)` so a slow consumer can't deadlock workers, and is closed after all per-agent goroutines finish so callers can `for r := range ch`. Per-agent failures still travel inside `ReviewResult.Error` (channel always emits one result per LLM, regardless of outcome). Added `Orchestrator.invokerFactory` (in-package test seam) so streaming behavior can be pinned with controlled-duration fakes — paid down a sliver of the parked `internal/multi/` test debt while we were here.
+
 ## [0.6.6] - 2026-05-07
 
 ### Added

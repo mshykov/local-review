@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -215,25 +216,44 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)
 
-	results, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
+	resultsCh, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
 	if err != nil {
 		return fmt.Errorf("run reviews: %w", err)
 	}
 
+	// Stream per-agent completion lines as each agent finishes. The
+	// channel closes after all agents report, so the loop also serves
+	// as the synchronisation point before merge. Emission order =
+	// completion order; we dropped the [N/M] numeric prefix so the
+	// non-roster order doesn't read as a bug. Lines look like:
+	//   claude ✓ (51.5s) · 12.3k in / 4.5k out
+	//   codex ✗ timeout — try `local-review commit HEAD` for ...
+	results := make([]multi.ReviewResult, 0, len(active))
 	anyFailed := false
-	for i, r := range results {
+	for r := range resultsCh {
+		results = append(results, r)
 		if r.Error != nil {
 			anyFailed = true
 			// r.Error is the invoker's ClassifyExit output — already
 			// has the actionable hint inline. No "review failed:"
-			// prefix or "(output: )" wrapping; "[N/M] agent ✗ <msg>"
-			// reads clean.
-			fmt.Printf("[%d/%d] %s ✗ %s%s\n", i+1, len(results), r.LLM, r.Error, formatTokenSuffix(r.Tokens))
+			// prefix or "(output: )" wrapping.
+			fmt.Printf("%s ✗ %s%s\n", r.LLM, r.Error, formatTokenSuffix(r.Tokens))
 		} else {
-			fmt.Printf("[%d/%d] %s ✓ (%.1fs)%s\n", i+1, len(results), r.LLM, r.Duration.Seconds(), formatTokenSuffix(r.Tokens))
+			fmt.Printf("%s ✓ (%.1fs)%s\n", r.LLM, r.Duration.Seconds(), formatTokenSuffix(r.Tokens))
 		}
 	}
 	fmt.Println()
+
+	// Sort results back to roster order before any downstream use.
+	// Display lines above already printed in completion order (the
+	// streaming UX); everything from here on (BuildMergeInput,
+	// buildMetadata, selectMergeLLM) is order-sensitive and must be
+	// deterministic across runs on identical input. Pre-fix, two
+	// identical `local-review review` runs could produce different
+	// merge prompts (reviewer #1 was "claude" in one run, "codex" in
+	// the next, depending on which finished first) — a regression
+	// from v0.6.6 that erodes trust without surfacing as an error.
+	results = sortByRoster(results, active)
 
 	// Surface the on-disk path so users know where to find raw
 	// per-LLM output — especially when one agent failed and they
@@ -974,6 +994,40 @@ func buildMetadata(commit, branch string, results []multi.ReviewResult, startTim
 	return meta
 }
 
+// sortByRoster returns results re-ordered to match the configured
+// roster order in `available`. Used after the streaming channel
+// drains to restore determinism for downstream consumers
+// (BuildMergeInput, buildMetadata, selectMergeLLM): identical runs
+// must produce identical merge prompts and metadata files
+// regardless of which agent happened to finish first.
+//
+// Stable: agents present in `results` but absent from `available`
+// (defensive — shouldn't happen in practice since active drives
+// both) keep their relative completion-order position at the end.
+func sortByRoster(results []multi.ReviewResult, available []cli.LLM) []multi.ReviewResult {
+	rank := make(map[string]int, len(available))
+	for i, llm := range available {
+		rank[llm.Name] = i
+	}
+	sorted := make([]multi.ReviewResult, len(results))
+	copy(sorted, results)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri, oki := rank[sorted[i].LLM]
+		rj, okj := rank[sorted[j].LLM]
+		switch {
+		case oki && okj:
+			return ri < rj
+		case oki:
+			return true
+		case okj:
+			return false
+		default:
+			return false
+		}
+	})
+	return sorted
+}
+
 // selectMergeLLM picks which agent merges findings. Priority:
 // caller-preferred → auto (claude > codex > gemini) → first eligible.
 //
@@ -1008,11 +1062,15 @@ func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred
 			return &llm
 		}
 	}
-	for _, r := range results {
-		if multi.HasMergeableOutput(r) {
-			if llm, ok := eligible[r.LLM]; ok {
-				return &llm
-			}
+	// Final fallback: pick the first eligible agent in *roster* order,
+	// not results order. With v0.6.7 streaming, `results` is in
+	// completion order — iterating it for the fallback would make
+	// merge-LLM selection timing-dependent for custom-named agents
+	// (where the auto claude>codex>gemini chain doesn't match).
+	// Roster order (`available`) is deterministic across runs.
+	for _, llm := range available {
+		if l, ok := eligible[llm.Name]; ok {
+			return &l
 		}
 	}
 	return nil
