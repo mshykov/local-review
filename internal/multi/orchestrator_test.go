@@ -2,34 +2,35 @@ package multi
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/mshykov/local-review/internal/cli"
 )
 
-// fakeInvoker pretends to be an LLM CLI for streaming tests. Sleeps
-// for `delay` then returns either canned output or an error. We use
-// it to drive the orchestrator's channel without shelling out to
-// real binaries (which would make tests slow, flaky, and dependent
-// on the CI host's PATH).
+// fakeInvoker pretends to be an LLM CLI for streaming tests. Blocks
+// on `release` (a per-agent gate channel the test owns) before
+// returning canned output, so the test drives completion order
+// deterministically — no sleep deltas to invert under CI scheduler
+// jitter. Real binaries would make tests slow, flaky, and dependent
+// on the CI host's PATH; this fake sidesteps all three.
+//
+// release == nil means "respond immediately" — convenient for the
+// fast-fail/close tests where order doesn't matter.
 type fakeInvoker struct {
-	delay  time.Duration
-	output string
-	err    error
-	tokens cli.TokenUsage
+	release <-chan struct{}
+	output  string
+	err     error
+	tokens  cli.TokenUsage
 }
 
 func (f *fakeInvoker) Review(ctx context.Context, _, _ string) (string, cli.TokenUsage, error) {
-	// time.NewTimer + Stop instead of time.After: if ctx wins the
-	// select, the unstoppable time.After timer would linger until
-	// expiry — harmless in production-shape code but flagged by
-	// review for test hygiene since fakes can be invoked in tight
-	// loops.
-	timer := time.NewTimer(f.delay)
-	defer timer.Stop()
+	if f.release == nil {
+		return f.output, f.tokens, f.err
+	}
 	select {
-	case <-timer.C:
+	case <-f.release:
 		return f.output, f.tokens, f.err
 	case <-ctx.Done():
 		return "", cli.TokenUsage{}, ctx.Err()
@@ -41,15 +42,17 @@ func (f *fakeInvoker) RunPrompt(ctx context.Context, _ string) (string, cli.Toke
 }
 
 func TestRunParallel_StreamsCompletionOrder(t *testing.T) {
-	// Seed three agents with very different durations so completion
-	// order is deterministic: codex finishes first (10ms), claude
-	// second (50ms), gemini last (150ms). The roster order
-	// (claude, gemini, codex) deliberately differs so we know the
-	// channel is yielding in completion order, not roster order.
-	delays := map[string]time.Duration{
-		"claude": 50 * time.Millisecond,
-		"gemini": 150 * time.Millisecond,
-		"codex":  10 * time.Millisecond,
+	// Drive completion order with explicit release gates instead of
+	// sleep deltas. Pre-fix used 10/50/150ms — small enough that a
+	// loaded CI runner's goroutine scheduler could invert the first
+	// two and make this test flaky. Now the test closes gates in
+	// the desired order: codex first, then claude, then gemini.
+	// Roster order (claude, gemini, codex) deliberately differs so
+	// we know the channel yields in completion order, not roster.
+	gates := map[string]chan struct{}{
+		"claude": make(chan struct{}),
+		"gemini": make(chan struct{}),
+		"codex":  make(chan struct{}),
 	}
 	llms := []cli.LLM{
 		{Name: "claude", Path: "fake", Version: "test", TimeoutSec: 30},
@@ -59,7 +62,7 @@ func TestRunParallel_StreamsCompletionOrder(t *testing.T) {
 	storage := NewStorage(t.TempDir())
 	orch := NewOrchestrator(llms, storage)
 	orch.invokerFactory = func(l cli.LLM) cli.Invoker {
-		return &fakeInvoker{delay: delays[l.Name], output: "## Major\n- a finding\n"}
+		return &fakeInvoker{release: gates[l.Name], output: "## Major\n- a finding\n"}
 	}
 
 	ch, err := orch.RunParallel(context.Background(), "", "diff", "abc123", "main")
@@ -67,22 +70,31 @@ func TestRunParallel_StreamsCompletionOrder(t *testing.T) {
 		t.Fatalf("RunParallel returned err: %v", err)
 	}
 
-	var order []string
-	for r := range ch {
-		order = append(order, r.LLM)
-		if r.Error != nil {
-			t.Errorf("agent %s failed: %v", r.LLM, r.Error)
-		}
-	}
-
+	// Release in desired completion order. We read each result
+	// immediately after releasing its gate so the next gate-close
+	// can't race ahead and let two agents finish "simultaneously"
+	// from the channel's perspective.
 	want := []string{"codex", "claude", "gemini"}
-	if len(order) != len(want) {
-		t.Fatalf("got %d results, want %d", len(order), len(want))
-	}
 	for i, name := range want {
-		if order[i] != name {
-			t.Errorf("emission[%d] = %s, want %s (full order: %v)", i, order[i], name, order)
+		close(gates[name])
+		select {
+		case r, ok := <-ch:
+			if !ok {
+				t.Fatalf("channel closed early at i=%d (want %s)", i, name)
+			}
+			if r.LLM != name {
+				t.Errorf("emission[%d] = %s, want %s", i, r.LLM, name)
+			}
+			if r.Error != nil {
+				t.Errorf("agent %s failed: %v", r.LLM, r.Error)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for %s emission", name)
 		}
+	}
+	// Channel should now be closed.
+	if _, ok := <-ch; ok {
+		t.Errorf("channel still has results after all agents released")
 	}
 }
 
@@ -91,36 +103,60 @@ func TestRunParallel_ChannelClosesAfterAll(t *testing.T) {
 	// — otherwise `for r := range ch` in the runner hangs forever.
 	// Pin the close-after-wg.Wait contract: a five-agent run, all
 	// finish, range loop exits.
-	llms := make([]cli.LLM, 5)
+	//
+	// Pre-fix used 5 agents all named "fake" → all wrote to the same
+	// SaveReview path concurrently, racing on disk and masking errors
+	// (the test ignored r.Error). Now: unique names per agent + we
+	// fail the test on any per-agent error so a SaveReview regression
+	// would surface here instead of hiding behind a passing count.
+	const n = 5
+	llms := make([]cli.LLM, n)
 	for i := range llms {
-		llms[i] = cli.LLM{Name: "fake", Path: "fake", Version: "test", TimeoutSec: 30}
+		llms[i] = cli.LLM{Name: fmt.Sprintf("fake-%d", i), Path: "fake", Version: "test", TimeoutSec: 30}
 	}
 	storage := NewStorage(t.TempDir())
 	orch := NewOrchestrator(llms, storage)
 	orch.invokerFactory = func(cli.LLM) cli.Invoker {
-		return &fakeInvoker{delay: time.Millisecond, output: "x"}
+		return &fakeInvoker{output: "x"}
 	}
 
 	ch, err := orch.RunParallel(context.Background(), "", "diff", "abc", "main")
 	if err != nil {
 		t.Fatalf("RunParallel: %v", err)
 	}
-	count := 0
-	done := make(chan struct{})
-	go func() {
-		for range ch {
-			count++
-		}
-		close(done)
-	}()
-	select {
-	case <-done:
-		// Channel closed cleanly.
-	case <-time.After(2 * time.Second):
-		t.Fatalf("channel never closed; got %d results before timing out", count)
+
+	// Drain on a goroutine and report the final count via a channel
+	// so the main goroutine never reads `count` while the consumer
+	// is still writing it. Pre-fix had the consumer write `count`
+	// and the timeout arm read it; race-detector latent under the
+	// regression case (channel never closes) which is exactly when
+	// you don't want a second alarm masking the real bug.
+	type drain struct {
+		count   int
+		errs    []error
 	}
-	if count != 5 {
-		t.Errorf("got %d results, want 5", count)
+	doneCh := make(chan drain, 1)
+	go func() {
+		var d drain
+		for r := range ch {
+			d.count++
+			if r.Error != nil {
+				d.errs = append(d.errs, r.Error)
+			}
+		}
+		doneCh <- d
+	}()
+
+	select {
+	case d := <-doneCh:
+		if d.count != n {
+			t.Errorf("got %d results, want %d", d.count, n)
+		}
+		if len(d.errs) > 0 {
+			t.Errorf("per-agent errors (test storage path race?): %v", d.errs)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("channel never closed within 2s")
 	}
 }
 
@@ -142,7 +178,7 @@ func TestRunParallel_FastFailErrorsStillStream(t *testing.T) {
 		if l.Name == "broken" {
 			return nil // simulates cli.NewInvoker on unknown name
 		}
-		return &fakeInvoker{delay: time.Millisecond, output: "ok"}
+		return &fakeInvoker{output: "ok"}
 	}
 
 	ch, _ := orch.RunParallel(context.Background(), "", "diff", "abc", "main")
