@@ -190,10 +190,17 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 		// the merger.
 		if HasMergeableOutput(r) {
 			reviews = append(reviews, ReviewContent{
-				LLM:     r.LLM,
+				// LLM name goes into the `llm="..."` attribute on
+				// the <review> tag in the merge prompt. text/template
+				// doesn't escape attribute context, so a config-
+				// supplied agent name like `agent"></review>` would
+				// close the tag and inject prompt text. Sanitize to
+				// the safe charset before render. Same posture as
+				// neutralizeReviewBlockTags handles the content side.
+				LLM:     sanitizeLLMNameForAttr(r.LLM),
 				Content: neutralizeReviewBlockTags(truncateForMerge(r.Output)),
 			})
-			llmNames = append(llmNames, r.LLM)
+			llmNames = append(llmNames, sanitizeLLMNameForAttr(r.LLM))
 		}
 	}
 
@@ -220,6 +227,33 @@ func BuildMergeInput(results []ReviewResult, consensusThreshold int) MergeInput 
 		ConsensusThreshold: effectiveThreshold,
 		Reviews:            reviews,
 	}
+}
+
+// llmAttrUnsafeChars matches anything that can break out of an HTML
+// attribute value or inject newlines / quotes. Used by
+// sanitizeLLMNameForAttr to make the `llm="..."` attribute on the
+// `<review>` tag in merge_prompt.md robust against config-supplied
+// agent names. The character class is deliberately narrow: real LLM
+// names are ascii alnum + `_-./` and live within the merge prompt's
+// presentation layer. Anything else gets replaced with `-` so the
+// rendered attribute stays well-formed even if the user names an
+// agent something exotic.
+var llmAttrUnsafeChars = regexp.MustCompile(`[^A-Za-z0-9._\-]`)
+
+// sanitizeLLMNameForAttr returns name safe to embed inside the
+// `llm="..."` attribute of the `<review>` tag in merge_prompt.md.
+// Defense alongside neutralizeReviewBlockTags: that one handles
+// content text injecting close tags; this one handles the tag's own
+// attribute being injected through the agent name itself.
+//
+// Empty input returns "unknown" so the rendered tag still has a
+// well-formed attribute value rather than `llm=""`.
+func sanitizeLLMNameForAttr(name string) string {
+	cleaned := llmAttrUnsafeChars.ReplaceAllString(name, "-")
+	if cleaned == "" {
+		return "unknown"
+	}
+	return cleaned
 }
 
 // reviewBlockTagPattern matches the literal `<review>` open tag and

@@ -320,6 +320,24 @@ tokens used
 	}
 }
 
+func TestParseCodexStdoutTokens_StripIsNoOpWhenResponseAppearsOnce(t *testing.T) {
+	// Iteration-3 self-review caught: the v0.7.2 second-try strip
+	// (suffix-only) still over-stripped when the response equals
+	// the entire end of stdout but appears only once. Example: a
+	// future codex format that puts the reply at the end with no
+	// streamed copy, and the only parseable token text happens to
+	// be inside that reply. Pre-fix would strip the reply and lose
+	// the only candidate. Post-fix: require an earlier occurrence
+	// before stripping.
+	stdout := `tokens: 100 input, 20 output
+some response`
+	usage := parseCodexStdoutTokens(stdout, "some response")
+	if usage.InputTokens != 100 || usage.OutputTokens != 20 {
+		t.Errorf("InputTokens=%d, OutputTokens=%d, want 100/20 — strip should be no-op when response appears only once",
+			usage.InputTokens, usage.OutputTokens)
+	}
+}
+
 func TestParseCodexStdoutTokens_StripIsNoOpWhenResponseAbsent(t *testing.T) {
 	// If the response can't be located in combined (codex format
 	// change, prefix/suffix mismatch from codex re-formatting), the

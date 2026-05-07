@@ -240,41 +240,58 @@ func parseCodexStdoutTokens(combined, response string) TokenUsage {
 }
 
 // stripTrailingDuplicate returns combined with the trailing copy of
-// `response` removed if and only if the response IS the suffix.
+// `response` removed if and only if (1) the response IS the suffix
+// of combined AND (2) the response also appears earlier in combined.
 // Codex exec writes the assistant reply twice — once during streaming
 // and once at end-of-stdout as the duplicate of the tempfile contents
 // — so pattern-shaped text in the reply appears BOTH before and after
 // the real "tokens used" summary. Removing the trailing duplicate
 // restores the invariant that the real summary is the rightmost match.
 //
-// **Suffix-only.** Pre-fix used `LastIndex` blindly, which would also
-// strip when the response appeared only once in combined (no trailing
-// duplicate). In that case `LastIndex` finds the streamed reply and
-// cuts everything after it — including the real summary — silently
-// returning zero usage on a perfectly valid run. The fix: only strip
-// when `combined` actually ends with the response (after trimming
-// trailing whitespace, since codex sometimes adds a final newline
-// after the duplicate).
+// **Suffix AND duplicate.** Two earlier iterations of this function
+// shipped wrong:
 //
-// Empty response → no-op (callers in tests sometimes hand-build
-// stdout fixtures without a separate response). Combined doesn't
-// end with response → no-op (codex format change or single-copy
-// stdout; degrade gracefully rather than mangle).
+//   - v0.7.2 first try: `LastIndex(combined, resp)` → cut. If response
+//     appeared ONLY once (e.g. codex format change with single-copy
+//     stdout), this stripped the streamed reply and cut the real
+//     summary along with it. Returned zero usage on valid runs.
+//
+//   - v0.7.2 second try: HasSuffix-only. Fixed the LastIndex bug, but
+//     still strips when stdout has *only one copy* of response that
+//     happens to also be the suffix (e.g. response is the last thing
+//     codex emits, no separate streamed copy). Could leave us with
+//     zero meaningful candidates if the only token-shaped text was in
+//     the response.
+//
+// This iteration: confirm the response is the suffix AND appears
+// earlier in combined (so we know the trailing copy really is a
+// duplicate, not the only copy). When in doubt, leave combined
+// alone — the latest-position selection logic still defends against
+// most pattern-injection cases.
+//
+// Empty response → no-op. Response only appears once → no-op. Codex
+// format change or trimmed stdout → no-op. The strip only fires when
+// we're confident codex really did write the reply twice.
 func stripTrailingDuplicate(combined, response string) string {
 	resp := strings.TrimSpace(response)
 	if resp == "" {
 		return combined
 	}
-	// We want to find the start position of the trailing duplicate
-	// (if any) and truncate there. Trailing whitespace on combined
-	// is fine to ignore — codex sometimes adds a final \n after the
-	// duplicated reply, which we don't want to fail the suffix check.
+	// Trailing whitespace on combined is fine to ignore — codex
+	// sometimes adds a final \n after the duplicated reply.
 	trimmedTail := strings.TrimRight(combined, "\r\n\t ")
 	if !strings.HasSuffix(trimmedTail, resp) {
 		return combined
 	}
-	cut := len(trimmedTail) - len(resp)
-	return combined[:cut]
+	suffixStart := len(trimmedTail) - len(resp)
+	// Confirm there's an EARLIER occurrence of the response. If not,
+	// the trailing match is the only copy and stripping it would
+	// erase the only signal we have.
+	earlierBoundary := combined[:suffixStart]
+	if !strings.Contains(earlierBoundary, resp) {
+		return combined
+	}
+	return combined[:suffixStart]
 }
 
 // atoiNoCommas parses an integer that may have thousand separators
