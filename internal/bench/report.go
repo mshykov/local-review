@@ -128,8 +128,16 @@ func longestID(ids []string) int {
 	return max
 }
 
+// fmtMs formats a millisecond duration for the text report.
+//
+// Negative values are ambiguous (impossible with our inputs but a
+// sentinel some callers might use) and render as "-". Zero is a
+// legitimate value for replay-mode runs that complete in under a
+// millisecond — render it as "0ms" rather than the misleading "-"
+// that Copilot caught in review. The caller decides whether to
+// short-circuit on "no data" *before* reaching here.
 func fmtMs(ms int64) string {
-	if ms <= 0 {
+	if ms < 0 {
 		return "-"
 	}
 	if ms < 1000 {
