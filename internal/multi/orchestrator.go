@@ -25,6 +25,13 @@ func NewOrchestrator(llms []cli.LLM, storage *ReviewStorage) *Orchestrator {
 }
 
 // ReviewResult holds the result of a single LLM review.
+//
+// Tokens is populated from the CLI's structured output (claude /
+// gemini JSON, codex stdout metadata) when available. Zero values
+// mean "we couldn't determine usage" — the CLI version may be too
+// old to support a JSON flag, or the output shape didn't match
+// what we expected. Display callers should check Tokens.IsZero()
+// rather than printing "0 in / 0 out" which would mislead users.
 type ReviewResult struct {
 	LLM      string
 	Version  string
@@ -33,6 +40,7 @@ type ReviewResult struct {
 	Error    error
 	Duration time.Duration
 	FilePath string
+	Tokens   cli.TokenUsage
 }
 
 // RunParallel executes reviews concurrently for all configured LLMs.
@@ -83,8 +91,9 @@ func (o *Orchestrator) RunParallel(ctx context.Context, systemPrompt, diff, comm
 			defer cancel()
 
 			// Run review
-			output, err := invoker.Review(reviewCtx, systemPrompt, diff)
+			output, tokens, err := invoker.Review(reviewCtx, systemPrompt, diff)
 			result.Duration = time.Since(start)
+			result.Tokens = tokens
 
 			if err != nil {
 				result.Error = err

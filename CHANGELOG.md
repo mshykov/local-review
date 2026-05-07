@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-05-07
+## [0.6.6] - 2026-05-07
+
+### Added
+- **Per-LLM token usage on every review.** `local-review review` now displays input/output token counts per agent on its completion line and aggregates a total at the end of the run:
+
+  ```
+  [1/3] claude ✓ (51.5s) · 12.3k in / 4.5k out
+  [2/3] gemini ✓ (102.4s) · 15k in / 3k out
+  [3/3] codex ✓ (85.0s) · 14k in / 4k out
+  ✓ 3/3 LLMs produced output · total 2m51s · ~54k tokens
+  ```
+
+  Token counts come from each CLI's structured output (claude `--output-format json`, gemini `-o json`) or stdout metadata (codex's session-summary block). Codex pre-v0.128 reports a single combined total instead of split input/output; we render that as "Nk total" rather than the misleading "Nk in / 0 out" (the model produced output, we just don't have the breakdown). Same data persists in `<commit>_metadata.json` per-review and per-merge, so paid-tier users (codex API, claude paid) can attribute spend per PR without round-tripping the vendor dashboard.
+
+  **Minimum CLI versions for token visibility:** claude-code v1+ (any version supporting `--output-format json`), gemini-cli with `-o json` support (newer releases), codex any version. Older CLIs that lack the JSON-output flag exit non-zero on the flag and the run fails fast — there is no silent "no tokens" fallback for that case. If your run errored out after this upgrade, update the offending CLI: `npm i -g @anthropic-ai/claude-code @google/gemini-cli @openai/codex`.
+
+### Internal
+- `Invoker.Review` and `Invoker.RunPrompt` now return a `cli.TokenUsage` alongside the response. `ReviewResult.Tokens` and `MergeMeta.{InputTokens,OutputTokens,TotalOnlyTokens}` plumb the data through. `TokenUsage.TotalOnly` flags the codex legacy single-total case so display callers render "Nk total" instead of "Nk in / 0 out". JSON parsers fall back to raw text + zero usage when valid JSON has an unexpected shape (a future schema drift); they do *not* compensate for older CLIs missing the structured-output flag — those exit non-zero before the parser is reached.
+
+## [0.6.5] - 2026-05-07
 
 ### Added
 - **Diff-too-large preflight.** Before fanning the diff out to agents, `local-review review` now estimates the token count (`bytes ÷ 3.5` — conservative for code) and compares against a per-agent context window: claude 200K, gemini 1M (floor for 2.5+/3.x), codex 128K (floor for gpt-4o-class). If the prompt + diff plus a 10K response margin would exceed an agent's window, the agent is skipped with a one-line warning explaining what fits and how to scope the run smaller (`local-review commit HEAD` or `local-review staged`). If *every* agent's context would overflow, the run errors out before any subprocess runs — saving the user the 2-minute fan-out + N opaque failures previously seen on squash-merged release branches and vendored-blob diffs. Agents whose name isn't in our context-window table (a future LLM, a hypothetical org-pack) pass through preflight unchanged so the rollout of a new agent type is never silently dropped.

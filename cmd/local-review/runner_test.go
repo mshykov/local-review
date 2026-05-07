@@ -253,9 +253,9 @@ func TestParseOnlyList(t *testing.T) {
 		{"claude", []string{"claude"}},
 		{"claude,gemini", []string{"claude", "gemini"}},
 		{" claude , gemini ", []string{"claude", "gemini"}},
-		{"", nil},          // empty input → empty set, callers don't need a separate guard
-		{" ", nil},         // whitespace-only → empty set
-		{",,, ", nil},      // delimiters with no names → empty set
+		{"", nil},     // empty input → empty set, callers don't need a separate guard
+		{" ", nil},    // whitespace-only → empty set
+		{",,, ", nil}, // delimiters with no names → empty set
 		{"claude,,", []string{"claude"}},
 	}
 	for _, tc := range cases {
@@ -628,16 +628,71 @@ func TestValidateMergeWith(t *testing.T) {
 		mergeWith string
 		wantErr   bool
 	}{
-		{"", false},        // unset is fine
-		{"auto", false},    // sentinel is fine
-		{"claude", false},  // member of active set
-		{"codex", true},    // not active — typo or misconfig
-		{"claud", true},    // typo — must error, not silently fall through
+		{"", false},       // unset is fine
+		{"auto", false},   // sentinel is fine
+		{"claude", false}, // member of active set
+		{"codex", true},   // not active — typo or misconfig
+		{"claud", true},   // typo — must error, not silently fall through
 	}
 	for _, tc := range cases {
 		err := validateMergeWith(&sharedFlags{mergeWith: tc.mergeWith}, active)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("validateMergeWith(%q): err=%v, wantErr=%v", tc.mergeWith, err, tc.wantErr)
 		}
+	}
+}
+
+func TestHumanTokens_FormatBands(t *testing.T) {
+	// Three-band format documented on humanTokens:
+	//   <1k        → integer
+	//   1k-99,999  → one-decimal "k"
+	//   ≥100k      → integer "k"
+	// Pinned because review feedback flagged the docs/code drift —
+	// the CHANGELOG showed "12.3k" but the prior implementation
+	// emitted "12k". This test fails if either drifts again.
+	cases := map[int]string{
+		0:       "0",
+		456:     "456",
+		999:     "999",
+		1_000:   "1k",
+		1_234:   "1.2k",
+		4_500:   "4.5k",
+		12_300:  "12.3k",
+		15_000:  "15k",
+		// Top of the decimal band must truncate, not round, so
+		// 99,999 stays at "99.9k". Rounding to "100.0k" would both
+		// overstate usage at the boundary and visually crash into
+		// the next band's "100k" form.
+		99_999:  "99.9k",
+		99_950:  "99.9k",
+		99_900:  "99.9k",
+		100_000: "100k",
+		120_000: "120k",
+		543_210: "543k",
+	}
+	for n, want := range cases {
+		if got := humanTokens(n); got != want {
+			t.Errorf("humanTokens(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestFormatTokenSuffix_BehaviorByShape(t *testing.T) {
+	cases := []struct {
+		name  string
+		usage cli.TokenUsage
+		want  string
+	}{
+		{"zero usage → empty (no misleading 0/0)", cli.TokenUsage{}, ""},
+		{"split shape → in/out", cli.TokenUsage{InputTokens: 12300, OutputTokens: 4500}, " · 12.3k in / 4.5k out"},
+		{"total-only (codex legacy) → total", cli.TokenUsage{InputTokens: 18000, TotalOnly: true}, " · 18k total"},
+		{"small split", cli.TokenUsage{InputTokens: 800, OutputTokens: 200}, " · 800 in / 200 out"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatTokenSuffix(tc.usage); got != tc.want {
+				t.Errorf("formatTokenSuffix(%+v) = %q, want %q", tc.usage, got, tc.want)
+			}
+		})
 	}
 }

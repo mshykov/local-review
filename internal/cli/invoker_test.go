@@ -67,7 +67,7 @@ func TestCodexInvoker_Review(t *testing.T) {
 	// integration testing happens in manual testing phase.
 	invoker := &CodexInvoker{path: "/nonexistent/codex"}
 
-	if _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
+	if _, _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
 		t.Error("Expected error with non-existent path, got nil")
 	}
 }
@@ -75,7 +75,7 @@ func TestCodexInvoker_Review(t *testing.T) {
 func TestGeminiInvoker_Review(t *testing.T) {
 	invoker := &GeminiInvoker{path: "/nonexistent/gemini"}
 
-	if _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
+	if _, _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
 		t.Error("Expected error with non-existent path, got nil")
 	}
 }
@@ -83,7 +83,7 @@ func TestGeminiInvoker_Review(t *testing.T) {
 func TestClaudeInvoker_Review(t *testing.T) {
 	invoker := &ClaudeInvoker{path: "/nonexistent/claude"}
 
-	if _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
+	if _, _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
 		t.Error("Expected error with non-existent path, got nil")
 	}
 }
