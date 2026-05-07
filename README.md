@@ -38,6 +38,8 @@
 
 | ✅ What it **is** | ❌ What it **isn't** |
 | --- | --- |
+| Reads your auth state from local files only — env vars and parsed contents of `~/.claude/sessions/`, `~/.gemini/google_accounts.json`, `~/.codex/auth.json` (to detect login state); never transmits credentials | A keychain scraper or credential-exfil tool — auth files are read locally to determine readiness, never sent anywhere |
+| Each LLM call goes against the endpoint *you* configured — vendor CLI subprocess (multi-LLM mode) or HTTP to your `provider.base_url` (single-LLM fallback); your account, your key, your quota | A proxy, mirror, or reseller running between you and the LLM — no local-review-operated relay, no shared capacity |
 | A local CLI that reviews a git diff using LLMs you've already authenticated | A replacement for Claude's `/review` or `/simplify` — those are single-prompt commands; this is multi-LLM diff orchestration |
 | An orchestrator that runs Claude / Gemini / Codex CLIs in parallel and merges findings into one report | "Code never leaves your machine" — the diff still goes to whichever LLM you authenticate (run Ollama for true offline) |
 | BYOK — your API key, requests go direct to the vendor (no middleman server) | A SaaS — no hosted dashboard, no account, no team collaboration features |
