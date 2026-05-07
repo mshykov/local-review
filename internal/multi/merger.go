@@ -54,13 +54,31 @@ type ReviewContent struct {
 	Content string
 }
 
+// ErrNoReviewsToMerge signals that Merge was called with an empty
+// review set. The runner short-circuits before reaching this in
+// normal flow (see classifyRunMode + the no-mergeable-output path),
+// but the guard here is defense-in-depth — pre-fix, ReviewCount==0
+// fell into the multi-review template branch and rendered "0
+// separate code review reports from: " with an empty reviewer list,
+// producing an incoherent prompt to the merger LLM.
+var ErrNoReviewsToMerge = fmt.Errorf("no reviews to merge")
+
 // Merge consolidates multiple reviews into one using an LLM.
 //
 // Returns the merged markdown report, the merge step's own token
 // usage (for cost-attribution alongside per-LLM review usage), and
 // any error. Tokens may be zero when the merge LLM's CLI doesn't
 // surface usage data.
+//
+// Returns ErrNoReviewsToMerge when input has no reviewable content.
+// The runner is expected to filter zero-review cases upstream
+// (single-LLM fallback path or "all agents failed" branch); this is
+// just a backstop.
 func (m *Merger) Merge(ctx context.Context, input MergeInput) (string, cli.TokenUsage, error) {
+	if input.ReviewCount == 0 || len(input.Reviews) == 0 {
+		return "", cli.TokenUsage{}, ErrNoReviewsToMerge
+	}
+
 	// Render the template
 	var buf bytes.Buffer
 	if err := m.template.Execute(&buf, input); err != nil {

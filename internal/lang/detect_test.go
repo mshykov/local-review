@@ -4,14 +4,14 @@ import "testing"
 
 func TestDetect(t *testing.T) {
 	cases := map[string]string{
-		"src/foo.ts":      TypeScript,
-		"src/Foo.TSX":     TypeScript,
-		"main.go":         Go,
-		"util.py":         Python,
-		"App.java":        Java,
-		"lib.rs":          Rust,
-		"unknown.xyz":     Default,
-		"no-extension":    Default,
+		"src/foo.ts":   TypeScript,
+		"src/Foo.TSX":  TypeScript,
+		"main.go":      Go,
+		"util.py":      Python,
+		"App.java":     Java,
+		"lib.rs":       Rust,
+		"unknown.xyz":  Default,
+		"no-extension": Default,
 		// .js intentionally maps to TypeScript — see the comment on the
 		// (removed) JavaScript constant in detect.go for reasoning.
 		"path/to/file.js":  TypeScript,

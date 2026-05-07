@@ -143,8 +143,8 @@ func TestRunParallel_ChannelClosesAfterAll(t *testing.T) {
 	// regression case (channel never closes) which is exactly when
 	// you don't want a second alarm masking the real bug.
 	type drain struct {
-		count   int
-		errs    []error
+		count int
+		errs  []error
 	}
 	doneCh := make(chan drain, 1)
 	go func() {

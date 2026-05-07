@@ -608,6 +608,42 @@ func TestSelectMergeLLM(t *testing.T) {
 			preferred: "auto",
 			want:      "",
 		},
+		{
+			// Defense-in-depth for v0.7.x: the final fallback must
+			// iterate `available` (roster order) — NOT `results`
+			// (completion order, which v0.6.7 streaming made non-
+			// deterministic). Custom-named agents (org-pack, future
+			// LLMs) don't match the auto chain, so the fallback is
+			// where determinism matters most. Pre-v0.6.6 fix this
+			// iterated `results`, making merge-LLM selection
+			// timing-dependent on identical inputs. This pins
+			// roster order even when results are shuffled.
+			name: "custom-named agents — fallback follows roster order, not results order",
+			results: []multi.ReviewResult{
+				// Results in completion order (B finished first)
+				{LLM: "agent-b", Output: "# B"},
+				{LLM: "agent-a", Output: "# A"},
+			},
+			// Roster order: A before B
+			available: []cli.LLM{{Name: "agent-a"}, {Name: "agent-b"}},
+			preferred: "auto",
+			want:      "agent-a", // first in available, regardless of results ordering
+		},
+		{
+			// Same idea, completion order swapped — must still pick
+			// agent-a because it's first in the roster. If this test
+			// flips when results are reordered, the fallback is
+			// reading results-order somewhere and v0.6.7's
+			// determinism contract has regressed.
+			name: "custom-named agents — roster order wins (results swapped)",
+			results: []multi.ReviewResult{
+				{LLM: "agent-a", Output: "# A"},
+				{LLM: "agent-b", Output: "# B"},
+			},
+			available: []cli.LLM{{Name: "agent-a"}, {Name: "agent-b"}},
+			preferred: "auto",
+			want:      "agent-a",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -651,14 +687,14 @@ func TestHumanTokens_FormatBands(t *testing.T) {
 	// the CHANGELOG showed "12.3k" but the prior implementation
 	// emitted "12k". This test fails if either drifts again.
 	cases := map[int]string{
-		0:       "0",
-		456:     "456",
-		999:     "999",
-		1_000:   "1k",
-		1_234:   "1.2k",
-		4_500:   "4.5k",
-		12_300:  "12.3k",
-		15_000:  "15k",
+		0:      "0",
+		456:    "456",
+		999:    "999",
+		1_000:  "1k",
+		1_234:  "1.2k",
+		4_500:  "4.5k",
+		12_300: "12.3k",
+		15_000: "15k",
 		// Top of the decimal band must truncate, not round, so
 		// 99,999 stays at "99.9k". Rounding to "100.0k" would both
 		// overstate usage at the boundary and visually crash into

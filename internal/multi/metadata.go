@@ -31,11 +31,17 @@ type ReviewMeta struct {
 	// metadata) when available. For Anthropic, InputTokens
 	// includes cache-read and cache-creation tokens (Anthropic
 	// discounts cache reads ~10× at the billing layer, but for
-	// "how big was the prompt" we want the full count). Sum with
-	// MergeMeta values for total token volume per PR; for actual
-	// dollar spend, use the vendor's billing dashboard. Both 0
-	// means usage was indeterminate. omitempty keeps backward-
-	// compat for readers that don't know about these fields.
+	// "how big was the prompt" we want the full count).
+	//
+	// **Aggregation caveat:** summing across ReviewMeta entries
+	// gives an *approximate prompt-byte volume*, not a billable
+	// total. For Anthropic specifically, cache reads inflate the
+	// sum on repeat runs of the same prompt — the cached portion
+	// is counted in every ReviewMeta even though Anthropic only
+	// charges full price the first time. For dollar spend, use
+	// the vendor's billing dashboard. Both 0 means usage was
+	// indeterminate. omitempty keeps backward-compat for readers
+	// that don't know about these fields.
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 	// TotalOnlyTokens=true means input/output split is unknown and
@@ -57,9 +63,11 @@ type MergeMeta struct {
 	Error                string `json:"error,omitempty"`
 	// InputTokens / OutputTokens for the merge step's own LLM call,
 	// same shape and semantics as ReviewMeta — prompt/response
-	// *size*, not billed amount. Sum with each ReviewMeta to get
-	// total per-PR token volume; for dollar spend, see the vendor
-	// billing dashboard.
+	// *size*, not billed amount. Aggregating across ReviewMeta +
+	// MergeMeta gives approximate prompt volume but inflates on
+	// Anthropic cached re-runs (see ReviewMeta doc above for the
+	// caveat). For dollar spend, the vendor billing dashboard is
+	// authoritative.
 	InputTokens     int  `json:"input_tokens,omitempty"`
 	OutputTokens    int  `json:"output_tokens,omitempty"`
 	TotalOnlyTokens bool `json:"total_only_tokens,omitempty"`

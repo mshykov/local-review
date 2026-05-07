@@ -96,8 +96,8 @@ func Defaults() Config {
 	return Config{
 		// v0: single-LLM API mode defaults
 		Provider: Provider{
-			BaseURL: "https://api.openai.com/v1",
-			Model:   "gpt-4o-mini",
+			BaseURL:   "https://api.openai.com/v1",
+			Model:     "gpt-4o-mini",
 			APIKeyEnv: "LOCAL_REVIEW_API_KEY",
 			// 10 minutes. The v0 single-LLM API path is usually fast,
 			// but a long thinking-model response on a big diff can run
@@ -135,15 +135,15 @@ func Defaults() Config {
 		// can lower per-agent via `llms.<agent>.timeout_seconds:`.
 		LLMs: map[string]LLMConfig{
 			"claude": {
-				Enabled: boolPtr(true),
-				CLIPath: "claude",
-				APIKeyEnv: "ANTHROPIC_API_KEY",
+				Enabled:    boolPtr(true),
+				CLIPath:    "claude",
+				APIKeyEnv:  "ANTHROPIC_API_KEY",
 				TimeoutSec: 600,
 			},
 			"gemini": {
-				Enabled: boolPtr(true),
-				CLIPath: "gemini",
-				APIKeyEnv: "GEMINI_API_KEY",
+				Enabled:    boolPtr(true),
+				CLIPath:    "gemini",
+				APIKeyEnv:  "GEMINI_API_KEY",
 				TimeoutSec: 600,
 			},
 			"codex": {
@@ -151,8 +151,8 @@ func Defaults() Config {
 				// codex is paid (ChatGPT Plus or pay-per-token via OPENAI_API_KEY),
 				// but we only invoke it when the user has explicitly authenticated,
 				// so running by default doesn't surprise anyone with a bill.
-				CLIPath: "codex",
-				APIKeyEnv: "OPENAI_API_KEY",
+				CLIPath:    "codex",
+				APIKeyEnv:  "OPENAI_API_KEY",
 				TimeoutSec: 600,
 			},
 		},
