@@ -658,8 +658,14 @@ func TestHumanTokens_FormatBands(t *testing.T) {
 		1_234:   "1.2k",
 		4_500:   "4.5k",
 		12_300:  "12.3k",
-		99_999:  "100.0k", // edge of decimal band; renders as 100.0k by float-to-string
 		15_000:  "15k",
+		// Top of the decimal band must truncate, not round, so
+		// 99,999 stays at "99.9k". Rounding to "100.0k" would both
+		// overstate usage at the boundary and visually crash into
+		// the next band's "100k" form.
+		99_999:  "99.9k",
+		99_950:  "99.9k",
+		99_900:  "99.9k",
 		100_000: "100k",
 		120_000: "120k",
 		543_210: "543k",

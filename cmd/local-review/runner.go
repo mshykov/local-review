@@ -613,13 +613,20 @@ func aggregateTokens(results []multi.ReviewResult, mergeTokens cli.TokenUsage) i
 // summary lines. Three bands:
 //   - Below 1000:   raw integer (e.g. "456") because at small scales
 //     "0.5k" hides meaningful precision.
-//   - 1k to 99,999: "k" values with one decimal only when needed
-//     (e.g. "1k", "1.2k", "12.3k") because cost-
-//     sensitive users need the tens-of-tokens
-//     resolution here, where the gap between 4.5k and
-//     5.0k is real money on a paid tier.
+//   - 1k to 99,999: "k" values truncated to one decimal, dropping
+//     ".0" for whole thousands (e.g. "1k", "1.2k",
+//     "12.3k", "15k", "99.9k") because cost-sensitive
+//     users need tens-of-tokens resolution here, where
+//     the gap between 4.5k and 5.0k is real money on a
+//     paid tier.
 //   - 100k and up:  rounded "k" (e.g. "120k") because at six figures
 //     the decimal is just noise.
+//
+// Truncation (not rounding) in the middle band is deliberate so
+// 99,999 renders as "99.9k" rather than "100.0k" — band-crossing
+// would both look wrong (the band cap is supposed to be 99.9k)
+// and overstate usage by ~1 token at the boundary. We'd rather
+// under-report by <100 tokens than tip over.
 //
 // CodeRabbit's auto-fix proposed a simpler "always divide by 1000,
 // drop .0 for whole thousands" form. Rejected: that path renders
@@ -632,11 +639,16 @@ func humanTokens(n int) string {
 		return fmt.Sprintf("%d", n)
 	}
 	if n < 100_000 {
-		k := n / 1_000
-		if n == k*1_000 {
-			return fmt.Sprintf("%dk", k)
+		// Integer math truncates toward zero — no rounding-up across
+		// the band boundary. tenths = floor(n/100); whole = tenths/10;
+		// frac = tenths%10 ∈ [0,9].
+		tenths := n / 100
+		whole := tenths / 10
+		frac := tenths % 10
+		if frac == 0 {
+			return fmt.Sprintf("%dk", whole)
 		}
-		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+		return fmt.Sprintf("%d.%dk", whole, frac)
 	}
 	rounded := (n + 500) / 1000
 	return fmt.Sprintf("%dk", rounded)
