@@ -216,11 +216,19 @@ func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, T
 // via stdin — sidestepping ARG_MAX (~256KB on macOS, ~2MB on Linux)
 // the "whole prompt via -p" implementation hit on merger prompts.
 //
-// `-o json` requests structured output. The CLI returns either a
-// JSON object with token counts in usageMetadata, or — if too old —
-// plain text. parseGeminiJSON handles both: returns the parsed text
-// and tokens on success, or the raw output with TokenUsage{} on
-// failure (graceful degradation: lose tokens, keep the review).
+// `-o json` requests structured output. parseGeminiJSON handles two
+// shapes seen in the wild — the modern stats.models.<id>.tokens
+// structure and the older Vertex-style usageMetadata. Returns
+// TokenUsage{} when neither shape parses (e.g., a future schema
+// drift) so the review still ships even if we lose token info for
+// that run.
+//
+// Minimum gemini CLI version: v0.40 (the version where `-o json`
+// stabilised). Older CLIs without the flag exit with an unknown-
+// argument error and ClassifyExit surfaces the stderr — *not* a
+// graceful plain-text fall-through. The v0.6.6 CLI-version baseline
+// is documented in CHANGELOG and fails-fast rather than producing
+// token-less reviews.
 func (g *GeminiInvoker) run(ctx context.Context, prompt string) (string, TokenUsage, error) {
 	args := []string{"-p", "Follow the instructions in stdin.", "-o", "json"}
 	if g.model != "" {
@@ -262,9 +270,16 @@ func (c *ClaudeInvoker) RunPrompt(ctx context.Context, prompt string) (string, T
 //
 // Uses `--print --output-format json` so the response is a single
 // JSON object containing both the assistant's reply and a usage
-// block we can extract token counts from. If the CLI is too old to
-// support the flag, output won't parse as JSON and we fall back to
-// treating the whole stdout as plain text with TokenUsage{}.
+// block we can extract token counts from.
+//
+// Minimum claude CLI version: any release supporting
+// `--output-format json` (well-established since claude-code shipped
+// non-interactive mode). If the user runs a CLI old enough not to
+// recognise the flag, the subprocess exits with an "unknown flag"
+// error and ClassifyExit surfaces the stderr — *not* a graceful
+// fall-through to plain text. Older CLIs are unsupported by design;
+// the documented v0.6.6 CLI-version baseline fails-fast rather than
+// silently producing token-less reviews.
 func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (string, TokenUsage, error) {
 	args := []string{"--print", "--output-format", "json"}
 	if c.model != "" {

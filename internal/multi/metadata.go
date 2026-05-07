@@ -27,12 +27,18 @@ type ReviewMeta struct {
 	Error         string `json:"error,omitempty"`
 	// InputTokens / OutputTokens come from the CLI's structured
 	// output (claude / gemini JSON, codex stdout metadata) when
-	// available. Both 0 means usage was indeterminate — typically
-	// because the user is on an older CLI version that doesn't
-	// surface token counts. omitempty keeps backward-compat for
-	// readers that don't know about these fields.
+	// available. Both 0 means usage was indeterminate. omitempty
+	// keeps backward-compat for readers that don't know about
+	// these fields.
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
+	// TotalOnlyTokens=true means input/output split is unknown and
+	// InputTokens holds the combined total (codex pre-v0.128 stdout
+	// shape). Aggregation tools should still sum InputTokens +
+	// OutputTokens — the total is in InputTokens, OutputTokens is 0
+	// — but display-layer tools should show "Nk total" rather than
+	// "Nk in / 0 out".
+	TotalOnlyTokens bool `json:"total_only_tokens,omitempty"`
 }
 
 // MergeMeta holds details about the merge operation.
@@ -46,8 +52,9 @@ type MergeMeta struct {
 	// InputTokens / OutputTokens for the merge step's own LLM call,
 	// same shape and semantics as ReviewMeta. Sum with each
 	// ReviewMeta to get total per-PR token spend.
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
+	InputTokens     int  `json:"input_tokens,omitempty"`
+	OutputTokens    int  `json:"output_tokens,omitempty"`
+	TotalOnlyTokens bool `json:"total_only_tokens,omitempty"`
 }
 
 // Save writes the metadata to a JSON file.

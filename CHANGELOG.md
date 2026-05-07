@@ -19,10 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ✓ 3/3 LLMs produced output · total 2m51s · ~54k tokens
   ```
 
-  Token counts come from each CLI's structured output (claude `--output-format json`, gemini `-o json`) or stdout metadata (codex's session-summary block). When a CLI version is too old to surface usage, the suffix is omitted entirely rather than misleading users with "0 in / 0 out". Same data persists in `<commit>_metadata.json` per-review and per-merge, so paid-tier users (codex API, claude paid) can attribute spend per PR without round-tripping the vendor dashboard.
+  Token counts come from each CLI's structured output (claude `--output-format json`, gemini `-o json`) or stdout metadata (codex's session-summary block). Codex pre-v0.128 reports a single combined total instead of split input/output; we render that as "Nk total" rather than the misleading "Nk in / 0 out" (the model produced output, we just don't have the breakdown). Same data persists in `<commit>_metadata.json` per-review and per-merge, so paid-tier users (codex API, claude paid) can attribute spend per PR without round-tripping the vendor dashboard.
+
+  **Minimum CLI versions for token visibility:** claude-code v1+ (any version supporting `--output-format json`), gemini-cli with `-o json` support (newer releases), codex any version. Older CLIs that lack the JSON-output flag exit non-zero on the flag and the run fails fast — there is no silent "no tokens" fallback for that case. If your run errored out after this upgrade, update the offending CLI: `npm i -g @anthropic-ai/claude-code @google/gemini-cli @openai/codex`.
 
 ### Internal
-- `Invoker.Review` and `Invoker.RunPrompt` now return a `cli.TokenUsage` alongside the response. `ReviewResult.Tokens` and `MergeMeta.{InputTokens,OutputTokens}` plumb the data through. JSON parsers gracefully fall back to zero usage on unknown shapes — older CLI versions degrade to "no token info" rather than failing the review.
+- `Invoker.Review` and `Invoker.RunPrompt` now return a `cli.TokenUsage` alongside the response. `ReviewResult.Tokens` and `MergeMeta.{InputTokens,OutputTokens,TotalOnlyTokens}` plumb the data through. `TokenUsage.TotalOnly` flags the codex legacy single-total case so display callers render "Nk total" instead of "Nk in / 0 out". JSON parsers fall back to raw text + zero usage when valid JSON has an unexpected shape (a future schema drift); they do *not* compensate for older CLIs missing the structured-output flag — those exit non-zero before the parser is reached.
 
 ## [0.6.5] - 2026-05-07
 

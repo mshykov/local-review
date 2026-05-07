@@ -23,9 +23,11 @@ import (
 //	  ...
 //	}
 //
-// Falls back to the raw output as text + zero usage when:
-//   - The output isn't valid JSON (older CLI without --output-format).
-//   - The "result" field is missing (different shape).
+// Falls back to the raw output as text + zero usage when valid JSON
+// has an unexpected shape (e.g., a future schema or an error
+// envelope). This is NOT a path to support older CLIs lacking
+// --output-format — those exit non-zero and never reach this parser;
+// see ClaudeInvoker.run for the version-baseline rationale.
 //
 // Cache-read/creation tokens are NOT included in the input count we
 // surface — those represent reuse, not new spend. If we're going to
@@ -135,9 +137,12 @@ func parseCodexStdoutTokens(combined string) TokenUsage {
 		// Split shape: m[1] = input, m[2] = output.
 		return TokenUsage{InputTokens: first, OutputTokens: atoiNoCommas(m[2])}
 	}
-	// Legacy single-total shape — fold into InputTokens since we
-	// can't attribute. Underestimates output but doesn't fabricate.
-	return TokenUsage{InputTokens: first}
+	// Legacy single-total shape — codex pre-v0.128 doesn't split
+	// input vs output. Fold into InputTokens (so Total() math still
+	// works) and flag TotalOnly so the formatter renders "Nk total"
+	// instead of "Nk in / 0 out". The "/ 0 out" form would lie:
+	// the model produced output, we just don't know how much.
+	return TokenUsage{InputTokens: first, TotalOnly: true}
 }
 
 // atoiNoCommas parses an integer that may have thousand separators

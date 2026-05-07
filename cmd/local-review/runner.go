@@ -609,24 +609,46 @@ func aggregateTokens(results []multi.ReviewResult, mergeTokens cli.TokenUsage) i
 	return total
 }
 
-// humanTokens formats a token count with a "k" suffix for quick
-// scannability. Values are divided by 1000 and shown with at most
-// one decimal place, dropping ".0" for whole thousands.
+// humanTokens formats a token count for the per-LLM and closing
+// summary lines. Three bands:
+//   - Below 1000:   raw integer (e.g. "456") because at small scales
+//                   "0.5k" hides meaningful precision.
+//   - 1k to 99,999: one decimal "k" (e.g. "1.2k", "12.3k") because
+//                   cost-sensitive users need the tens-of-tokens
+//                   resolution here, where the gap between 4.5k and
+//                   5.0k is real money on a paid tier.
+//   - 100k and up:  rounded "k" (e.g. "120k") because at six figures
+//                   the decimal is just noise.
+//
+// CodeRabbit's auto-fix proposed a simpler "always divide by 1000,
+// drop .0 for whole thousands" form. Rejected: that path renders
+// 999 as "1.0k" (rounding hides the sub-1k case) and 156000 as
+// "156.0k" (the trailing .0 is noise at six figures). The three-band
+// shape covers the same docs example (12300 → "12.3k") without
+// either regression.
 func humanTokens(n int) string {
-	k := float64(n) / 1000.0
-	if k == float64(int(k)) {
-		return fmt.Sprintf("%dk", int(k))
+	if n < 1_000 {
+		return fmt.Sprintf("%d", n)
 	}
-	return fmt.Sprintf("%.1fk", k)
+	if n < 100_000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+	}
+	rounded := (n + 500) / 1000
+	return fmt.Sprintf("%dk", rounded)
 }
 
 // formatTokenSuffix returns " · 12.3k in / 4.5k out" for the per-LLM
-// completion line, or "" when usage wasn't reported (CLI version
-// too old). Mirrors the closing-line "omit when zero" rule so users
-// don't see misleading "0 in / 0 out" rows.
+// completion line, or " · 12.3k total" when only the combined total
+// is known (codex's legacy stdout shape pre-v0.128 doesn't split
+// input vs output — formatting as "X in / 0 out" would mislead
+// users into thinking the model returned nothing). Returns "" when
+// usage wasn't reported at all so we don't print "0 in / 0 out".
 func formatTokenSuffix(u cli.TokenUsage) string {
 	if u.IsZero() {
 		return ""
+	}
+	if u.TotalOnly {
+		return fmt.Sprintf(" · %s total", humanTokens(u.Total()))
 	}
 	return fmt.Sprintf(" · %s in / %s out", humanTokens(u.InputTokens), humanTokens(u.OutputTokens))
 }
@@ -823,6 +845,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 		metadata.Merge.DurationMs = mergeDuration.Milliseconds()
 		metadata.Merge.InputTokens = mergeTokens.InputTokens
 		metadata.Merge.OutputTokens = mergeTokens.OutputTokens
+		metadata.Merge.TotalOnlyTokens = mergeTokens.TotalOnly
 		fmt.Println("─── Findings (not persisted) ───")
 		fmt.Println(merged)
 		fmt.Println("─── End ───")
@@ -834,6 +857,7 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	metadata.Merge.DurationMs = mergeDuration.Milliseconds()
 	metadata.Merge.InputTokens = mergeTokens.InputTokens
 	metadata.Merge.OutputTokens = mergeTokens.OutputTokens
+	metadata.Merge.TotalOnlyTokens = mergeTokens.TotalOnly
 
 	switch mode {
 	case runModeDegraded:
@@ -918,15 +942,16 @@ func buildMetadata(commit, branch string, results []multi.ReviewResult, startTim
 			errMsg = r.Error.Error()
 		}
 		meta.Reviews[i] = multi.ReviewMeta{
-			LLM:          r.LLM,
-			Version:      r.Version,
-			Mode:         r.Mode,
-			Status:       status,
-			DurationMs:   r.Duration.Milliseconds(),
-			OutputFile:   r.FilePath,
-			Error:        errMsg,
-			InputTokens:  r.Tokens.InputTokens,
-			OutputTokens: r.Tokens.OutputTokens,
+			LLM:             r.LLM,
+			Version:         r.Version,
+			Mode:            r.Mode,
+			Status:          status,
+			DurationMs:      r.Duration.Milliseconds(),
+			OutputFile:      r.FilePath,
+			Error:           errMsg,
+			InputTokens:     r.Tokens.InputTokens,
+			OutputTokens:    r.Tokens.OutputTokens,
+			TotalOnlyTokens: r.Tokens.TotalOnly,
 		}
 	}
 	return meta

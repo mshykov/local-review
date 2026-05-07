@@ -22,9 +22,12 @@ func TestParseClaudeJSON_Success(t *testing.T) {
 }
 
 func TestParseClaudeJSON_FallbackOnInvalidJSON(t *testing.T) {
-	// An older claude CLI without --output-format json returns plain
-	// text. We must not lose the review just because we couldn't get
-	// usage data — fall back to text + zero usage.
+	// If we somehow get plain text instead of JSON (a future CLI
+	// schema change that drops --output-format json without
+	// erroring, say), don't lose the review — pass it through as
+	// text with zero usage. This is NOT a fallback path for older
+	// CLIs lacking the flag; those exit non-zero and never reach
+	// this parser. See ClaudeInvoker.run.
 	plain := []byte("# Review\n## Major\n- bug\n")
 	text, usage := parseClaudeJSON(plain)
 	if text != string(plain) {
@@ -117,17 +120,36 @@ func TestParseCodexStdoutTokens_SplitShape(t *testing.T) {
 }
 
 func TestParseCodexStdoutTokens_LegacyTotalShape(t *testing.T) {
-	// Older codex: "tokens used: <total>" (no input/output split)
-	// We attribute everything to InputTokens — under-reports output
-	// but doesn't fabricate a split.
+	// Older codex: "tokens used: <total>" (no input/output split).
+	// We fold the total into InputTokens (so Total() math works)
+	// AND set TotalOnly so the formatter renders "Nk total" rather
+	// than the misleading "Nk in / 0 out" — the model produced
+	// output, we just don't know how much.
 	stdout := `[2026-05-04T12:00:00Z] tokens used: 18000
 [2026-05-04T12:00:00Z] done`
 	usage := parseCodexStdoutTokens(stdout)
 	if usage.InputTokens != 18000 {
-		t.Errorf("InputTokens = %d, want 18000 (legacy total)", usage.InputTokens)
+		t.Errorf("InputTokens = %d, want 18000 (legacy total folded here)", usage.InputTokens)
 	}
 	if usage.OutputTokens != 0 {
 		t.Errorf("OutputTokens = %d, want 0 (legacy can't attribute)", usage.OutputTokens)
+	}
+	if !usage.TotalOnly {
+		t.Errorf("TotalOnly = false, want true so formatter renders 'total' not 'in/out'")
+	}
+	if usage.Total() != 18000 {
+		t.Errorf("Total() = %d, want 18000 (sum should still work for aggregation)", usage.Total())
+	}
+}
+
+func TestParseCodexStdoutTokens_SplitShapeNotTotalOnly(t *testing.T) {
+	// Modern codex with split shape must NOT set TotalOnly — we
+	// have real input vs output numbers and the formatter should
+	// render "Nk in / Mk out" honestly.
+	stdout := "tokens: 100 input, 50 output"
+	usage := parseCodexStdoutTokens(stdout)
+	if usage.TotalOnly {
+		t.Errorf("split-shape codex output should not set TotalOnly: got %+v", usage)
 	}
 }
 
@@ -162,10 +184,10 @@ func TestTokenUsage_IsZero(t *testing.T) {
 		usage TokenUsage
 		want  bool
 	}{
-		{"both zero", TokenUsage{0, 0}, true},
-		{"input only", TokenUsage{100, 0}, false},
-		{"output only", TokenUsage{0, 100}, false},
-		{"both nonzero", TokenUsage{100, 200}, false},
+		{"both zero", TokenUsage{InputTokens: 0, OutputTokens: 0}, true},
+		{"input only", TokenUsage{InputTokens: 100, OutputTokens: 0}, false},
+		{"output only", TokenUsage{InputTokens: 0, OutputTokens: 100}, false},
+		{"both nonzero", TokenUsage{InputTokens: 100, OutputTokens: 200}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
