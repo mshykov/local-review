@@ -201,7 +201,7 @@ func checkStrictFailures(rep bench.Report) error {
 //     no ready agents is an error, not a silent fall-through.
 func pickBenchLLMs(bf benchFlags) ([]cli.LLM, error) {
 	if bf.replayDir != "" {
-		names := splitCSV(bf.only)
+		names := dedupeStrings(splitCSV(bf.only))
 		if len(names) == 0 {
 			names = []string{"claude", "codex", "gemini"}
 		}
@@ -232,6 +232,24 @@ func splitCSV(s string) []string {
 			continue
 		}
 		out = append(out, p)
+	}
+	return out
+}
+
+// dedupeStrings keeps the first occurrence of each non-empty string
+// while preserving input order.
+func dedupeStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
 	}
 	return out
 }

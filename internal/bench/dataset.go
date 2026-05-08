@@ -12,8 +12,9 @@ import (
 
 // LoadDataset reads every case under root and returns them sorted by
 // ID for deterministic ordering. A "case" is a directory containing a
-// case.yaml + diff.patch pair; anything else (loose files, READMEs,
-// hidden directories) is silently skipped.
+// case.yaml + diff.patch pair. Loose files and hidden directories are
+// skipped; non-hidden subdirectories are treated as cases and the
+// first malformed case aborts loading with an error.
 //
 // Returns an error if root doesn't exist or no cases were found —
 // "ran the bench against an empty dataset" is almost always a wrong

@@ -32,6 +32,29 @@ func TestBench_ReplayEndToEnd(t *testing.T) {
 	assertAtLeastOnePerfectCase(t, rep, textOut)
 }
 
+func TestPickBenchLLMs_ReplayOnlyDedupes(t *testing.T) {
+	llms, err := pickBenchLLMs(benchFlags{
+		replayDir: "fixtures",
+		only:      "claude, codex,claude,gemini,codex",
+	})
+	if err != nil {
+		t.Fatalf("pickBenchLLMs: %v", err)
+	}
+	got := make([]string, 0, len(llms))
+	for _, l := range llms {
+		got = append(got, l.Name)
+	}
+	want := []string{"claude", "codex", "gemini"}
+	if len(got) != len(want) {
+		t.Fatalf("llm count=%d want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("llms[%d]=%q want %q (%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 // benchDatasetPaths returns the on-disk paths to the in-repo dataset
 // and fixtures, skipping the test entirely if either is missing
 // (e.g., a stripped checkout for embedded-binary builds).
