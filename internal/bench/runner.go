@@ -194,7 +194,13 @@ func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (s
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return invoker.Review(cctx, pack, c.Diff)
+	// invoker.Review returns (output, tokenUsage, err) — bench
+	// scoring works against the markdown only; token totals are
+	// already tracked per-run in the live review path and the
+	// bench-aggregate timing/cost view is Phase 2 ("Cost / latency
+	// benchmark" in #56).
+	out, _, err := invoker.Review(cctx, pack, c.Diff)
+	return out, err
 }
 
 // fillAggregates computes precision/recall/F1/noise/timing over a

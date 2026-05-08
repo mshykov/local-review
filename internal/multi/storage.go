@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/mshykov/local-review/internal/git"
 )
@@ -19,12 +21,68 @@ func NewStorage(basePath string) *ReviewStorage {
 	return &ReviewStorage{basePath: basePath}
 }
 
+// unsafeFilenameChars matches anything that isn't safe in a filename
+// across darwin/linux/windows: path separators, drive prefixes, NUL,
+// shell metacharacters, and the windows-reserved characters
+// (`<>:"|?*`). Anything matched gets replaced with `-` to keep
+// filenames predictable across platforms.
+//
+// The character class is intentionally a deny-list rather than the
+// stricter allow-list `[^A-Za-z0-9._-]` because LLM names and
+// version strings can legitimately include `+` (semver build
+// metadata: `2.1.132-rc.1+build.42`) or other innocuous chars that
+// the allow-list would scrub. We only deny the genuinely dangerous
+// set.
+var unsafeFilenameChars = regexp.MustCompile(`[/\\:<>"|?*\x00\s]`)
+
+// repeatedDashes collapses runs of `-` produced by replacing multiple
+// dangerous chars in a row (e.g. " / " → "---"). Pre-compiled at
+// package level rather than inside sanitizeFilenameComponent because
+// the sanitizer is called twice per agent per review and re-compiling
+// on every call is unnecessary.
+var repeatedDashes = regexp.MustCompile(`-+`)
+
+// sanitizeFilenameComponent makes an LLM name or version string safe
+// to embed in a filename. Used for `<commit>_<llm>_<version>.md`
+// where LLM names come from a trusted detector (claude/gemini/codex)
+// but version strings come from CLI version probes — which are
+// vendor-controlled. A vendor that ships a banner like `v2.1.132
+// (rc/staging)` would otherwise produce a filename with embedded
+// path separators and break the storage layout. Defensive
+// sanitisation keeps the contract one-directory-per-branch even as
+// vendor CLIs evolve.
+//
+// Empty input returns "unknown" so we don't end up with collapsed
+// double-underscores in the filename (`<commit>__<version>.md`).
+func sanitizeFilenameComponent(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	cleaned := unsafeFilenameChars.ReplaceAllString(s, "-")
+	// Collapse runs of `-` from the replacement (e.g. " / " → "---").
+	// Single-pass since the regex is greedy.
+	cleaned = repeatedDashes.ReplaceAllString(cleaned, "-")
+	// Don't allow leading/trailing `-` (cosmetic but shows up in
+	// shell completion and the printed "Per-LLM reviews → ..." path).
+	cleaned = strings.Trim(cleaned, "-")
+	if cleaned == "" {
+		return "unknown"
+	}
+	return cleaned
+}
+
 // SaveReview writes an LLM's review output to disk.
 // Returns the path to the saved file.
 func (s *ReviewStorage) SaveReview(branch, commit, llmName, llmVersion, content string) (string, error) {
-	// Sanitize branch name and commit for filesystem
+	// Sanitize all path components. branch and commit have their
+	// own dedicated sanitizers (in internal/git); llmName and
+	// llmVersion go through the local sanitizer because they come
+	// from vendor-controlled version strings that could legitimately
+	// contain filesystem-unsafe characters in future CLI releases.
 	sanitizedBranch := git.SanitizeBranchName(branch)
 	sanitizedCommit := git.SanitizeCommit(commit)
+	sanitizedLLM := sanitizeFilenameComponent(llmName)
+	sanitizedVersion := sanitizeFilenameComponent(llmVersion)
 
 	// Create directory structure: <basePath>/<branch>/
 	// Note: MkdirAll is idempotent and called in each Save* method for robustness
@@ -34,7 +92,7 @@ func (s *ReviewStorage) SaveReview(branch, commit, llmName, llmVersion, content 
 	}
 
 	// File name: <commit>_<llm>_<version>.md
-	filename := fmt.Sprintf("%s_%s_%s.md", sanitizedCommit, llmName, llmVersion)
+	filename := fmt.Sprintf("%s_%s_%s.md", sanitizedCommit, sanitizedLLM, sanitizedVersion)
 	path := filepath.Join(dir, filename)
 
 	// Write content (owner-only permissions for sensitive source code)

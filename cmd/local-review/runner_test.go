@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"reflect"
 	"sort"
 	"strings"
@@ -252,9 +253,9 @@ func TestParseOnlyList(t *testing.T) {
 		{"claude", []string{"claude"}},
 		{"claude,gemini", []string{"claude", "gemini"}},
 		{" claude , gemini ", []string{"claude", "gemini"}},
-		{"", nil},          // empty input → empty set, callers don't need a separate guard
-		{" ", nil},         // whitespace-only → empty set
-		{",,, ", nil},      // delimiters with no names → empty set
+		{"", nil},     // empty input → empty set, callers don't need a separate guard
+		{" ", nil},    // whitespace-only → empty set
+		{",,, ", nil}, // delimiters with no names → empty set
 		{"claude,,", []string{"claude"}},
 	}
 	for _, tc := range cases {
@@ -465,22 +466,328 @@ func TestSyntheticDetachedBranch(t *testing.T) {
 	}
 }
 
+func TestClassifyRunMode(t *testing.T) {
+	// Use a generic stub error here, not errBlockingFindings — that
+	// sentinel represents the post-merge gate, not an orchestrator-level
+	// agent failure, and conflating the two would muddy what this test
+	// is actually checking.
+	agentFailed := errors.New("agent failed")
+
+	ok := func(name string) multi.ReviewResult { return multi.ReviewResult{LLM: name, Output: "ok"} }
+	fail := func(name string) multi.ReviewResult { return multi.ReviewResult{LLM: name, Error: agentFailed} }
+	// SaveReview-failed-after-success: orchestrator sets Error but
+	// Output is still set, and the merger will still consume the
+	// review. Classifier must count this as mergeable.
+	saveFailed := func(name string) multi.ReviewResult {
+		return multi.ReviewResult{LLM: name, Output: "ok", Error: errors.New("save review: disk full")}
+	}
+
+	cases := []struct {
+		name    string
+		results []multi.ReviewResult
+		want    runMode
+	}{
+		{
+			name:    "two of three succeed — still a real merge",
+			results: []multi.ReviewResult{ok("claude"), ok("gemini"), fail("codex")},
+			want:    runModeMerge,
+		},
+		{
+			name:    "all three succeed — real merge",
+			results: []multi.ReviewResult{ok("claude"), ok("gemini"), ok("codex")},
+			want:    runModeMerge,
+		},
+		{
+			name:    "one of three succeed — degraded, no consensus",
+			results: []multi.ReviewResult{ok("claude"), fail("gemini"), fail("codex")},
+			want:    runModeDegraded,
+		},
+		{
+			name:    "one of two succeed — degraded",
+			results: []multi.ReviewResult{ok("claude"), fail("gemini")},
+			want:    runModeDegraded,
+		},
+		{
+			name:    "user picked --only claude — solo, expected",
+			results: []multi.ReviewResult{ok("claude")},
+			want:    runModeSolo,
+		},
+		{
+			name:    "two outputs, one of them save-failed — still a merge (merger sees both)",
+			results: []multi.ReviewResult{ok("claude"), saveFailed("gemini"), fail("codex")},
+			want:    runModeMerge,
+		},
+		{
+			name:    "all outputs save-failed but content is there — still a merge",
+			results: []multi.ReviewResult{saveFailed("claude"), saveFailed("gemini")},
+			want:    runModeMerge,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyRunMode(tc.results); got != tc.want {
+				t.Errorf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSelectMergeLLM(t *testing.T) {
+	// Helpers
+	saveFailErr := errors.New("save review: disk full")
+	hardFailErr := errors.New("claude review failed: signal: killed")
+
+	cases := []struct {
+		name      string
+		results   []multi.ReviewResult
+		available []cli.LLM
+		preferred string
+		want      string // expected LLM name, "" = nil
+	}{
+		{
+			// Pre-fix bug: when SaveReview fails for everyone but
+			// content was produced, selectMergeLLM returned nil and
+			// the gate skipped — pre-commit hooks treat a tool error
+			// (not exit 2) as "let the commit through." This pins the
+			// fix: any agent with non-blank Output is eligible.
+			name: "all saves failed but content exists — still picks an LLM",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Output: "# Review\n## Major\n- bug", Error: saveFailErr},
+				{LLM: "gemini", Output: "# Review", Error: saveFailErr},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "gemini"}},
+			preferred: "auto",
+			want:      "claude", // auto-priority: claude > codex > gemini
+		},
+		{
+			name: "hard failure (no Output) is excluded, partner runs the merge",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Error: hardFailErr},
+				{LLM: "gemini", Output: "# Review"},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "gemini"}},
+			preferred: "auto",
+			want:      "gemini",
+		},
+		{
+			// Whitespace-only Output is also excluded (matches
+			// HasMergeableOutput / CountWithOutput's predicate).
+			name: "whitespace-only output excluded; codex picks up",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Output: "  \n\t"},
+				{LLM: "codex", Output: "# Review"},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "codex"}},
+			preferred: "auto",
+			want:      "codex",
+		},
+		{
+			name: "preferred override honored when eligible",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Output: "# A"},
+				{LLM: "gemini", Output: "# B"},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "gemini"}},
+			preferred: "gemini",
+			want:      "gemini",
+		},
+		{
+			name: "preferred override falls back to auto when not eligible",
+			results: []multi.ReviewResult{
+				{LLM: "claude", Output: "# A"},
+				{LLM: "gemini", Error: hardFailErr},
+			},
+			available: []cli.LLM{{Name: "claude"}, {Name: "gemini"}},
+			preferred: "gemini",
+			want:      "claude",
+		},
+		{
+			name:      "no eligible reviewers — returns nil",
+			results:   []multi.ReviewResult{{LLM: "claude", Error: hardFailErr}},
+			available: []cli.LLM{{Name: "claude"}},
+			preferred: "auto",
+			want:      "",
+		},
+		{
+			// Defense-in-depth for v0.7.x: the final fallback must
+			// iterate `available` (roster order) — NOT `results`
+			// (completion order, which v0.6.7 streaming made non-
+			// deterministic). Custom-named agents (org-pack, future
+			// LLMs) don't match the auto chain, so the fallback is
+			// where determinism matters most. Pre-v0.6.6 fix this
+			// iterated `results`, making merge-LLM selection
+			// timing-dependent on identical inputs. This pins
+			// roster order even when results are shuffled.
+			name: "custom-named agents — fallback follows roster order, not results order",
+			results: []multi.ReviewResult{
+				// Results in completion order (B finished first)
+				{LLM: "agent-b", Output: "# B"},
+				{LLM: "agent-a", Output: "# A"},
+			},
+			// Roster order: A before B
+			available: []cli.LLM{{Name: "agent-a"}, {Name: "agent-b"}},
+			preferred: "auto",
+			want:      "agent-a", // first in available, regardless of results ordering
+		},
+		{
+			// Same idea, completion order swapped — must still pick
+			// agent-a because it's first in the roster. If this test
+			// flips when results are reordered, the fallback is
+			// reading results-order somewhere and v0.6.7's
+			// determinism contract has regressed.
+			name: "custom-named agents — roster order wins (results swapped)",
+			results: []multi.ReviewResult{
+				{LLM: "agent-a", Output: "# A"},
+				{LLM: "agent-b", Output: "# B"},
+			},
+			available: []cli.LLM{{Name: "agent-a"}, {Name: "agent-b"}},
+			preferred: "auto",
+			want:      "agent-a",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := selectMergeLLM(tc.results, tc.available, tc.preferred)
+			switch {
+			case got == nil && tc.want != "":
+				t.Errorf("got nil, want %s", tc.want)
+			case got != nil && got.Name != tc.want:
+				t.Errorf("got %s, want %s", got.Name, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateMergeWith(t *testing.T) {
 	active := []cli.LLM{{Name: "claude"}, {Name: "gemini"}}
 	cases := []struct {
 		mergeWith string
 		wantErr   bool
 	}{
-		{"", false},        // unset is fine
-		{"auto", false},    // sentinel is fine
-		{"claude", false},  // member of active set
-		{"codex", true},    // not active — typo or misconfig
-		{"claud", true},    // typo — must error, not silently fall through
+		{"", false},       // unset is fine
+		{"auto", false},   // sentinel is fine
+		{"claude", false}, // member of active set
+		{"codex", true},   // not active — typo or misconfig
+		{"claud", true},   // typo — must error, not silently fall through
 	}
 	for _, tc := range cases {
 		err := validateMergeWith(&sharedFlags{mergeWith: tc.mergeWith}, active)
 		if (err != nil) != tc.wantErr {
 			t.Errorf("validateMergeWith(%q): err=%v, wantErr=%v", tc.mergeWith, err, tc.wantErr)
+		}
+	}
+}
+
+func TestHumanTokens_FormatBands(t *testing.T) {
+	// Three-band format documented on humanTokens:
+	//   <1k        → integer
+	//   1k-99,999  → one-decimal "k"
+	//   ≥100k      → integer "k"
+	// Pinned because review feedback flagged the docs/code drift —
+	// the CHANGELOG showed "12.3k" but the prior implementation
+	// emitted "12k". This test fails if either drifts again.
+	cases := map[int]string{
+		0:      "0",
+		456:    "456",
+		999:    "999",
+		1_000:  "1k",
+		1_234:  "1.2k",
+		4_500:  "4.5k",
+		12_300: "12.3k",
+		15_000: "15k",
+		// Top of the decimal band must truncate, not round, so
+		// 99,999 stays at "99.9k". Rounding to "100.0k" would both
+		// overstate usage at the boundary and visually crash into
+		// the next band's "100k" form.
+		99_999:  "99.9k",
+		99_950:  "99.9k",
+		99_900:  "99.9k",
+		100_000: "100k",
+		120_000: "120k",
+		543_210: "543k",
+	}
+	for n, want := range cases {
+		if got := humanTokens(n); got != want {
+			t.Errorf("humanTokens(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestFormatTokenSuffix_BehaviorByShape(t *testing.T) {
+	cases := []struct {
+		name  string
+		usage cli.TokenUsage
+		want  string
+	}{
+		{"zero usage → empty (no misleading 0/0)", cli.TokenUsage{}, ""},
+		{"split shape → in/out", cli.TokenUsage{InputTokens: 12300, OutputTokens: 4500}, " · 12.3k in / 4.5k out"},
+		{"total-only (codex legacy) → total", cli.TokenUsage{InputTokens: 18000, TotalOnly: true}, " · 18k total"},
+		{"small split", cli.TokenUsage{InputTokens: 800, OutputTokens: 200}, " · 800 in / 200 out"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatTokenSuffix(tc.usage); got != tc.want {
+				t.Errorf("formatTokenSuffix(%+v) = %q, want %q", tc.usage, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSortByRoster_RestoresDeterministicOrder(t *testing.T) {
+	// Pin the v0.6.7 determinism contract: streaming the channel
+	// produces results in completion order, but everything
+	// downstream (BuildMergeInput, buildMetadata, selectMergeLLM)
+	// must see roster order so two identical runs produce identical
+	// merge prompts. Pre-fix, the merge prompt's "Reviewer 1"
+	// could be claude in run A and codex in run B depending on
+	// which finished first — a regression from v0.6.6's deterministic
+	// shape that erodes trust without surfacing as an error.
+	roster := []cli.LLM{
+		{Name: "claude"},
+		{Name: "gemini"},
+		{Name: "codex"},
+	}
+	// Completion order: codex (fastest) → claude → gemini (slowest).
+	// Roster order should re-sort to claude, gemini, codex.
+	completionOrder := []multi.ReviewResult{
+		{LLM: "codex", Output: "c"},
+		{LLM: "claude", Output: "a"},
+		{LLM: "gemini", Output: "b"},
+	}
+	got := sortByRoster(completionOrder, roster)
+	want := []string{"claude", "gemini", "codex"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i, name := range want {
+		if got[i].LLM != name {
+			t.Errorf("got[%d].LLM = %s, want %s (full: %v)", i, got[i].LLM, name, got)
+		}
+	}
+}
+
+func TestSortByRoster_UnknownAgentSinksStable(t *testing.T) {
+	// Defensive: an agent in `results` but absent from `available`
+	// shouldn't happen in practice (active drives both) but if it
+	// ever does — say a future feature lets the orchestrator pick
+	// up an agent that wasn't in the roster — those entries land
+	// at the end in their original (completion) order rather than
+	// crashing or duplicating.
+	roster := []cli.LLM{
+		{Name: "claude"},
+		{Name: "codex"},
+	}
+	in := []multi.ReviewResult{
+		{LLM: "ghost", Output: "g1"},
+		{LLM: "codex", Output: "c"},
+		{LLM: "phantom", Output: "p"},
+		{LLM: "claude", Output: "a"},
+	}
+	got := sortByRoster(in, roster)
+	want := []string{"claude", "codex", "ghost", "phantom"}
+	for i, name := range want {
+		if got[i].LLM != name {
+			t.Errorf("got[%d].LLM = %s, want %s", i, got[i].LLM, name)
 		}
 	}
 }

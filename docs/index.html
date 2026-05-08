@@ -247,10 +247,30 @@
       background: #a0aec0;
     }
 
+    /* Inline <code> default: dark slate on white. The original rule
+       used the light terminal-green (#68d391) which was unreadable
+       on white card backgrounds (e.g. inside the scope block). The
+       terminal-block override below restores the green-on-dark look
+       for <pre><code> command snippets. */
     code {
       font-family: 'JetBrains Mono', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
       font-size: 0.92em;
+      color: #1e293b;
+    }
+
+    pre code {
       color: #68d391;
+      font-size: inherit;
+    }
+
+    /* Subtle slate pill for inline code on the scope cards so it
+       reads as "code" without the legibility issue. Scoped narrowly
+       so the dark Quick Start section's inline-styled <code> tags
+       (color: #a0aec0 on #2d3748) keep their look. */
+    .scope-col code {
+      background: #f1f5f9;
+      padding: 1px 5px;
+      border-radius: 3px;
     }
 
     /* Compact GitHub-style copy button — same size on mobile and desktop */
@@ -401,7 +421,21 @@
       border-radius: 8px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.1);
       text-align: center;
+      /* Flex column with centred main axis so the shorter cards
+         (Claude, Gemini) vertically centre their content within the
+         row's stretched height instead of leaving whitespace at the
+         bottom relative to the taller Codex card. */
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
     }
+
+    /* Inline pills (FREE / $ OpenAI) are spans whose flex behavior
+       defaults to stretch — that yanks them edge-to-edge in a flex
+       column. Pin them back to intrinsic width so they still look
+       like pills. */
+    .llm-card .badge { align-self: center; }
 
     .llm-card.free {
       border: 2px solid #48bb78;
@@ -503,9 +537,130 @@
       text-decoration: underline;
     }
 
+    .scope {
+      background: #f7fafc;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .scope-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 30px;
+      margin-top: 30px;
+    }
+
+    .scope-col {
+      padding: 24px 28px;
+      background: #fff;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .scope-col h3 {
+      margin: 0 0 12px;
+      font-size: 1.1em;
+      color: #2d3748;
+    }
+
+    /* Match the saturation of the red on the right column. #2f855a
+       was a light leaf-green that read as washed out; #22543d was
+       darker but muted; #15803d (Tailwind green-700) has comparable
+       saturation to red-700, so the two headings carry equal visual
+       weight on white. */
+    .scope-col.is h3 { color: #15803d; }
+    .scope-col.isnt h3 { color: #c53030; }
+
+    .scope-col ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .scope-col li {
+      padding: 8px 0 8px 24px;
+      position: relative;
+      font-size: 0.95em;
+      line-height: 1.5;
+      border-top: 1px solid #edf2f7;
+    }
+
+    .scope-col li:first-child { border-top: none; }
+
+    .scope-col.is li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: #38a169;
+      font-weight: 700;
+    }
+
+    .scope-col.isnt li::before {
+      content: "✕";
+      position: absolute;
+      left: 0;
+      color: #e53e3e;
+      font-weight: 700;
+    }
+
+    /* Checklist CTA — light tinted band so it reads as a deliberate
+       call-out, distinct from the regular white sections, but quieter
+       than the dark Quick Start section. Centred copy + cta-buttons
+       reuses the existing button styles. */
+    .checklist-cta {
+      background: linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%);
+      border-top: 1px solid #e2e8f0;
+      border-bottom: 1px solid #e2e8f0;
+      text-align: center;
+    }
+
+    .checklist-cta h2 {
+      margin-bottom: 16px;
+    }
+
+    .checklist-cta-lead {
+      font-size: 1.05em;
+      max-width: 720px;
+      margin: 0 auto 14px;
+      color: #2d3748;
+    }
+
+    .checklist-cta-lead-sub {
+      font-size: 0.95em;
+      max-width: 720px;
+      margin: 0 auto 28px;
+      color: #4a5568;
+    }
+
+    .checklist-cta .cta-buttons {
+      margin-bottom: 0;
+    }
+
+    .checklist-cta .btn-primary {
+      background: #15803d;
+      color: white;
+      box-shadow: 0 2px 8px rgba(21, 128, 61, 0.2);
+    }
+
+    .checklist-cta .btn-primary:hover {
+      background: #166534;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 14px rgba(21, 128, 61, 0.3);
+    }
+
+    .checklist-cta .btn-secondary {
+      color: #2d3748;
+      border-color: #cbd5e0;
+    }
+
+    .checklist-cta .btn-secondary:hover {
+      background: rgba(45, 55, 72, 0.05);
+      border-color: #2d3748;
+    }
+
     @media (max-width: 768px) {
       h1 { font-size: 2em; }
       .tagline { font-size: 1.1em; }
+      .scope-grid { grid-template-columns: 1fr; }
       .features { grid-template-columns: 1fr; }
       .cta-buttons { flex-direction: column; align-items: stretch; }
       .btn { text-align: center; }
@@ -532,6 +687,38 @@
       <p class="trust-line">Open-source &middot; MIT Licensed &middot; No telemetry &middot; No SaaS</p>
     </div>
   </header>
+
+  <section class="scope">
+    <div class="container">
+      <h2>What it is, what it isn't</h2>
+      <div class="scope-grid">
+        <div class="scope-col is">
+          <h3>What it is</h3>
+          <ul>
+            <li>Reads your auth state from local files only — env vars and parsed contents of <code>~/.claude/sessions/</code>, <code>~/.gemini/google_accounts.json</code>, <code>~/.codex/auth.json</code> (to detect login state); never transmits credentials</li>
+            <li>Each LLM call goes against the endpoint <em>you</em> configured — vendor CLI subprocess (multi-LLM mode) or HTTP to your <code>provider.base_url</code> (single-LLM fallback); your account, your key, your quota</li>
+            <li>A local CLI that reviews a git diff using LLMs you've already authenticated</li>
+            <li>An orchestrator that runs Claude / Gemini / Codex CLIs in parallel and merges findings into one report</li>
+            <li>BYOK — your API key, requests go direct to the vendor (no middleman server)</li>
+            <li>A pre-commit gate — exits non-zero on <code>major</code> / <code>critical</code> findings so hooks can block the commit</li>
+            <li>A single Go binary — no Node, no Python, no Docker, no telemetry</li>
+          </ul>
+        </div>
+        <div class="scope-col isnt">
+          <h3>What it isn't</h3>
+          <ul>
+            <li>A keychain scraper or credential-exfil tool — auth files are read locally to determine readiness, never sent anywhere</li>
+            <li>A proxy, mirror, or reseller running between you and the LLM — no local-review-operated relay, no shared capacity</li>
+            <li>A replacement for Claude's <code>/review</code> or <code>/simplify</code> — those are single-prompt commands; this is multi-LLM diff orchestration with merge and storage</li>
+            <li>"Code never leaves your machine" — the diff still goes to whichever LLM you authenticate (run Ollama for true offline)</li>
+            <li>A SaaS — no hosted dashboard, no account, no team collaboration features</li>
+            <li>A linter or static analyzer — it's LLM-based, with the heuristic tradeoffs that implies</li>
+            <li>A chat interface — reads a diff, prints findings, exits</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <section>
     <div class="container">
@@ -661,9 +848,12 @@
         </div>
         <div class="llm-card paid">
           <h3>Codex</h3>
-          <p>ChatGPT Plus subscription <strong>or</strong> OpenAI API key</p>
-          <span class="badge badge-paid">Paid (either way)</span>
-          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Disabled by default. API key path is pay-per-token (usually cheapest for occasional review).</p>
+          <p>ChatGPT Plus or OpenAI API key</p>
+          <span class="badge badge-paid">$ OpenAI</span>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Enabled when authenticated</p>
+          <p style="margin-top: 8px; font-size: 0.75em; color: #888; font-style: italic;">
+            You pay OpenAI. <strong>local-review</strong> is 100% free.
+          </p>
         </div>
       </div>
     </div>
@@ -705,6 +895,24 @@
       <p class="lang-footnote">
         More language packs on the way — <a href="https://github.com/mshykov/local-review/blob/main/CONTRIBUTING.md#adding-a-prompt-pack">add yours →</a>
       </p>
+    </div>
+  </section>
+
+  <section class="checklist-cta">
+    <div class="container">
+      <h2>Want the checklist behind the tool?</h2>
+      <p class="checklist-cta-lead">
+        Every rule local-review applies is published as a human-readable checklist —
+        OWASP 2025-aligned, with severity tiers, concrete measurables, and the
+        specialist-review prompts you don't get from generic checklists.
+      </p>
+      <p class="checklist-cta-lead-sub">
+        Use it for manual reviews, paste it into your team wiki, or run <code>local-review review</code> to get the same rules executed by an LLM in seconds.
+      </p>
+      <div class="cta-buttons">
+        <a href="https://github.com/mshykov/local-review/blob/main/CHECKLIST.md" class="btn btn-primary">📋 Open the Checklist</a>
+        <a href="https://github.com/mshykov/local-review#install" class="btn btn-secondary">Run it on your code</a>
+      </div>
     </div>
   </section>
 

@@ -63,6 +63,7 @@ func runDoctor(out io.Writer) error {
 	// vice versa.
 	overrides := map[string]string{}
 	customEnvVars := map[string]string{}
+	models := map[string]string{}
 	cfg, cfgErr := loadConfig()
 	if cfgErr != nil {
 		// Surface the failure inline. doctor's whole job is "tell me
@@ -84,6 +85,14 @@ func runDoctor(out io.Writer) error {
 			if c.APIKeyEnv != "" {
 				customEnvVars[name] = c.APIKeyEnv
 			}
+			// Surface the configured model so doctor exposes "which
+			// weights will run" — pre-fix the user only learned the
+			// model name when `review` printed the roster, too late
+			// to catch a misconfigured model before triggering an
+			// expensive call.
+			if c.Model != "" {
+				models[name] = c.Model
+			}
 		}
 	}
 	llms := cli.DetectAllWithOverrides(overrides)
@@ -94,7 +103,7 @@ func runDoctor(out io.Writer) error {
 		if status == statusReady {
 			readyCount++
 		}
-		printLLMRow(w, llm, status, auth)
+		printLLMRow(w, llm, status, auth, models[llm.Name])
 	}
 
 	fmt.Fprintln(w)
@@ -128,10 +137,10 @@ func (ew *errWriter) Write(p []byte) (int, error) {
 type llmStatus int
 
 const (
-	statusReady          llmStatus = iota // installed, version-detected, authenticated
-	statusBrokenInstall                   // binary found, version probe failed
-	statusNotAuthed                       // installed + version-detected, but no credentials
-	statusNotInstalled                    // binary not in PATH
+	statusReady         llmStatus = iota // installed, version-detected, authenticated
+	statusBrokenInstall                  // binary found, version probe failed
+	statusNotAuthed                      // installed + version-detected, but no credentials
+	statusNotInstalled                   // binary not in PATH
 )
 
 // classify returns both the bucket and the underlying authStatus so
@@ -155,8 +164,15 @@ func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 	return statusReady, auth
 }
 
-// printLLMRow emits one CLI's full diagnostic block.
-func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus) {
+// printLLMRow emits one CLI's full diagnostic block. configuredModel
+// is the cfg.LLMs[name].Model value (or empty); for ready rows we
+// always print a model line — either the pinned value or a "vendor's
+// default" notice with a pin instruction — so users can tell "I
+// didn't pin one" apart from "config didn't load" at a glance, AND
+// know how to take control. For not-authed rows we still elide when
+// no model is pinned, since the row's primary signal is the auth fix
+// and the model line would be noise.
+func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string) {
 	displayName := getDisplayName(llm.Name)
 
 	switch status {
@@ -164,11 +180,24 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus) 
 		fmt.Fprintf(out, "✓ %-15s v%-10s ready\n", displayName, llm.Version)
 		fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
 		fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
+		if configuredModel != "" {
+			fmt.Fprintf(out, "    model:         %s\n", configuredModel)
+		} else {
+			// No pinned model — invoker doesn't pass --model and the
+			// vendor CLI picks its own default. Surface this with a
+			// pin-instruction so users debugging "why did claude run
+			// model X" know how to take control. Pre-fix said "(CLI
+			// default)" which was reported as a non-answer.
+			fmt.Fprintf(out, "    model:         vendor's default — pin via `llms.%s.model:` to override\n", llm.Name)
+		}
 
 	case statusNotAuthed:
 		fmt.Fprintf(out, "⚠ %-15s v%-10s not authenticated\n", displayName, llm.Version)
 		fmt.Fprintf(out, "    installed: %s\n", llm.Path)
 		fmt.Fprintf(out, "    fix:       %s\n", auth.hint)
+		if configuredModel != "" {
+			fmt.Fprintf(out, "    model:     %s\n", configuredModel)
+		}
 
 	case statusBrokenInstall:
 		fmt.Fprintf(out, "⚠ %-15s install broken\n", displayName)

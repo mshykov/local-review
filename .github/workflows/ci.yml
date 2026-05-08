@@ -16,6 +16,20 @@ jobs:
           cache: true
       - name: Tidy + verify
         run: go mod tidy && git diff --exit-code go.mod go.sum
+      - name: Gofmt
+        # CLAUDE.md mandates `gofmt -s + go vet` as the style baseline.
+        # Pre-v0.7.2 we ran `go vet` only and gofmt drift slipped through
+        # (caught by self-review on main vs v0.6.6). `gofmt -l` lists
+        # files that would change; non-empty output → fail the gate.
+        run: |
+          fmt_diff=$(gofmt -s -l .)
+          if [ -n "$fmt_diff" ]; then
+            echo "::error::gofmt -s drift in:"
+            echo "$fmt_diff"
+            echo
+            echo "Run 'gofmt -s -w .' locally and commit."
+            exit 1
+          fi
       - name: Vet
         run: go vet ./...
       - name: Test

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -126,8 +128,14 @@ func applyConfig(llm cli.LLM, cfg config.Config) cli.LLM {
 			llm.APIKey = c.APIKey
 		}
 	}
-	if llm.TimeoutSec == 0 {
-		llm.TimeoutSec = 120
+	if llm.TimeoutSec <= 0 {
+		// Falls back to cli.DefaultTimeoutSec — same constant the
+		// orchestrator's RunParallel fallback and the roster's
+		// display fallback use, so what the user sees ("timeout:
+		// Ns") matches what actually fires.
+		// `<= 0` (rather than `== 0`) protects against a negative
+		// `timeout_seconds: -1` typo in user config.
+		llm.TimeoutSec = cli.DefaultTimeoutSec
 	}
 	return llm
 }
@@ -143,7 +151,17 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	if err := validateMergeWith(sf, active); err != nil {
 		return err
 	}
-	printAgentRoster(active, configDisabled, cfg)
+
+	// Resolve commit + branch up front so the opening roster line can
+	// show "Reviewing <branch> (<sha>) with N LLMs..." — printing the
+	// roster before resolution would force a generic header and the
+	// user would have to scroll past N pages of findings to learn what
+	// they actually reviewed.
+	commit, branch, err := resolveCommitBranch(mode, ref)
+	if err != nil {
+		return err
+	}
+	printAgentRoster(active, configDisabled, cfg, branch, commit)
 
 	diffs, err := git.Extract(mode, ref)
 	if err != nil {
@@ -174,59 +192,180 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return err
 	}
 
-	commit, branch, err := resolveCommitBranch(mode, ref)
-	if err != nil {
-		return err
+	// Preflight: drop agents whose context window can't fit the
+	// (prompt + diff) payload. Pre-v0.7 every agent saw the diff
+	// regardless of size; oversized prompts surfaced as model-
+	// specific failures (claude SIGKILL, codex 4xx, gemini quietly
+	// surviving via its larger window) — confusing and expensive.
+	// Catching this here means: predictable up-front skip with an
+	// actionable "use a smaller scope" hint, no tokens spent on a
+	// call that would 4xx.
+	active, skipped, promptDiffTokens := cli.PreflightFilter(active, systemPrompt, diffStr)
+	if len(skipped) > 0 {
+		fmt.Fprint(os.Stderr, cli.SkipSummary(skipped))
+		fmt.Fprintln(os.Stderr)
+	}
+	if len(active) == 0 {
+		// Every agent's context was too small. Bailing here saves
+		// the user a 2-minute fan-out where each agent fails
+		// individually with a vague stderr.
+		return fmt.Errorf("prompt+diff is too large for every active agent: ~%d tokens estimated; try a smaller scope (`local-review commit HEAD` or `local-review staged`)", promptDiffTokens)
 	}
 
 	startTime := time.Now()
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)
 
-	results, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
+	resultsCh, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
 	if err != nil {
 		return fmt.Errorf("run reviews: %w", err)
 	}
 
-	for i, r := range results {
+	// Stream per-agent completion lines as each agent finishes. The
+	// channel closes after all agents report, so the loop also serves
+	// as the synchronisation point before merge. Emission order =
+	// completion order; we dropped the [N/M] numeric prefix so the
+	// non-roster order doesn't read as a bug. Lines look like:
+	//   claude ✓ (51.5s) · 12.3k in / 4.5k out
+	//   codex ✗ timeout — try `local-review commit HEAD` for ...
+	results := make([]multi.ReviewResult, 0, len(active))
+	anyFailed := false
+	for r := range resultsCh {
+		results = append(results, r)
 		if r.Error != nil {
-			fmt.Printf("[%d/%d] %s ✗ (%v)\n", i+1, len(results), r.LLM, r.Error)
+			anyFailed = true
+			// r.Error is the invoker's ClassifyExit output — already
+			// has the actionable hint inline. No "review failed:"
+			// prefix or "(output: )" wrapping.
+			fmt.Printf("%s ✗ %s%s\n", r.LLM, r.Error, formatTokenSuffix(r.Tokens))
 		} else {
-			fmt.Printf("[%d/%d] %s ✓ (%.1fs)\n", i+1, len(results), r.LLM, r.Duration.Seconds())
+			fmt.Printf("%s ✓ (%.1fs)%s\n", r.LLM, r.Duration.Seconds(), formatTokenSuffix(r.Tokens))
 		}
 	}
 	fmt.Println()
 
-	successCount := multi.CountSuccessful(results)
-	metadata := buildMetadata(commit, branch, results, startTime)
+	// Sort results back to roster order before any downstream use.
+	// Display lines above already printed in completion order (the
+	// streaming UX); everything from here on (BuildMergeInput,
+	// buildMetadata, selectMergeLLM) is order-sensitive and must be
+	// deterministic across runs on identical input. Pre-fix, two
+	// identical `local-review review` runs could produce different
+	// merge prompts (reviewer #1 was "claude" in one run, "codex" in
+	// the next, depending on which finished first) — a regression
+	// from v0.6.6 that erodes trust without surfacing as an error.
+	results = sortByRoster(results, active)
 
-	if successCount == 0 {
-		metadata.Merge.Status = "skipped"
-		_, _ = storage.SaveMetadata(branch, commit, metadata)
-		return fmt.Errorf("all %d LLM reviews failed", len(results))
+	// Surface the on-disk path so users know where to find raw
+	// per-LLM output — especially when one agent failed and they
+	// want to debug from saved partial state. Storage uses
+	// SanitizeBranch internally; we mirror that here so the path
+	// we print actually exists.
+	storageDir := filepath.Join(cfg.Storage.BasePath, git.SanitizeBranchName(branch))
+	if anyFailed {
+		fmt.Fprintf(os.Stderr, "Per-LLM reviews saved to → %s/\n\n", storageDir)
+	} else {
+		// On a clean run print to stdout (it's informational, not a
+		// warning) and quietly so it doesn't compete with the merged
+		// findings the user is about to read.
+		fmt.Printf("Per-LLM reviews → %s/\n\n", storageDir)
 	}
 
-	mergedPath, mergedContent := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
+	successCount := multi.CountSuccessful(results)
+	mergeable := multi.CountWithOutput(results)
+	rmode := classifyRunMode(results) // computed once here; reused in the report-path block below to avoid a second traversal
+	metadata := buildMetadata(commit, branch, results, startTime)
+
+	// Short-circuit on "nothing for the merger to consume." Pre-fix
+	// this checked successCount (Error == nil), which let two cases
+	// slip past:
+	//
+	//   1. SaveReview-failed-with-output: Error is set but Output is
+	//      populated. successCount drops to 0 even though the merger
+	//      could still consolidate the in-memory output. Pre-fix we
+	//      aborted with "all N reviews failed" — wrong, the reviews
+	//      ran, only persistence failed.
+	//   2. CLI-exited-zero-with-empty-output: Error is nil but Output
+	//      is "". successCount stays positive but BuildMergeInput
+	//      drops the empty entry, so the merger ran on 0 reviews and
+	//      classifyRunMode fell through to runModeMerge — both giving
+	//      the user a "Merged review" framing for what was actually
+	//      nothing.
+	//
+	// CountWithOutput matches what the merger actually consumes, so
+	// "0 mergeable" is the correct threshold for "stop here." When
+	// successCount disagrees (case 1: 0 successCount but mergeable),
+	// the merge proceeds and the gate runs. When mergeable is 0 we
+	// pick the right error message based on whether anyone "succeeded"
+	// in the loose Error == nil sense.
+	if mergeable == 0 {
+		metadata.Merge.Status = "skipped"
+		if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
+			// Best-effort: per-LLM markdown saves either succeeded or
+			// would already have surfaced their own errors via the
+			// streaming completion lines. Surface the metadata failure
+			// to stderr so the user knows provenance is missing, but
+			// don't fail the run — they came here for the gate exit
+			// code, not for metadata.json.
+			fmt.Fprintf(os.Stderr, "Warning: failed to save metadata.json (review markdown still on disk): %v\n", err)
+		}
+		failed := len(results) - successCount
+		empty := successCount // succeeded (Error nil) but no Output; classifier already counted these as non-mergeable
+		switch {
+		case failed == len(results):
+			return fmt.Errorf("all %d LLM reviews failed", len(results))
+		case empty == len(results):
+			return fmt.Errorf("all %d LLM reviews returned empty output (no findings to merge)", len(results))
+		default:
+			// Mixed: some agents crashed, others exited zero with blank
+			// output. Pre-fix this case printed "all returned empty
+			// output" which misled users into debugging the wrong
+			// problem (an empty-output bug vs a crash).
+			return fmt.Errorf("no LLM produced output: %d failed, %d returned empty (nothing to merge)", failed, empty)
+		}
+	}
+
+	mergedPath, mergedContent, mergeTokens := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
 	if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to save metadata: %v\n", err)
+		// Same posture as the no-mergeable-output branch above: review
+		// markdown files are already on disk, the gate's exit code is
+		// the value the user came for, so we don't fail the run on a
+		// metadata.json save error. Print a clear stderr warning so
+		// the user knows provenance + token totals are missing for
+		// this run and can investigate (full disk, read-only fs,
+		// permission denied).
+		fmt.Fprintf(os.Stderr, "Warning: failed to save metadata.json (review markdown still on disk): %v\n", err)
 	}
 
 	fmt.Println()
-	fmt.Printf("✓ %d/%d LLMs succeeded\n", successCount, len(results))
-	if mergedPath != "" {
-		fmt.Printf("Merged report: %s\n", mergedPath)
+	// "produced output" mirrors the classifier (CountWithOutput) and
+	// the merger's actual consumption criterion. Pre-fix this line
+	// said "succeeded" using CountSuccessful (Error == nil), which
+	// drifted from the rest of the surface — a SaveReview-failed-
+	// with-output run would print "0/3 succeeded" while the merger
+	// happily consolidated all 3 outputs and the gate fired correctly.
+	//
+	// Token total aggregates per-LLM review tokens + merge-step
+	// tokens. Omitted entirely when every agent reported zero (CLI
+	// version too old to surface usage) — printing "0 tokens" would
+	// mislead users into thinking the call was free.
+	totalTokens := aggregateTokens(results, mergeTokens)
+	if totalTokens > 0 {
+		fmt.Printf("✓ %d/%d LLMs produced output · total %s · ~%s tokens\n", mergeable, len(results), time.Since(startTime).Round(time.Second), humanTokens(totalTokens))
+	} else {
+		fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", mergeable, len(results), time.Since(startTime).Round(time.Second))
 	}
-
-	// Per-LLM reviews succeeded but the merge step didn't produce
-	// content (mergeLLM unavailable, merger error, save failed, or the
-	// merger returned only whitespace). Without a merged report the
-	// blocking-finding gate can't run, and returning nil would silently
-	// exit 0 — a pre-commit hook would treat the commit as clean even
-	// though no gate ever fired. TrimSpace (not just == "") catches the
-	// "merger returned `\n`" variant that codex flagged as bypassing the
-	// v0.5.1 fix.
-	if strings.TrimSpace(mergedContent) == "" {
-		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s but the blocking-finding gate did not run", cfg.Storage.BasePath)
+	if mergedPath != "" {
+		// Report-path label uses `rmode` (computed above alongside `mergeable`)
+		// so we don't call CountWithOutput a second time. Degraded/solo runs
+		// use distinct labels so users can tell single-source from consensus.
+		switch rmode {
+		case runModeDegraded:
+			fmt.Printf("Single-LLM report (%d of %d agents produced no output): %s\n", len(results)-mergeable, len(results), mergedPath)
+		case runModeSolo:
+			fmt.Printf("Report: %s\n", mergedPath)
+		default:
+			fmt.Printf("Merged report: %s\n", mergedPath)
+		}
 	}
 
 	// Two independent signals trip the gate (any one is enough). False
@@ -237,16 +376,34 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	//     seeing the (possibly-truncated) per-LLM reviews.
 	//  2. Each per-LLM review's full Output — defends against the
 	//     8 KB merger-input truncation hiding blocking findings past
-	//     the cut. The merger only sees the first 8 KB of each
-	//     reviewer; without this independent check, a verbose
-	//     reviewer that puts a critical finding past byte 8000 would
-	//     produce a false-clean exit. The on-disk per-LLM file has
-	//     always had the full output; this just scans it before we
-	//     decide.
+	//     the cut, AND against merger failures (merger.Merge error,
+	//     SaveMerged error, mergeLLM unavailable, whitespace-only
+	//     output) where signal #1 is unavailable. The on-disk per-LLM
+	//     file has always had the full output; this just scans it
+	//     before we decide.
 	//
-	// Returning the sentinel (rather than os.Exit) lets cobra and
-	// main() unwind defers.
-	if mergedHasBlocking(mergedContent) || anyPerLLMHasBlocking(results) {
+	// Compute the per-LLM signal first so a merge-step failure with
+	// blocking per-LLM findings still trips the gate. Pre-fix the
+	// empty-merged-content guard short-circuited before this scan
+	// could run, so a merger timeout or rate-limit collapsed an
+	// exit-2 into exit 1 — and the documented pre-commit hook treats
+	// tool failures (exit 1) as "let the commit through." Returning
+	// the sentinel (rather than os.Exit) lets cobra and main()
+	// unwind defers.
+	perLLMBlocking := anyPerLLMHasBlocking(results)
+
+	if strings.TrimSpace(mergedContent) == "" {
+		// Merge step produced nothing (mergeLLM unavailable, merger
+		// error, save failed, whitespace-only). Per-LLM reviews are
+		// saved on disk and we still scanned them above.
+		if perLLMBlocking {
+			fmt.Fprintln(os.Stderr, "Warning: merge step produced no output, but per-LLM reviews flagged blocking findings — gate firing on the per-LLM signal.")
+			return errBlockingFindings
+		}
+		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s and showed no blocking findings, but the merged report is unavailable", cfg.Storage.BasePath)
+	}
+
+	if mergedHasBlocking(mergedContent) || perLLMBlocking {
 		return errBlockingFindings
 	}
 	return nil
@@ -406,17 +563,50 @@ func validateMergeWith(sf *sharedFlags, active []cli.LLM) error {
 	return fmt.Errorf("--merge-with %q not in active set %v", sf.mergeWith, names)
 }
 
-// printAgentRoster prints "Running review with N agents" plus one line
-// per agent showing model name and CLI version, plus a discoverability
-// hint when an authed agent is disabled in config.
-func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Config) {
-	fmt.Printf("Running review with %d LLM%s...\n", len(active), pluralS(len(active)))
+// printAgentRoster prints "Reviewing <branch> (<short-sha>) with N agents"
+// plus one line per agent showing model name and CLI version, plus a
+// discoverability hint when an authed agent is disabled in config.
+//
+// Including branch and commit on the first line tells the user *what*
+// they're reviewing without scrolling — important when the same shell
+// is jumping between checkouts and `local-review review` is the first
+// thing they see after a `git switch`.
+func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Config, branch, commit string) {
+	short := commit
+	if len(short) > 7 {
+		short = short[:7]
+	}
+	if branch != "" && short != "" {
+		fmt.Printf("Reviewing %s (%s) with %d LLM%s...\n", branch, short, len(active), pluralS(len(active)))
+	} else {
+		fmt.Printf("Running review with %d LLM%s...\n", len(active), pluralS(len(active)))
+	}
 	for _, llm := range active {
 		model := modelFor(llm.Name, cfg)
+		// Surface the per-agent timeout on the roster line so users
+		// know up-front "if this agent doesn't return within Ns,
+		// we'll mark it failed." Pre-v0.7 the timeout was invisible
+		// until the failure line displayed it as part of the hint;
+		// having it visible at run-start lets users notice "wait, my
+		// timeout is still 120s — that's why claude on a big diff
+		// keeps failing" before they spend tokens on the run.
+		timeout := llm.TimeoutSec
+		if timeout == 0 {
+			timeout = cli.DefaultTimeoutSec
+		}
 		if model != "" {
-			fmt.Printf("  • %s %s (CLI v%s)\n", llm.Name, model, llm.Version)
+			// agent_<model> reads as a single identifier (think
+			// docker image names) so users see "what model is
+			// running" at a glance.
+			fmt.Printf("  • %s_%s (CLI v%s) | timeout: %ds\n", llm.Name, model, llm.Version, timeout)
 		} else {
-			fmt.Printf("  • %s (CLI v%s)\n", llm.Name, llm.Version)
+			// No model pinned → the invoker doesn't pass --model and
+			// the vendor CLI picks its own current default. We can't
+			// know which model that is without probing the CLI (no
+			// portable way), so we say so explicitly and tell the
+			// user how to take control. Pre-fix this said "model: CLI
+			// default" which the user reported as a non-answer.
+			fmt.Printf("  • %s (CLI v%s) | timeout: %ds — using vendor's default model; pin via `llms.%s.model:`\n", llm.Name, llm.Version, timeout, llm.Name)
 		}
 	}
 	if len(configDisabled) > 0 {
@@ -438,6 +628,81 @@ func pluralS(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// aggregateTokens returns the sum of input+output tokens across all
+// per-LLM reviews plus the merge step's own usage. Used by the
+// closing-line "~Nk tokens" summary. Returns 0 when nothing was
+// reported — the closing-line caller checks for this and omits the
+// "tokens" suffix entirely so users don't see "0 tokens" and assume
+// the call was free.
+func aggregateTokens(results []multi.ReviewResult, mergeTokens cli.TokenUsage) int {
+	total := mergeTokens.Total()
+	for _, r := range results {
+		total += r.Tokens.Total()
+	}
+	return total
+}
+
+// humanTokens formats a token count for the per-LLM and closing
+// summary lines. Three bands:
+//   - Below 1000:   raw integer (e.g. "456") because at small scales
+//     "0.5k" hides meaningful precision.
+//   - 1k to 99,999: "k" values truncated to one decimal, dropping
+//     ".0" for whole thousands (e.g. "1k", "1.2k",
+//     "12.3k", "15k", "99.9k") because cost-sensitive
+//     users need tens-of-tokens resolution here, where
+//     the gap between 4.5k and 5.0k is real money on a
+//     paid tier.
+//   - 100k and up:  rounded "k" (e.g. "120k") because at six figures
+//     the decimal is just noise.
+//
+// Truncation (not rounding) in the middle band is deliberate so
+// 99,999 renders as "99.9k" rather than "100.0k" — band-crossing
+// would both look wrong (the band cap is supposed to be 99.9k)
+// and overstate usage by ~1 token at the boundary. We'd rather
+// under-report by <100 tokens than tip over.
+//
+// CodeRabbit's auto-fix proposed a simpler "always divide by 1000,
+// drop .0 for whole thousands" form. Rejected: that path renders
+// 999 as "1.0k" (rounding hides the sub-1k case) and 156000 as
+// "156.0k" (the trailing .0 is noise at six figures). The three-band
+// shape covers the same docs example (12300 → "12.3k") without
+// either regression.
+func humanTokens(n int) string {
+	if n < 1_000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 100_000 {
+		// Integer math truncates toward zero — no rounding-up across
+		// the band boundary. tenths = floor(n/100); whole = tenths/10;
+		// frac = tenths%10 ∈ [0,9].
+		tenths := n / 100
+		whole := tenths / 10
+		frac := tenths % 10
+		if frac == 0 {
+			return fmt.Sprintf("%dk", whole)
+		}
+		return fmt.Sprintf("%d.%dk", whole, frac)
+	}
+	rounded := (n + 500) / 1000
+	return fmt.Sprintf("%dk", rounded)
+}
+
+// formatTokenSuffix returns " · 12.3k in / 4.5k out" for the per-LLM
+// completion line, or " · 12.3k total" when only the combined total
+// is known (codex's legacy stdout shape pre-v0.128 doesn't split
+// input vs output — formatting as "X in / 0 out" would mislead
+// users into thinking the model returned nothing). Returns "" when
+// usage wasn't reported at all so we don't print "0 in / 0 out".
+func formatTokenSuffix(u cli.TokenUsage) string {
+	if u.IsZero() {
+		return ""
+	}
+	if u.TotalOnly {
+		return fmt.Sprintf(" · %s total", humanTokens(u.Total()))
+	}
+	return fmt.Sprintf(" · %s in / %s out", humanTokens(u.InputTokens), humanTokens(u.OutputTokens))
 }
 
 // resolveCommitBranch resolves the commit hash and branch name for the
@@ -495,13 +760,63 @@ func syntheticDetachedBranch(branch, commit string) string {
 	return "detached-" + short
 }
 
+// runMode classifies a multi-LLM review by how many agents produced
+// output the merger will actually consume. The framing ("Merged review"
+// vs "Single-LLM result") and the degraded-run warning hinge on this
+// distinction — see classifyRunMode for the rules.
+type runMode int
+
+const (
+	runModeMerge    runMode = iota // ≥2 outputs; a real cross-model merge
+	runModeDegraded                // exactly 1 output out of ≥2 agents; no consensus
+	runModeSolo                    // exactly 1 output out of 1 agent; user chose --only, expected
+)
+
+// classifyRunMode picks the framing for the merge step based on how
+// many agents produced output the merger will actually see. We count
+// non-blank Output (matching BuildMergeInput's filter, which uses
+// strings.TrimSpace), not Error == nil:
+// a run where the LLM succeeded but SaveReview failed has Error != nil
+// yet Output != "", and the merger will still consume that review, so
+// the framing should reflect that. Pre-fix we used CountSuccessful and
+// would mis-flag such a run as "Degraded, only 1 of 3 succeeded" while
+// the merger was happily consolidating all 3 outputs.
+//
+// The merger still runs in every case (it's what produces the structured
+// Recommendation line the gate reads), but the user-facing language is
+// different so nobody mistakes a single-LLM fallback for cross-model
+// consensus. Zero-output runs never reach here — the caller short-
+// circuits with an "all LLMs failed" error.
+func classifyRunMode(results []multi.ReviewResult) runMode {
+	mergeable := multi.CountWithOutput(results)
+	total := len(results)
+	switch {
+	case mergeable == 1 && total > 1:
+		return runModeDegraded
+	case mergeable == 1 && total == 1:
+		return runModeSolo
+	default:
+		return runModeMerge
+	}
+}
+
 // mergeAndPrint runs the merge LLM, saves the merged report, and prints
 // it to stdout so users see findings without `cat`-ing a file. Returns
 // the saved path and the merged content; both are "" on skip/failure.
 // The content is returned so the caller can run the blocking-finding
 // gate without re-reading from disk.
-func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) (string, string) {
-	fmt.Println("Merging reviews...")
+func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) (mergedPath, mergedContent string, mergeTokens cli.TokenUsage) {
+	mode := classifyRunMode(results)
+
+	switch mode {
+	case runModeDegraded:
+		fmt.Fprintf(os.Stderr, "⚠ Only %d of %d LLMs produced output — review is single-source, no cross-model consensus.\n", multi.CountWithOutput(results), len(results))
+		fmt.Println("Reformatting single review...")
+	case runModeSolo:
+		fmt.Println("Formatting review...")
+	default:
+		fmt.Println("Merging reviews...")
+	}
 
 	preferred := cfg.Merge.PreferredLLM
 	if sf.mergeWith != "" {
@@ -511,16 +826,23 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	if mergeLLM == nil {
 		fmt.Println("Warning: no LLM available for merging (skipping merge)")
 		metadata.Merge.Status = "skipped"
-		return "", ""
+		return "", "", cli.TokenUsage{}
 	}
-	fmt.Printf("Using %s for merge...\n", mergeLLM.Name)
+	switch mode {
+	case runModeDegraded:
+		fmt.Printf("Using %s to reformat the surviving review...\n", mergeLLM.Name)
+	case runModeSolo:
+		fmt.Printf("Using %s to format the review...\n", mergeLLM.Name)
+	default:
+		fmt.Printf("Using %s for merge...\n", mergeLLM.Name)
+	}
 
 	merger, err := multi.NewMerger(*mergeLLM)
 	if err != nil {
 		fmt.Printf("Warning: failed to create merger: %v\n", err)
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return "", ""
+		return "", "", cli.TokenUsage{}
 	}
 
 	mergeInput := multi.BuildMergeInput(results, cfg.Merge.ConsensusThreshold)
@@ -530,45 +852,80 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	// with `time.Duration(0)` = no timeout = a hung merge LLM hanging
 	// the whole review.
 	mergeTimeout := time.Duration(mergeLLM.TimeoutSec) * time.Second
-	// Negative timeouts (e.g., a `timeout_sec: -1` typo) would otherwise
+	// Negative timeouts (e.g., a `timeout_seconds: -1` typo) would otherwise
 	// produce an already-expired context that cancels the merge instantly.
 	if mergeLLM.TimeoutSec <= 0 {
-		mergeTimeout = 120 * time.Second
+		mergeTimeout = time.Duration(cli.DefaultTimeoutSec) * time.Second
 	}
 	mergeCtx, cancel := context.WithTimeout(ctx, mergeTimeout)
 	defer cancel()
 
 	mergeStart := time.Now()
-	merged, err := merger.Merge(mergeCtx, mergeInput)
+	merged, mergeTokens, err := merger.Merge(mergeCtx, mergeInput)
 	mergeDuration := time.Since(mergeStart)
 
 	if err != nil {
 		fmt.Printf("Warning: merge failed: %v\n", err)
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return "", ""
+		return "", "", cli.TokenUsage{}
 	}
 
-	mergedPath, err := storage.SaveMerged(branch, commit, merged)
+	savedPath, err := storage.SaveMerged(branch, commit, merged)
 	if err != nil {
-		fmt.Printf("Warning: failed to save merged review: %v\n", err)
+		// SaveMerged failed (read-only mount, full disk, permission
+		// denied on .local-review/) — but the merger DID produce
+		// content, and the gate runs against that content. Pre-fix
+		// we returned ("", "") and the caller bailed with "merge
+		// step produced no output; gate did not run", which collapsed
+		// to a tool error (exit 1) — pre-commit hooks treat exit 1
+		// as "let the commit through" and miss the blocking finding
+		// the merger had already identified.
+		//
+		// The right move is: warn loud about the persistence failure,
+		// print the findings inline so the user can see them, and
+		// return the merged content with an empty path. The caller
+		// runs the gate on the content; the closing-line "Merged
+		// report: <path>" branch already guards on non-empty path,
+		// so it silently omits.
+		fmt.Fprintf(os.Stderr, "Warning: failed to save merged review: %v\n", err)
+		fmt.Fprintln(os.Stderr, "         findings shown below; the gate will still run, but the report is not persisted.")
+		fmt.Fprintln(os.Stderr, "         re-run after fixing the storage issue if you want a saved copy.")
+		metadata.Merge.LLM = mergeLLM.Name
 		metadata.Merge.Status = "failed"
 		metadata.Merge.Error = err.Error()
-		return "", ""
+		metadata.Merge.DurationMs = mergeDuration.Milliseconds()
+		metadata.Merge.InputTokens = mergeTokens.InputTokens
+		metadata.Merge.OutputTokens = mergeTokens.OutputTokens
+		metadata.Merge.TotalOnlyTokens = mergeTokens.TotalOnly
+		fmt.Println("─── Findings (not persisted) ───")
+		fmt.Println(merged)
+		fmt.Println("─── End ───")
+		return "", merged, mergeTokens
 	}
 
 	metadata.Merge.LLM = mergeLLM.Name
 	metadata.Merge.Status = "success"
 	metadata.Merge.DurationMs = mergeDuration.Milliseconds()
+	metadata.Merge.InputTokens = mergeTokens.InputTokens
+	metadata.Merge.OutputTokens = mergeTokens.OutputTokens
+	metadata.Merge.TotalOnlyTokens = mergeTokens.TotalOnly
 
-	fmt.Printf("✓ Merged review (%.1fs)\n\n", mergeDuration.Seconds())
+	switch mode {
+	case runModeDegraded:
+		fmt.Printf("✓ Reformatted (%.1fs) — single-LLM, no merge\n\n", mergeDuration.Seconds())
+	case runModeSolo:
+		fmt.Printf("✓ Formatted review (%.1fs)\n\n", mergeDuration.Seconds())
+	default:
+		fmt.Printf("✓ Merged review (%.1fs)\n\n", mergeDuration.Seconds())
+	}
 
 	// Print the merged review inline so users see findings without cat.
 	fmt.Println("─── Findings ───")
 	fmt.Println(merged)
 	fmt.Println("─── End ───")
 
-	return mergedPath, merged
+	return savedPath, merged, mergeTokens
 }
 
 // runSingleLLMFallback is the v0 path: hit the configured provider's
@@ -637,48 +994,98 @@ func buildMetadata(commit, branch string, results []multi.ReviewResult, startTim
 			errMsg = r.Error.Error()
 		}
 		meta.Reviews[i] = multi.ReviewMeta{
-			LLM:        r.LLM,
-			Version:    r.Version,
-			Mode:       r.Mode,
-			Status:     status,
-			DurationMs: r.Duration.Milliseconds(),
-			OutputFile: r.FilePath,
-			Error:      errMsg,
+			LLM:             r.LLM,
+			Version:         r.Version,
+			Mode:            r.Mode,
+			Status:          status,
+			DurationMs:      r.Duration.Milliseconds(),
+			OutputFile:      r.FilePath,
+			Error:           errMsg,
+			InputTokens:     r.Tokens.InputTokens,
+			OutputTokens:    r.Tokens.OutputTokens,
+			TotalOnlyTokens: r.Tokens.TotalOnly,
 		}
 	}
 	return meta
 }
 
+// sortByRoster returns results re-ordered to match the configured
+// roster order in `available`. Used after the streaming channel
+// drains to restore determinism for downstream consumers
+// (BuildMergeInput, buildMetadata, selectMergeLLM): identical runs
+// must produce identical merge prompts and metadata files
+// regardless of which agent happened to finish first.
+//
+// Stable: agents present in `results` but absent from `available`
+// (defensive — shouldn't happen in practice since active drives
+// both) keep their relative completion-order position at the end.
+func sortByRoster(results []multi.ReviewResult, available []cli.LLM) []multi.ReviewResult {
+	rank := make(map[string]int, len(available))
+	for i, llm := range available {
+		rank[llm.Name] = i
+	}
+	sorted := make([]multi.ReviewResult, len(results))
+	copy(sorted, results)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ri, oki := rank[sorted[i].LLM]
+		rj, okj := rank[sorted[j].LLM]
+		switch {
+		case oki && okj:
+			return ri < rj
+		case oki:
+			return true
+		case okj:
+			return false
+		default:
+			return false
+		}
+	})
+	return sorted
+}
+
 // selectMergeLLM picks which agent merges findings. Priority:
-// caller-preferred → auto (claude > codex > gemini) → first successful.
+// caller-preferred → auto (claude > codex > gemini) → first eligible.
+//
+// Eligibility is "produced mergeable output" (matching CountWithOutput),
+// not "Error == nil". Pre-fix a SaveReview-failed-with-output run
+// (Error != nil, Output != "") was excluded from merger candidates, so
+// when *all* saves failed selectMergeLLM returned nil and the gate
+// skipped — a tool error instead of exit 2, which pre-commit hooks
+// silently ignore. The merge step itself only needs the LLM's CLI to
+// work for the merge prompt; whether an earlier per-LLM SaveReview
+// happened to succeed is unrelated.
 func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred string) *cli.LLM {
-	successful := make(map[string]cli.LLM)
+	eligible := make(map[string]cli.LLM)
 	for _, llm := range available {
 		for _, r := range results {
-			if r.LLM == llm.Name && r.Error == nil {
-				successful[llm.Name] = llm
+			if r.LLM == llm.Name && multi.HasMergeableOutput(r) {
+				eligible[llm.Name] = llm
 				break
 			}
 		}
 	}
-	if len(successful) == 0 {
+	if len(eligible) == 0 {
 		return nil
 	}
 	if preferred != "" && preferred != "auto" {
-		if llm, ok := successful[preferred]; ok {
+		if llm, ok := eligible[preferred]; ok {
 			return &llm
 		}
 	}
 	for _, name := range []string{"claude", "codex", "gemini"} {
-		if llm, ok := successful[name]; ok {
+		if llm, ok := eligible[name]; ok {
 			return &llm
 		}
 	}
-	for _, r := range results {
-		if r.Error == nil {
-			if llm, ok := successful[r.LLM]; ok {
-				return &llm
-			}
+	// Final fallback: pick the first eligible agent in *roster* order,
+	// not results order. With v0.6.7 streaming, `results` is in
+	// completion order — iterating it for the fallback would make
+	// merge-LLM selection timing-dependent for custom-named agents
+	// (where the auto claude>codex>gemini chain doesn't match).
+	// Roster order (`available`) is deterministic across runs.
+	for _, llm := range available {
+		if l, ok := eligible[llm.Name]; ok {
+			return &l
 		}
 	}
 	return nil

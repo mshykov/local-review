@@ -245,7 +245,18 @@ npm install -g @anthropic-ai/claude-code
       "mode": "cli",
       "status": "success",
       "duration_ms": 4500,
-      "findings_count": 12
+      "findings_count": 12,
+      "input_tokens": 12300,
+      "output_tokens": 4500
+    },
+    {
+      "llm": "codex",
+      "version": "0.120",
+      "mode": "cli",
+      "status": "success",
+      "duration_ms": 9800,
+      "input_tokens": 18000,
+      "total_only_tokens": true
     },
     {
       "llm": "gemini",
@@ -258,10 +269,18 @@ npm install -g @anthropic-ai/claude-code
   "merge": {
     "llm": "claude",
     "status": "success",
-    "final_findings_count": 8
+    "final_findings_count": 8,
+    "input_tokens": 8500,
+    "output_tokens": 2100
   }
 }
 ```
+
+Token fields shipped in v0.6.6. `input_tokens`/`output_tokens` are
+omitempty — absent on runs where the CLI version didn't surface
+usage. `total_only_tokens: true` (codex pre-v0.128) means
+`input_tokens` holds the combined total and the split is unknown;
+display layers should render "Nk total" rather than "Nk in / 0 out".
 
 ## Single-LLM Fallback Path
 
@@ -346,6 +365,16 @@ Glob filtering (include/exclude) uses a custom `**` glob matcher (review.go:matc
 - **Comment intent, not mechanics** — explain *why*, never *what*
 - **Tests required** — new logic needs a unit test
 - **One-line doc comments** — exported functions/types only
+
+## Recurring failure patterns (review retrospective)
+
+`cmd/local-review/runner.go` + `cmd/local-review/doctor.go` account for ~40% of all reviewer findings across v0.4.0–v0.6.1. Both are orchestration files where multiple concepts meet. Following the rules below avoids re-living the same review iteration cycle.
+
+1. **Migrating a shared helper or contract? Grep all callers in the same commit.** Doc comments, sibling sites, README quotes, CHANGELOG, prompt templates. Drift across files is the #1 reviewer-flagged class of defect on this codebase (the `CountSuccessful` → `CountWithOutput` migration drifted across 5 review rounds before all sites aligned).
+2. **Doc comments and cobra `Long:` strings describe the *current* behavior, not yesterday's.** A comment claiming a function is "optional" while the function always fires is a bug. Update the comment in the same edit that changes the behavior.
+3. **Default to fail-closed.** `TrimSpace` for emptiness checks; check `grep` exit code separately from `sha256sum`; honor `pageInfo.hasNextPage`; refuse on invalid input rather than silently passing it through. When in doubt, return an error and let the caller decide.
+4. **Writing a v2 code path next to a v1 path? Enumerate v1's invariants explicitly and re-exercise each in v2.** Filters, severity caps, prompt-pack selection, JSON output, glob behavior — none of these carry over implicitly. PR #34 (v0.5.0 multi-LLM rewrite) shipped 5 separate "v2 dropped this" findings.
+5. **User-visible strings drift fast.** When changing a CLI output line, error message, or warning, grep the repo for the prior wording — CHANGELOG, README, prompt templates, help text, and tests likely all need to update with it.
 
 ## Pre-push Workflow (dogfooding)
 

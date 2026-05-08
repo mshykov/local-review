@@ -16,13 +16,14 @@ llms:
   claude:
     # enabled: true                     # default; omit to use auto-detect
     cli_path: claude                    # auto-detected if empty
-    model: claude-3-5-sonnet-20241022
+    # model:                            # leave unset → claude CLI uses its current default
+    #                                   # (override only if you want to pin, e.g. claude-sonnet-4-6)
     api_key_env: ANTHROPIC_API_KEY      # surfaced in the empty-key error message
     timeout_seconds: 120
 
   gemini:
     cli_path: gemini
-    model: gemini-1.5-pro
+    # model:                            # leave unset → gemini CLI picks its current default
     api_key_env: GEMINI_API_KEY         # free key from https://aistudio.google.com/apikey
     timeout_seconds: 120
 
@@ -31,7 +32,7 @@ llms:
   # Runs by default if you've authenticated. Set `enabled: false` to opt out.
   codex:
     cli_path: codex
-    model: gpt-4
+    # model:                            # leave unset → codex CLI picks its current default
     api_key_env: OPENAI_API_KEY
     timeout_seconds: 120
 

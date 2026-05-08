@@ -8,9 +8,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **`local-review bench` subcommand** — Phase 1 of issue #56 ships a reproducible benchmark harness so prompt + model changes can be measured instead of shipped on vibes. Loads a labelled dataset of diffs (`bench/dataset/<id>/{case.yaml,diff.patch}`), runs each diff through every active LLM (or pre-recorded fixtures via `--replay`), parses findings out of the markdown output, and scores precision / recall / F1 per agent plus a noise rate from `clean: true` cases. Emits a human summary by default; `--json` / `--out <file>` produces machine-readable output for diffing across commits.
+- **`local-review bench` subcommand** — Phase 1 of issue #56 ships a reproducible benchmark harness so prompt + model changes can be measured instead of shipped on vibes. Loads a labelled dataset of diffs (`bench/dataset/<id>/{case.yaml,diff.patch}`), runs each diff through every active LLM (or pre-recorded fixtures via `--replay`), parses findings out of the markdown output, and scores precision / recall / F1 per agent plus a noise rate from `clean: true` cases. Emits a human summary by default; `--json` / `--out <file>` produces machine-readable output for diffing across commits. Lives under the `Other:` group in `--help` (it's a quality-measurement utility, not a daily review action).
 - **Initial bench dataset (4 cases)** under `bench/dataset/`: `go-nil-deref-1` (correctness — nil deref + connection leak), `ts-sql-injection-1` (security — template-string SQLi), `python-shell-injection-1` (security — `shell=True` with user input), `clean-go-rename-1` (noise check — pure rename). Replay fixtures for claude / codex / gemini live under `bench/fixtures/`. See `bench/README.md` for the dataset format and how to add a case.
 - **`Bench (replay)` CI workflow** triggers on PRs touching prompt packs, the bench harness, or the dataset and runs the bench in replay mode (deterministic, no tokens, no auth). Uploads `bench-results.json` as an artifact for cross-commit diffing.
+
+## [0.7.1] - 2026-05-07
+
+### Fixed
+
+- **Claude token display: cache-served prompts no longer collapse to single-digit input.** Pre-fix, `parseClaudeJSON` excluded `cache_read_input_tokens` and `cache_creation_input_tokens` from the displayed input count on the theory that "those represent reuse, not new spend." In practice that meant a re-review of the same diff (where almost the whole prompt is served from Anthropic's prompt cache) rendered as `claude ✓ · 9 in / 5.2k out` — which read as a broken parser. v0.7.1 sums all three input components (`input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`) so the displayed `· N in` answers the question users actually have ("how big was my prompt?") rather than "how much was uncached new spend?" — that latter number lives in the vendor's billing dashboard, not the CLI summary line.
+
+- **Codex token display: regex was matching context-window indicators instead of the actual usage summary.** Pre-fix, `parseCodexStdoutTokens` used a single permissive regex `(?i)tokens(?:\s+used)?:\s*(\d[\d,]*)...` that matched *any* line containing "tokens:" — including context-window indicators (`Total tokens: 800`, `Available context tokens: 800`) elsewhere in the codex banner. On real runs this surfaced as the misleading `codex ✓ · 800 total` line on prompts that were clearly larger than 800 tokens. Worse: the regex also failed to match codex v0.128's *actual* token-summary format, which puts the label and number on **separate lines**:
+  ```
+  tokens used
+  2,415
+  ```
+  v0.7.1 splits the matcher into three strict patterns — split shape (`tokens: <in> input, <out> output`), v0.128 newline shape (`tokens used\n<total>`), and pre-v0.128 single-line legacy (`tokens used: <total>`) — each anchored with `\b` so misleading prefixes like "Total tokens" don't false-positive. Selection is **latest-position-across-all-three-patterns** rather than first-match: the assistant's reply is in the same combined buffer as the metadata and can contain pattern-shaped text, so only the rightmost match is reliably the real session summary. Real codex v0.128 stdout was captured to write the regression tests against actual output.
+
+## [0.7.0] - 2026-05-07
+
+**Theme: smarter, more visible reviews.**
+
+This minor bundles three features that, together, move multi-LLM runs from "black box that prints a report" to "tool that tells you what's about to happen, what's happening, and what each agent cost." Each feature shipped as a v0.6.x patch over the past two days; v0.7.0 frames them as one coherent narrative with a release announcement.
+
+### Bundled patch releases
+
+- **Diff-too-large preflight** *(v0.6.5, see entry below)* — agents whose context window can't fit the prompt + diff are skipped *before* the run starts, with a one-line hint on how to scope smaller. No more 5-minute fan-outs that fail with N opaque errors on squash-merged release branches or vendored-blob diffs.
+- **Per-LLM token visibility** *(v0.6.6, see entry below)* — every completion line shows what that agent consumed (`· 12.3k in / 4.5k out`); the closing line aggregates the run total. Same data persists in `<commit>_metadata.json` so paid-tier users can attribute spend per PR without round-tripping the vendor dashboard.
+- **Live progress streaming** *(v0.6.7, see entry below)* — per-agent lines print as each agent finishes, not all-at-once after the slowest one. A 5-min gemini run no longer looks like a hung terminal. Dropped the `[N/M]` numeric prefix from the per-LLM line — with streaming, the number would track "how many have finished" rather than roster position.
+
+### Fixed
+
+- **Timeout-error hint pointed at a non-existent config field.** When an agent timed out, the failure message read `... raise llms.<agent>.timeout_sec in .local-review.yml` — but the actual YAML key is `timeout_seconds`. Pasting the suggested fix into a config left it untouched. Hint and `classify_test.go` now reference `timeout_seconds`. Discovered during the v0.7 doc audit (`internal/cli/classify.go`).
+- **Landing page (`docs/index.html`) "Codex disabled by default" claim was wrong.** Codex's `Enabled` field is `nil` (= "run if active") in `Defaults()` — same posture as claude and gemini. Landing page now reads "Enabled when authenticated."
+
+### Docs
+
+- **Doc audit pass for v0.7.0 release**: `SECURITY.md` support matrix bumped (0.7.x active, 0.6.x exception-only); `CLAUDE.md` `metadata.json` example now includes the v0.6.6 token fields (`input_tokens`, `output_tokens`, `total_only_tokens`); `README.md` adds a "What's new in v0.7" callout and corrects the "structured-JSON multi-LLM is on the v0.7 roadmap" claim (now post-v0.7); cosign-signing roadmap reference in the v0.6.0 entry corrected for the same reason.
+
+## [0.6.7] - 2026-05-07
+
+### Added
+- **Live progress streaming for multi-LLM runs.** Per-agent completion lines now print as each agent finishes instead of all-at-once after the slowest one. Pre-fix, when one agent (commonly gemini-3.x-preview at 5+ min) dominated runtime, users saw the roster, then a blank terminal for minutes, then every result + the merge step + findings in a single burst — no way to tell whether the tool was working, hung, or stuck on a specific agent. Now:
+
+  ```
+  Reviewing feat/v0.6.7-live-progress (3016d29) with 3 LLMs...
+    • claude_claude-opus-4-7 (CLI v2.1.132) | timeout: 600s
+    • gemini_gemini-3.1-pro-preview (CLI v0.40.1) | timeout: 600s
+    • codex_gpt-5.3-codex (CLI v0.128.0) | timeout: 600s
+
+  codex ✓ (10.4s) · 14k in / 4k out         ← appears at t=10.4s
+  claude ✓ (51.5s) · 12.3k in / 4.5k out    ← appears at t=51.5s
+  gemini ✓ (287.1s) · 15k in / 3k out       ← appears at t=287.1s
+
+  Merging reviews...
+  ```
+
+  Emission order = completion order. The previous `[N/M]` numeric prefix was dropped because with streaming it would track "how many agents have finished" rather than roster position — visually the same but semantically different, and we'd rather drop the number than have it silently change meaning.
+
+### Internal
+- `Orchestrator.RunParallel` now returns `(<-chan ReviewResult, error)` instead of `([]ReviewResult, error)`. The channel is buffered to `len(llms)` so a slow consumer can't deadlock workers, and is closed after all per-agent goroutines finish so callers can `for r := range ch`. Per-agent failures still travel inside `ReviewResult.Error` (channel always emits one result per LLM, regardless of outcome). Added `Orchestrator.invokerFactory` (in-package test seam) so streaming behavior can be pinned with controlled-duration fakes — paid down a sliver of the parked `internal/multi/` test debt while we were here.
+
+## [0.6.6] - 2026-05-07
+
+### Added
+- **Per-LLM token usage on every review.** `local-review review` now displays input/output token counts per agent on its completion line and aggregates a total at the end of the run:
+
+  ```
+  [1/3] claude ✓ (51.5s) · 12.3k in / 4.5k out
+  [2/3] gemini ✓ (102.4s) · 15k in / 3k out
+  [3/3] codex ✓ (85.0s) · 14k in / 4k out
+  ✓ 3/3 LLMs produced output · total 2m51s · ~54k tokens
+  ```
+
+  Token counts come from each CLI's structured output (claude `--output-format json`, gemini `-o json`) or stdout metadata (codex's session-summary block). Codex pre-v0.128 reports a single combined total instead of split input/output; we render that as "Nk total" rather than the misleading "Nk in / 0 out" (the model produced output, we just don't have the breakdown). Same data persists in `<commit>_metadata.json` per-review and per-merge, so paid-tier users (codex API, claude paid) can attribute spend per PR without round-tripping the vendor dashboard.
+
+  **Minimum CLI versions for token visibility:** claude-code v1+ (any version supporting `--output-format json`), gemini-cli with `-o json` support (newer releases), codex any version. Older CLIs that lack the JSON-output flag exit non-zero on the flag and the run fails fast — there is no silent "no tokens" fallback for that case. If your run errored out after this upgrade, update the offending CLI: `npm i -g @anthropic-ai/claude-code @google/gemini-cli @openai/codex`.
+
+### Internal
+- `Invoker.Review` and `Invoker.RunPrompt` now return a `cli.TokenUsage` alongside the response. `ReviewResult.Tokens` and `MergeMeta.{InputTokens,OutputTokens,TotalOnlyTokens}` plumb the data through. `TokenUsage.TotalOnly` flags the codex legacy single-total case so display callers render "Nk total" instead of "Nk in / 0 out". JSON parsers fall back to raw text + zero usage when valid JSON has an unexpected shape (a future schema drift); they do *not* compensate for older CLIs missing the structured-output flag — those exit non-zero before the parser is reached.
+
+## [0.6.5] - 2026-05-07
+
+### Added
+- **Diff-too-large preflight.** Before fanning the diff out to agents, `local-review review` now estimates the token count (`bytes ÷ 3.5` — conservative for code) and compares against a per-agent context window: claude 200K, gemini 1M (floor for 2.5+/3.x), codex 128K (floor for gpt-4o-class). If the prompt + diff plus a 10K response margin would exceed an agent's window, the agent is skipped with a one-line warning explaining what fits and how to scope the run smaller (`local-review commit HEAD` or `local-review staged`). If *every* agent's context would overflow, the run errors out before any subprocess runs — saving the user the 2-minute fan-out + N opaque failures previously seen on squash-merged release branches and vendored-blob diffs. Agents whose name isn't in our context-window table (a future LLM, a hypothetical org-pack) pass through preflight unchanged so the rollout of a new agent type is never silently dropped.
+
+## [0.6.4] - 2026-05-06
+
+### Changed
+- **Default per-agent timeout raised from 120s → 600s (10 min).** User feedback after v0.6.3: claude (Anthropic Sonnet on a thinking model) regularly took 2–5 min on branch-sized diffs while gemini and codex finished in 80–100s. The 120s default kept timing claude out on real-world `local-review review` runs even though the agent was making forward progress. 600s gives enough headroom for a worst-case agent on a worst-case diff while still failing fast on a genuinely hung subprocess. Users who want shorter timeouts can override per-agent via `llms.<agent>.timeout_seconds:` in `.local-review.yml`. Same bump applied to: per-agent default in `Defaults()`, the `applyConfig` fallback in the runner, the `RunParallel` fallback in the orchestrator, the merge-step fallback in `mergeAndPrint`, and the v0 single-LLM API path's `Provider.TimeoutSec` (60s → 600s).
+
+## [0.6.3] - 2026-05-06
+
+### Fixed
+- **Failure lines now include actionable hints, not opaque error text.** Pre-fix, a SIGKILL'd CLI rendered as `[1/3] claude ✗ (claude review failed: signal: killed (output: ))` — three problems on one line: redundant `claude review failed:` prefix, empty-output noise (`(output: )`), and zero indication of *what to fix*. Real-user feedback was "I have all setup done, but it doesn't work — that's why users delete tools like this." Now: failures are classified by `internal/cli/ClassifyExit` into a one-line summary that always ends with an actionable next step. Examples:
+  - `[1/3] claude ✗ killed — likely out of memory or a hard timeout for claude; try a smaller diff: \`local-review commit HEAD\` (last commit), \`local-review staged\` (staged only), or pin a smaller-context model via \`llms.claude.model:\``
+  - `[1/3] claude ✗ timeout — try \`local-review commit HEAD\` for a smaller diff, or raise llms.claude.timeout_sec in .local-review.yml`
+  - `[1/3] claude ✗ exit status 1: error: API key not valid. Please pass a valid API key.`
+
+### Changed
+- **Roster format**: configured-model agents render as `<agent>_<model>` (e.g. `claude_claude-sonnet-4-6`) so users see "what model is running" at a glance. Agents without a pinned model render as `claude (CLI v2.1.131) — using vendor's default model; pin via \`llms.claude.model:\``, replacing the previous `model: CLI default` which user feedback flagged as a non-answer. `local-review doctor` mirrors the same wording.
+- **Per-LLM directory path printed after the agent block**, so users know where raw saved reviews live without grepping the storage convention. Format: `Per-LLM reviews → .local-review/reviews/<branch>/`. Routed to stderr when at least one agent failed (so it stands out as a debugging hint), stdout otherwise.
+- **Merge prompt Summary uses "Findings flagged by both reviewers" when ReviewCount==2**, instead of the abstract "2+ reviewers agree" which read as broken arithmetic to users seeing `0` next to a `REQUEST CHANGES` recommendation. N≥3 keeps the threshold-based wording since it's no longer trivially derivable from the reviewer count.
+- **Merge prompt drops the redundant `Reviewers: <names>` line from the Summary block** — the same names appear in the agent roster ~30 lines earlier.
+
+## [0.6.2] - 2026-05-06
+
+### Changed
+- **`--help` figlet banner restored.** v0.6.1 swapped the 4-line figlet for a single-line title; user feedback was that the flat line read as a regression after several releases of the figlet. Restored the small-font figlet (~70 cols) and the `term.GetSize ≥70` width gate. Non-TTY stdout still suppresses.
+- **Landing page polish**: Codex card body trimmed to match Claude / Gemini in length so the three cards have equal height; cards' content vertically centered (flex column + `justify-content: center`); scope-block "What it is" heading bumped from `#22543d` → `#15803d` to match the right column's red `#c53030` weight; inline `<code>` no longer renders as light-green-on-white (default → dark slate, scoped slate-100 pill on `.scope-col`, terminal-block green preserved on `pre code`); Codex pill renamed `Paid` → `$ OpenAI` with a 0.75em italic caveat inside the card ("You pay OpenAI. **local-review** is 100% free") so visitors don't think we charge.
+- **Prompt-pack default rules expanded** to close ~30% coverage gap vs `mgreiler/code-review-checklist`. New top-level sections: Error handling and logging; Backward compatibility and dependencies; Usability and accessibility; Ethics and fairness; Specialist review needed? Plus SOLID names under Maintainability, comment hygiene checks, file/package-location smell, code-that-is-hard-to-test smell. Updated JSON `tag` enum to match.
+
+### Fixed
+- **Banner cleanup from review-round refinements**: extracted magic `70` to a `bannerMinWidth` constant so a future banner swap updates one place; stripped the implicit leading newline from the `banner` literal so whitespace is owned by `helpHeader()` explicitly; updated the comment that claimed the banner "stays readable in CI logs" — CI logs are non-TTY and the banner is correctly suppressed there.
+
+## [0.6.1] - 2026-05-06
+
+### Changed
+- **`--help` no longer leads with a 5-line figlet banner.** Replaced with a single-line title so the `git commit` editor and CI logs don't get a wall of ASCII art every time. Subcommands now group as Review / Setup / Other (canonical `review` first, not alphabetised behind `branch`).
+- **Review header now states what's being reviewed.** `Reviewing release/v0.6.1 (1ed03b9) with 3 LLMs...` replaces the generic `Running review with 3 LLMs...` so readers don't have to scroll past N findings to learn the branch + commit.
+- **Closing line includes total wall-clock**: `✓ 2/3 LLMs produced output · total 2m 51s`. Pre-fix users had to mentally sum per-LLM durations + merge duration to know how long a run took.
+- **`local-review doctor` shows the configured model** under each ready CLI (e.g., `model: claude-3-5-sonnet-20241022`) so misconfigured models surface before triggering an expensive review.
+- **Merge prompt drops the editorial `## Conclusion` section.** `## Summary` already carries the Recommendation verdict the gate reads; the second narrative paragraph was redundant and noisy in the CLI.
+- **Multi-LLM model defaults are now empty — vendor CLIs pick their own current stable.** Pre-fix the `Defaults()` config pinned `claude-3-5-sonnet-20241022`, `gemini-1.5-pro`, and `gpt-4` — model IDs from late 2023 and 2024, between 12 and 24 months stale by v0.6.x. We don't release on a vendor-rotation cadence, so hardcoded IDs were guaranteed to age into noise. Each invoker now skips passing `--model` when no value is set, and the CLI uses whatever the vendor currently considers stable. The roster line displays `(model: CLI default)` and `local-review doctor` shows `model: (CLI default)` so users can tell "I didn't pin one" from "config didn't load." Users who want to pin a specific model should set `model:` explicitly per LLM in `.local-review.yml`. A `TestDefaults_MultiLLMModelsAreEmpty` test guards against a future contributor silently re-introducing the staleness problem.
+
+### Fixed
+- **Single-LLM-survivor runs are no longer mis-framed as "Merged review".** When a multi-LLM run starts with N≥2 agents but only 1 produces output, the review is single-source — there is no cross-model consensus. The CLI now prints a `⚠ Only X of N LLMs produced output` warning, calls the post-step "Reformatting" instead of "Merging", and labels the saved file as a "Single-LLM report". Solo runs invoked via `--only <agent>` are also relabeled to drop the misleading "Merged" framing. The closing line reads `✓ X/Y LLMs produced output · total Ns` (was "succeeded"), aligning with the classifier's basis. The classifier counts non-empty Output (matching what the merger consumes), not `Error == nil`, so a SaveReview-after-success failure doesn't accidentally demote a real merge. The merge step still runs (it produces the structured Recommendation line the pre-commit gate reads); only the user-facing language changes.
+- **Merger output no longer leaks ```markdown fence wrappers.** Some merger LLMs ignore the "Return ONLY the merged markdown report" instruction and wrap the result in a code fence; pre-fix the literal triple-backticks bled through to stdout AND were saved into `<commit>_merged.md`. The fence is now stripped when both opener and closer are present (a partial/truncated wrapper is left alone to avoid half-stripping).
+- **Consensus threshold no longer asks the impossible.** Pre-fix the merge prompt always said "if 3+ reviewers agree, consolidate" even when only 2 agents ran — the LLM apologised in its own summary line ("0 (only 2 reviewers, but 3 issues have 2/2 consensus)"), reading as a broken template. The threshold is now clamped to the actual reviewer count before being passed into the prompt.
+
+### Docs
+- **README and landing page gain a "What it is, what it isn't" block** at the top, before the feature list. Heads off the recurring confusions that surfaced in launch feedback (vs Claude's `/simplify`, "is it really local?", SaaS vs CLI, LLM vs linter).
 
 ## [0.6.0] - 2026-05-05
 
@@ -23,7 +151,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-LLM honors `review.include` / `review.exclude` globs.** Previously the multi path bypassed the filter entirely and reviewed files the user had told it to skip.
 - **`local-review review` (already in v0.5) gains `--only` strictness**: when `--only` matches no ready agents (typo, unauthed agent), the run errors out instead of silently falling back to the configured `provider:` — that fallback would have sent the diff to a different vendor than the one named, a privacy / cost footgun.
 - **Multi-LLM blocking gate has two independent signals**: the merged report AND each per-LLM Output (full, before merger truncation). Defends against a verbose reviewer pushing a Critical finding past the 8 KB merger-input cap.
-- **`install.sh` verifies SHA-256 checksums** of release tarballs. Each release now ships a `checksums.txt` manifest; the installer downloads it alongside the tarball and verifies before extracting. Defends against accidental corruption and basic CDN/MITM tampering. Cosign signing is on the v0.7 roadmap for compromised-release-key defense.
+- **`install.sh` verifies SHA-256 checksums** of release tarballs. Each release now ships a `checksums.txt` manifest; the installer downloads it alongside the tarball and verifies before extracting. Defends against accidental corruption and basic CDN/MITM tampering. Cosign signing is on the post-v0.7 roadmap for compromised-release-key defense (originally targeted v0.7; deferred — v0.7.0 ships without it).
 
 ### Changed
 - **`ParseSeverity` defaults to `major` for unknown values** (was `warning`). LLM typos (`"criticl"`, `"sev-high"`, `"BLOCKER"`) used to silently demote out of the blocking range, hiding real findings from the pre-commit hook. Now: unknown → fail-closed at major. **Heads-up:** previously-passing reviews where the LLM emitted a typo'd severity may now block; rerun with the typo corrected, or treat the new failure as the gate working correctly.
@@ -43,7 +171,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ollama "no API key" path works.** When `base_url` points at localhost / 127.x / ::1, the empty-key check is skipped — required for the documented fully-offline workflow.
 - **Globs compile once, not per file.** Pre-fix `matchGlob` re-compiled the regex inside the per-file loop; a 500-file diff with 5 globs cost 2,500 compiles. Plus: `**/dist/**` now correctly anchors to a path-segment boundary (was matching `src/mydist/file`), and bracket character classes (`[0-9]`, `[!a-z]`) actually work.
 - **Fail-closed on all-invalid include globs.** Previously `include: ["[!]"]` (and other compile-error patterns) silently *expanded* the review to every file because the empty `includeRE` was treated as "no include filter".
-- **`Authorization` / `--json` / `--min-severity` / `--max-findings` ignored in multi-LLM** — README now states this explicitly instead of "passes them through with a warning". Multi-LLM emits a stderr warning when those flags are set but otherwise drops them; the structured-JSON multi-LLM mode is on the v0.7 roadmap.
+- **`Authorization` / `--json` / `--min-severity` / `--max-findings` ignored in multi-LLM** — README now states this explicitly instead of "passes them through with a warning". Multi-LLM emits a stderr warning when those flags are set but otherwise drops them; the structured-JSON multi-LLM mode is on the post-v0.7 roadmap (deferred from v0.7.0; unparking when the third user asks).
 - **`mergeAndPrint` truncates per-review output to 8 KB** before feeding the merger, defending against verbose reviewers blowing the merger's context window. Independent gate signal scans the full per-LLM Output to catch findings past the cutoff.
 - **Git refs are validated** — `--`-prefixed refs (e.g. `local-review commit -c`) and refs with NUL/newline are rejected to defend against `git` flag-injection.
 - **Output write errors propagate** — `WriteText` and `configCmd` no longer silently exit 0 on broken pipe / disk full.

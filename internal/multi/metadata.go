@@ -25,6 +25,32 @@ type ReviewMeta struct {
 	FindingsCount int    `json:"findings_count,omitempty"`
 	OutputFile    string `json:"output_file,omitempty"`
 	Error         string `json:"error,omitempty"`
+	// InputTokens / OutputTokens are prompt and response *size* in
+	// tokens — not billing numbers. Sourced from each CLI's
+	// structured output (claude / gemini JSON, codex stdout
+	// metadata) when available. For Anthropic, InputTokens
+	// includes cache-read and cache-creation tokens (Anthropic
+	// discounts cache reads ~10× at the billing layer, but for
+	// "how big was the prompt" we want the full count).
+	//
+	// **Aggregation caveat:** summing across ReviewMeta entries
+	// gives an *approximate prompt-byte volume*, not a billable
+	// total. For Anthropic specifically, cache reads inflate the
+	// sum on repeat runs of the same prompt — the cached portion
+	// is counted in every ReviewMeta even though Anthropic only
+	// charges full price the first time. For dollar spend, use
+	// the vendor's billing dashboard. Both 0 means usage was
+	// indeterminate. omitempty keeps backward-compat for readers
+	// that don't know about these fields.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
+	// TotalOnlyTokens=true means input/output split is unknown and
+	// InputTokens holds the combined total (codex pre-v0.128 stdout
+	// shape). Aggregation tools should still sum InputTokens +
+	// OutputTokens — the total is in InputTokens, OutputTokens is 0
+	// — but display-layer tools should show "Nk total" rather than
+	// "Nk in / 0 out".
+	TotalOnlyTokens bool `json:"total_only_tokens,omitempty"`
 }
 
 // MergeMeta holds details about the merge operation.
@@ -35,6 +61,16 @@ type MergeMeta struct {
 	DeduplicationRemoved int    `json:"deduplication_removed,omitempty"`
 	DurationMs           int64  `json:"duration_ms,omitempty"`
 	Error                string `json:"error,omitempty"`
+	// InputTokens / OutputTokens for the merge step's own LLM call,
+	// same shape and semantics as ReviewMeta — prompt/response
+	// *size*, not billed amount. Aggregating across ReviewMeta +
+	// MergeMeta gives approximate prompt volume but inflates on
+	// Anthropic cached re-runs (see ReviewMeta doc above for the
+	// caveat). For dollar spend, the vendor billing dashboard is
+	// authoritative.
+	InputTokens     int  `json:"input_tokens,omitempty"`
+	OutputTokens    int  `json:"output_tokens,omitempty"`
+	TotalOnlyTokens bool `json:"total_only_tokens,omitempty"`
 }
 
 // Save writes the metadata to a JSON file.

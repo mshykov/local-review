@@ -96,10 +96,16 @@ func Defaults() Config {
 	return Config{
 		// v0: single-LLM API mode defaults
 		Provider: Provider{
-			BaseURL:    "https://api.openai.com/v1",
-			Model:      "gpt-4o-mini",
-			APIKeyEnv:  "LOCAL_REVIEW_API_KEY",
-			TimeoutSec: 60,
+			BaseURL:   "https://api.openai.com/v1",
+			Model:     "gpt-4o-mini",
+			APIKeyEnv: "LOCAL_REVIEW_API_KEY",
+			// 10 minutes. The v0 single-LLM API path is usually fast,
+			// but a long thinking-model response on a big diff can run
+			// 3-5 min; user feedback after v0.6.3 was that the prior
+			// 60s default surfaced as confusing timeouts on real branch
+			// reviews. Per-config override still works for users who
+			// want shorter timeouts.
+			TimeoutSec: 600,
 		},
 		Review: Review{
 			MinSeverity:  "warning",
@@ -107,21 +113,38 @@ func Defaults() Config {
 			ExcludeGlobs: []string{"**/*.lock", "**/*.snap", "**/dist/**", "**/build/**"},
 		},
 
-		// v0.1: multi-LLM defaults
+		// v0.1: multi-LLM defaults.
+		//
+		// Model is intentionally empty for every agent. We rely on the
+		// vendor CLI's own current default rather than hardcoding model
+		// IDs in our config — those go stale within months (the v0.1
+		// defaults pinned claude-3-5-sonnet-20241022, gemini-1.5-pro,
+		// and gpt-4, all 12-24 months out of date by v0.6.x). Each
+		// invoker (internal/cli/invoker.go) only passes --model when
+		// non-empty, so an empty default leaves the CLI on whatever it
+		// currently considers stable. Users who want to pin a specific
+		// model should set `model:` explicitly in .local-review.yml.
+		// Per-LLM timeout default is 10 minutes. The pre-v0.6.4 default
+		// of 120s surfaced as user-reported "timeout" failures on the
+		// most-used review path (`local-review review` against a
+		// branch's full diff): gemini and codex were finishing in 80–
+		// 100s but claude (sonnet on a thinking model) regularly took
+		// 2–5 min on the same diff and timed out. 600s gives enough
+		// headroom for a worst-case agent on a worst-case diff while
+		// still failing fast on a genuinely hung subprocess. Users
+		// can lower per-agent via `llms.<agent>.timeout_seconds:`.
 		LLMs: map[string]LLMConfig{
 			"claude": {
 				Enabled:    boolPtr(true),
 				CLIPath:    "claude",
-				Model:      "claude-3-5-sonnet-20241022",
 				APIKeyEnv:  "ANTHROPIC_API_KEY",
-				TimeoutSec: 120,
+				TimeoutSec: 600,
 			},
 			"gemini": {
 				Enabled:    boolPtr(true),
 				CLIPath:    "gemini",
-				Model:      "gemini-1.5-pro",
 				APIKeyEnv:  "GEMINI_API_KEY",
-				TimeoutSec: 120,
+				TimeoutSec: 600,
 			},
 			"codex": {
 				// Enabled is intentionally nil — defaults to "run if active".
@@ -129,9 +152,8 @@ func Defaults() Config {
 				// but we only invoke it when the user has explicitly authenticated,
 				// so running by default doesn't surprise anyone with a bill.
 				CLIPath:    "codex",
-				Model:      "gpt-4",
 				APIKeyEnv:  "OPENAI_API_KEY",
-				TimeoutSec: 120,
+				TimeoutSec: 600,
 			},
 		},
 		Merge: MergeConfig{

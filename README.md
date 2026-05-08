@@ -20,10 +20,31 @@
   <a href="#install">Install</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#multi-llm-reviews">Multi-LLM</a> •
+  <a href="CHECKLIST.md">Checklist</a> •
   <a href="https://mshykov.github.io/local-review">Website</a>
 </p>
 
+> 📋 **Looking for the human-readable code review checklist this tool implements?** See [**CHECKLIST.md**](CHECKLIST.md) — OWASP 2025-aligned, with severity tiers and concrete measurables. Use it for human reviews, or run `local-review review` to get an LLM pass against the same rules.
+
+> ✨ **New in v0.7** — *Smarter, more visible reviews.* Three changes you'll notice on your first run after upgrading:
+>
+> - **Diff-too-large preflight.** Agents whose context window can't fit the prompt + diff are skipped *before* the run starts, with a one-line hint on how to scope smaller. No more 5-minute fan-outs that fail with N opaque errors.
+> - **Per-LLM token visibility.** Each completion line shows the prompt and response size for that agent (`· 12.3k in / 4.5k out`); the closing line aggregates the run total. Same data persists in `<commit>_metadata.json`. (For Anthropic, "in" includes cache-read tokens — these numbers are *prompt size*, not billed amount; check your vendor dashboard for actual spend.)
+> - **Live progress streaming.** Per-agent lines print as each agent finishes — no more blank terminal while the slow one grinds. See [CHANGELOG](CHANGELOG.md#070---2026-05-07) for the full notes.
+
 ---
+
+## What it is, what it isn't
+
+| ✅ What it **is** | ❌ What it **isn't** |
+| --- | --- |
+| Reads your auth state from local files only — env vars and parsed contents of `~/.claude/sessions/`, `~/.gemini/google_accounts.json`, `~/.codex/auth.json` (to detect login state); never transmits credentials | A keychain scraper or credential-exfil tool — auth files are read locally to determine readiness, never sent anywhere |
+| Each LLM call goes against the endpoint *you* configured — vendor CLI subprocess (multi-LLM mode) or HTTP to your `provider.base_url` (single-LLM fallback); your account, your key, your quota | A proxy, mirror, or reseller running between you and the LLM — no local-review-operated relay, no shared capacity |
+| A local CLI that reviews a git diff using LLMs you've already authenticated | A replacement for Claude's `/review` or `/simplify` — those are single-prompt commands; this is multi-LLM diff orchestration |
+| An orchestrator that runs Claude / Gemini / Codex CLIs in parallel and merges findings into one report | "Code never leaves your machine" — the diff still goes to whichever LLM you authenticate (run Ollama for true offline) |
+| BYOK — your API key, requests go direct to the vendor (no middleman server) | A SaaS — no hosted dashboard, no account, no team collaboration features |
+| A pre-commit gate — exits non-zero on `major` / `critical` findings so hooks can block the commit | A linter or static analyzer — it's LLM-based, with the heuristic tradeoffs that implies |
+| A single Go binary — no Node, no Python, no Docker, no telemetry | A chat interface — reads a diff, prints findings, exits |
 
 ## Why
 
@@ -105,7 +126,7 @@ local-review review --merge-with claude
 **How it works:**
 1. Detects installed LLM CLIs and which are authenticated (`local-review doctor`)
 2. Runs every authenticated CLI in parallel
-3. Saves each review to `.local-review/reviews/<branch>/<commit>_<llm>.md`
+3. Saves each review to `.local-review/reviews/<branch>/<commit>_<llm>_<version>.md`
 4. Merges findings (dedup, consensus tagging) into one report
 5. Prints the merged report to stdout (also saved as `<commit>_merged.md`)
 
@@ -217,7 +238,7 @@ Common flags:
 | `--max-findings <n>` | Cap output (single-LLM fallback only) |
 | `--json` | Emit JSON (single-LLM fallback only — see below) |
 
-In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the v0.7 roadmap.
+In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the post-v0.7 roadmap — no fixed date; we'll unpark it when the third user asks for it.
 
 Config wins by default; flags override config at runtime (e.g., `--only codex` runs codex even if your config sets `codex.enabled: false`).
 
@@ -243,14 +264,31 @@ See [`docs/prompt-packs.md`](docs/prompt-packs.md) for how to write or override 
 
 - **No multi-file refactor reasoning.** local-review reviews diffs, not architectures.
 - **No auto-fix / auto-PR.** Findings are advisory.
-- **No GitHub integration in the binary.** The `--json` output is structured for piping into your CI's PR-comment tool of choice. (A `local-review github` mode is on the roadmap.)
+- **No GitHub integration in the binary.** The `--json` output is structured for piping into your CI's PR-comment tool of choice. A native `local-review github` mode is parked — open an issue if you need it.
 - **No telemetry.** None. Ever.
+
+### On the roadmap
+
+These are queued and will land in priority order; ping the issue tracker if you want to influence the sequence.
+
+1. **Org-config fetching** *(near-term)* — an `org:` block in your `.local-review.yml` (with a `config_url:` field) will fetch + cache an org-wide policy YAML, so a team can ship a single repo-local config that pulls org defaults from a central URL. Example shape:
+   ```yaml
+   org:
+     config_url: https://your-internal-host/local-review.yml
+   ```
+2. **Structured JSON multi-LLM output** — the merger will emit markdown plus a JSON envelope so CI integrations don't have to text-scrape. Demand-pull: open an issue if you need it.
+3. **Cosign release signing** — `install.sh` already verifies SHA-256 checksums (defense against accidental corruption + basic tampering). Cosign signatures will add stronger supply-chain provenance: every release tarball signed via keyless OIDC at build time, verified by the installer against the GitHub Actions identity. Useful for enterprise installs that need to prove an artifact came from this repo's release pipeline and wasn't swapped at the channel/CDN layer.
 
 ## For organizations
 
 Distributing to a few hundred engineers? Two patterns work:
 
-1. **Org config repo.** Drop a `.local-review.yml` in each project that sets `org.config_url: https://your-internal-host/local-review.yml`. (Org-config fetching is on the roadmap; today, just commit the YAML to each repo.)
+1. **Org config repo.** Drop a `.local-review.yml` in each project that sets:
+   ```yaml
+   org:
+     config_url: https://your-internal-host/local-review.yml
+   ```
+   (Org-config fetching is the next planned feature — see "On the roadmap" above; today, just commit the YAML to each repo.)
 2. **One install command in onboarding.** `curl -fsSL <install.sh> | sh` plus an env var = done.
 
 ## Privacy

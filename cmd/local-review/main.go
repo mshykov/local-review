@@ -25,23 +25,23 @@ import (
 	"github.com/mshykov/local-review/internal/git"
 )
 
+// bannerMinWidth is the minimum terminal column count at which the banner
+// renders without line-wrapping. Matches the width of the banner's longest line.
+const bannerMinWidth = 70
+
 // banner is the figlet small-font "LOCAL-REVIEW" art shown atop --help.
 // Small font fits in ~70 columns vs the original block font's ~120, so
-// it stays readable on narrow tmux panes, the `git commit` editor, and
-// most CI logs without wrapping. helpHeader() still suppresses it for
-// non-TTY stdout (pipes/files) so machine-readable callers get clean
-// text.
-const banner = `
-   _    ___   ___   _   _       ___ _____   _____ _____      __
+// it stays readable on narrow tmux panes and the `git commit` editor.
+// helpHeader() suppresses it for non-TTY stdout (pipes/files) so
+// machine-readable callers get clean text, and gates on terminal width
+// so it doesn't garble narrow terminals.
+const banner = `   _    ___   ___   _   _       ___ _____   _____ _____      __
   | |  / _ \ / __| /_\ | |  ___| _ \ __\ \ / /_ _| __\ \    / /
   | |_| (_) | (__ / _ \| |_|___|   / _| \ V / | || _| \ \/\/ /
-  |____\___/ \___/_/ \_\____|  |_|_\___| \_/ |___|___| \_/\_/
-`
+  |____\___/ \___/_/ \_\____|  |_|_\___| \_/ |___|___| \_/\_/`
 
 // helpHeader returns the banner when stdout is a wide-enough terminal,
-// or an empty string otherwise. The new small-font banner is ~70 cols
-// (was ~120 with block font), so the gate relaxes from 100 → 70 — most
-// terminals comfortably fit it.
+// or an empty string otherwise.
 //
 // We use term.GetSize on the stdout fd. $COLUMNS isn't reliable here —
 // shells don't export it to child processes by default, so falling
@@ -52,10 +52,12 @@ func helpHeader() string {
 		return ""
 	}
 	w, _, err := term.GetSize(fd)
-	if err != nil || w < 70 {
+	if err != nil || w < bannerMinWidth {
 		return ""
 	}
-	return banner + "\n"
+	// Two newlines: one ends the last banner line, the second
+	// provides a blank-line gap before the Long description text.
+	return banner + "\n\n"
 }
 
 // sharedFlags collects every flag accepted by the review-shape commands.
@@ -81,6 +83,12 @@ type sharedFlags struct {
 }
 
 func main() {
+	// Preserve AddCommand insertion order in --help so the canonical
+	// `review` appears first inside the Review group instead of being
+	// alphabetised behind `branch`/`commit`. Cobra's default sort hides
+	// the most-used command at the bottom.
+	cobra.EnableCommandSorting = false
+
 	var sf sharedFlags
 
 	root := &cobra.Command{
@@ -128,15 +136,36 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.PersistentFlags().StringVar(&sf.codexModel, "codex-model", "", "override codex's model")
 	root.PersistentFlags().StringVar(&sf.mergeWith, "merge-with", "", "agent to use for merging findings (default: auto)")
 
-	root.AddCommand(reviewCmd(&sf))
-	root.AddCommand(stagedCmd(&sf))
-	root.AddCommand(commitCmd(&sf))
-	root.AddCommand(branchCmd(&sf))
-	root.AddCommand(versionCmd())
-	root.AddCommand(configCmd(&sf))
-	root.AddCommand(doctorCmd())
-	root.AddCommand(initCmd())
-	root.AddCommand(benchCmd())
+	// Group commands so --help reads as three sections (Review / Setup /
+	// Other) instead of one alphabetical wall. Cobra renders any command
+	// without a GroupID under "Additional Commands:", so we also wire the
+	// auto-generated help/completion commands into the "other" group.
+	root.AddGroup(
+		&cobra.Group{ID: "review", Title: "Review:"},
+		&cobra.Group{ID: "setup", Title: "Setup:"},
+		&cobra.Group{ID: "other", Title: "Other:"},
+	)
+	root.SetHelpCommandGroupID("other")
+	root.SetCompletionCommandGroupID("other")
+
+	addGrouped := func(group string, cmd *cobra.Command) {
+		cmd.GroupID = group
+		root.AddCommand(cmd)
+	}
+
+	addGrouped("review", reviewCmd(&sf))
+	addGrouped("review", stagedCmd(&sf))
+	addGrouped("review", commitCmd(&sf))
+	addGrouped("review", branchCmd(&sf))
+	addGrouped("setup", initCmd())
+	addGrouped("setup", doctorCmd())
+	addGrouped("setup", configCmd(&sf))
+	addGrouped("other", versionCmd())
+	// bench is a quality-measurement utility for prompt + model
+	// changes — neither a daily review action nor a setup step.
+	// Lives under "Other:" alongside `version` so the help screen
+	// stays focused on the workflows users run every day.
+	addGrouped("other", benchCmd())
 
 	if err := root.Execute(); err != nil {
 		// errBlockingFindings is a sentinel — review found major/critical
