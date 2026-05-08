@@ -1,0 +1,19 @@
+id: go-nil-deref-1
+title: Nil deref of *User after early return on error
+language: go
+description: |
+  After fetchUser returns (nil, err), the caller logs the error but
+  continues to dereference user.ID. The diff also drops the deferred
+  rows.Close() that the original code had — connection leak.
+expected:
+  - file: store/user_store.go
+    line: 24
+    category: correctness
+    severity: major
+    note: u.ID dereferenced when fetchUser returned (nil, err)
+  - file: store/user_store.go
+    line: 18
+    window: 4
+    category: correctness
+    severity: warning
+    note: missing rows.Close() — connection leak

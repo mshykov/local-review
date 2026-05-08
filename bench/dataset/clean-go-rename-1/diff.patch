@@ -1,0 +1,17 @@
+## File: counter/counter.go
+@@ -1,12 +1,12 @@
+ package counter
+
+ // CountTrue returns how many entries in xs are true.
+ func CountTrue(xs []bool) int {
+-	n := 0
++	count := 0
+ 	for _, x := range xs {
+ 		if x {
+-			n++
++			count++
+ 		}
+ 	}
+-	return n
++	return count
+ }

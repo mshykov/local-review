@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`local-review bench` subcommand** — Phase 1 of issue #56 ships a reproducible benchmark harness so prompt + model changes can be measured instead of shipped on vibes. Loads a labelled dataset of diffs (`bench/dataset/<id>/{case.yaml,diff.patch}`), runs each diff through every active LLM (or pre-recorded fixtures via `--replay`), parses findings out of the markdown output, and scores precision / recall / F1 per agent plus a noise rate from `clean: true` cases. Emits a human summary by default; `--json` / `--out <file>` produces machine-readable output for diffing across commits. Lives under the `Other:` group in `--help` (it's a quality-measurement utility, not a daily review action).
+- **Initial bench dataset (4 cases)** under `bench/dataset/`: `go-nil-deref-1` (correctness — nil deref + connection leak), `ts-sql-injection-1` (security — template-string SQLi), `python-shell-injection-1` (security — `shell=True` with user input), `clean-go-rename-1` (noise check — pure rename). Replay fixtures for claude / codex / gemini live under `bench/fixtures/`. See `bench/README.md` for the dataset format and how to add a case.
+- **`Bench (replay)` CI workflow** triggers on PRs touching prompt packs, the bench harness, or the dataset and runs the bench in replay mode (deterministic, no tokens, no auth). Uploads `bench-results.json` as an artifact for cross-commit diffing.
+
 ## [0.7.1] - 2026-05-07
 
 ### Fixed

@@ -1,0 +1,15 @@
+id: python-shell-injection-1
+title: Shell injection via subprocess shell=True with user input
+language: python
+description: |
+  archive_repo() runs `tar` via subprocess.run(..., shell=True) where
+  the path is built from a user-supplied repo name. A repo argument
+  containing `; rm -rf ~` would execute. Fix is shell=False with an
+  argv list.
+expected:
+  - file: scripts/archive.py
+    line: 9
+    window: 2
+    category: security
+    severity: critical
+    note: shell=True with f-string built from user input → command injection

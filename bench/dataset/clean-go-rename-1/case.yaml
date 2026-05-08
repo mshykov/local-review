@@ -1,0 +1,10 @@
+id: clean-go-rename-1
+title: Pure rename refactor — no behavioural change
+language: go
+description: |
+  This diff renames a local variable `n` to `count` in a single
+  function. No logic changes, no API changes, no exported-symbol
+  changes. A clean reviewer should be silent (or at most emit a nit
+  about something stylistically debatable; we count anything beyond
+  zero as noise).
+clean: true

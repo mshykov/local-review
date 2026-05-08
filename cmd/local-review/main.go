@@ -161,6 +161,11 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	addGrouped("setup", doctorCmd())
 	addGrouped("setup", configCmd(&sf))
 	addGrouped("other", versionCmd())
+	// bench is a quality-measurement utility for prompt + model
+	// changes — neither a daily review action nor a setup step.
+	// Lives under "Other:" alongside `version` so the help screen
+	// stays focused on the workflows users run every day.
+	addGrouped("other", benchCmd())
 
 	if err := root.Execute(); err != nil {
 		// errBlockingFindings is a sentinel — review found major/critical

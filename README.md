@@ -222,6 +222,7 @@ local-review init                    # interactive setup (writes .local-review.y
 local-review doctor                  # check LLM installations + auth state
 local-review config                  # print resolved config (API keys masked)
 local-review version                 # print version
+local-review bench                   # run the review-quality benchmark suite (see bench/README.md)
 ```
 
 Common flags:
