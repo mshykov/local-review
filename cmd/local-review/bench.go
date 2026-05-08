@@ -245,6 +245,9 @@ func dedupeStrings(in []string) []string {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]string, 0, len(in))
 	for _, s := range in {
+		if s == "" {
+			continue
+		}
 		if _, ok := seen[s]; ok {
 			continue
 		}
