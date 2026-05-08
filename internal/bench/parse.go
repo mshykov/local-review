@@ -70,40 +70,57 @@ func ParseFindings(markdown string) []ProducedFinding {
 	severity := ""
 
 	for _, line := range strings.Split(markdown, "\n") {
-		if h := severityHeadingRE.FindStringSubmatch(line); h != nil {
-			// Only update severity when the heading carries a
-			// recognised severity word. The previous form
-			// unconditionally clobbered it on every heading, so a
-			// `### Details` or `### Suggested fix` sub-heading inside
-			// a "## Major Issues" block would silently strip severity
-			// from the findings underneath. Inherit the parent
-			// severity instead — that's what reviewers actually mean
-			// when they nest sub-sections.
-			if s := inferSeverity(h[1]); s != "" {
-				severity = s
-			}
+		if next, isHeading := tryUpdateSeverity(severity, line); isHeading {
+			severity = next
 			continue
 		}
+		out = appendFindingsFromLine(out, seen, severity, line)
+	}
+	return out
+}
 
-		matches := fileLineRE.FindAllStringSubmatch(line, -1)
-		for _, m := range matches {
-			file, lineStr := pickPathAndLine(m)
-			n, err := strconv.Atoi(lineStr)
-			if err != nil || n <= 0 {
-				continue
-			}
-			key := severity + "|" + file + ":" + lineStr
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, ProducedFinding{
-				File:     file,
-				Line:     n,
-				Severity: severity,
-				Snippet:  strings.TrimSpace(line),
-			})
+// tryUpdateSeverity returns (newSeverity, true) when line is any
+// markdown heading; (current, false) when it isn't a heading at all.
+//
+// A non-severity heading (e.g. `### Details`, `### Suggested fix`)
+// returns (current, true) — the line is consumed (so the path-line
+// scanner doesn't false-match a path mentioned in the heading) but
+// severity carries over from the enclosing section. This matches
+// what reviewers actually mean when they nest sub-headings inside
+// `## Major Issues` blocks.
+func tryUpdateSeverity(current, line string) (string, bool) {
+	h := severityHeadingRE.FindStringSubmatch(line)
+	if h == nil {
+		return current, false
+	}
+	if s := inferSeverity(h[1]); s != "" {
+		return s, true
+	}
+	return current, true
+}
+
+// appendFindingsFromLine scans one line for path:line tokens and
+// appends each new (severity, file, line) tuple to out. seen is
+// mutated in place — callers share one map across all lines so the
+// same anchor under one severity isn't recorded twice.
+func appendFindingsFromLine(out []ProducedFinding, seen map[string]struct{}, severity, line string) []ProducedFinding {
+	for _, m := range fileLineRE.FindAllStringSubmatch(line, -1) {
+		file, lineStr := pickPathAndLine(m)
+		n, err := strconv.Atoi(lineStr)
+		if err != nil || n <= 0 {
+			continue
 		}
+		key := severity + "|" + file + ":" + lineStr
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, ProducedFinding{
+			File:     file,
+			Line:     n,
+			Severity: severity,
+			Snippet:  strings.TrimSpace(line),
+		})
 	}
 	return out
 }

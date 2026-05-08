@@ -89,66 +89,102 @@ bench/README.md for how to add a new case.`,
 // runBench dispatches a bench invocation: load config + dataset, pick
 // the LLMs to run, score, render. strict makes per-case errors a
 // non-zero exit; resolved by the caller from --strict + mode default.
+//
+// Decomposed into small steps so each is independently obvious — the
+// pre-decomposition shape was a single function that tripped Sonar's
+// cognitive-complexity budget (26 vs. 15 allowed) and was hard to
+// read top-to-bottom.
 func runBench(ctx context.Context, bf benchFlags, strict bool) error {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	cases, llms, err := loadBenchInputs(bf)
+	if err != nil {
+		return err
+	}
+
+	rep, err := executeBench(ctx, bf, cases, llms)
+	if err != nil {
+		return err
+	}
+
+	if err := emitBenchReport(bf, rep); err != nil {
+		return err
+	}
+
+	if strict {
+		return checkStrictFailures(rep)
+	}
+	return nil
+}
+
+// loadBenchInputs resolves the dataset and the LLM set the bench will
+// run against. Returns an actionable error when no LLMs were resolved
+// (more useful than a silent zero-row report).
+func loadBenchInputs(bf benchFlags) ([]bench.Case, []cli.LLM, error) {
 	cases, err := bench.LoadDataset(bf.dataset)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-
 	llms, err := pickBenchLLMs(bf)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if len(llms) == 0 {
-		return fmt.Errorf("no LLMs to bench (run `local-review doctor` for status, or pass --replay <dir> to use recorded fixtures)")
+		return nil, nil, fmt.Errorf("no LLMs to bench (run `local-review doctor` for status, or pass --replay <dir> to use recorded fixtures)")
 	}
+	return cases, llms, nil
+}
 
+// executeBench wires the bench package together: pick source mode,
+// run, stamp the dataset path back onto the report.
+func executeBench(ctx context.Context, bf benchFlags, cases []bench.Case, llms []cli.LLM) (bench.Report, error) {
 	source := bench.SourceLive
 	if bf.replayDir != "" {
 		source = bench.SourceReplay
 	}
-
 	rep, err := bench.Run(ctx, cases, bench.Options{
 		LLMs:      llms,
 		Source:    source,
 		ReplayDir: bf.replayDir,
 	})
 	if err != nil {
-		return err
+		return bench.Report{}, err
 	}
 	rep.Dataset = bf.dataset
+	return rep, nil
+}
 
+// emitBenchReport handles the three output sinks: optional JSON file
+// via --out, then either JSON-to-stdout (--json) or the text summary.
+// Splitting this out is what got the cognitive-complexity sum under
+// the limit.
+func emitBenchReport(bf benchFlags, rep bench.Report) error {
 	if bf.outFile != "" {
 		if err := writeBenchJSONFile(bf.outFile, rep); err != nil {
 			return fmt.Errorf("write --out file: %w", err)
 		}
 	}
-
 	if bf.jsonOut {
-		if err := bench.WriteJSON(os.Stdout, rep); err != nil {
-			return err
-		}
-	} else {
-		if err := bench.WriteText(os.Stdout, rep); err != nil {
-			return err
-		}
+		return bench.WriteJSON(os.Stdout, rep)
 	}
+	return bench.WriteText(os.Stdout, rep)
+}
 
-	if strict {
-		var failures []string
-		for _, lr := range rep.LLMReports {
-			for _, cs := range lr.Cases {
-				if cs.Error != "" {
-					failures = append(failures, fmt.Sprintf("%s/%s: %s", lr.LLM, cs.CaseID, cs.Error))
-				}
+// checkStrictFailures collects any per-case errors and returns them
+// as one summarised error. Used by --strict (default ON in --replay)
+// to make CI fail on a missing fixture or a CLI invocation failure.
+func checkStrictFailures(rep bench.Report) error {
+	var failures []string
+	for _, lr := range rep.LLMReports {
+		for _, cs := range lr.Cases {
+			if cs.Error != "" {
+				failures = append(failures, fmt.Sprintf("%s/%s: %s", lr.LLM, cs.CaseID, cs.Error))
 			}
 		}
-		if len(failures) > 0 {
-			return fmt.Errorf("strict mode: %d case(s) errored: %s", len(failures), strings.Join(failures, "; "))
-		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("strict mode: %d case(s) errored: %s", len(failures), strings.Join(failures, "; "))
 	}
 	return nil
 }

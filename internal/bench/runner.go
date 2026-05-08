@@ -223,12 +223,31 @@ func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (s
 //     half the cases shouldn't have its timing skewed by the other
 //     half's zero-duration error frames.
 func fillAggregates(lr *LLMReport, durations []time.Duration) {
-	var tp, fp, fn int
-	cleanCases := 0
-	cleanFindings := 0
-	nonCleanScored := 0
+	tally := tallyCases(lr.Cases)
+	lr.Precision, lr.Recall, lr.F1 = qualityScores(tally)
+	if tally.cleanCases > 0 {
+		lr.NoiseRate = float64(tally.cleanFindings) / float64(tally.cleanCases)
+	}
+	fillTimingAggregates(lr, durations)
+}
 
-	for _, cs := range lr.Cases {
+// caseTally collects the running sums fillAggregates needs. Lives as
+// its own type so the per-bucket logic doesn't have to share lexical
+// scope with the unrelated timing pass.
+type caseTally struct {
+	tp, fp, fn     int
+	cleanCases     int
+	cleanFindings  int
+	nonCleanScored int
+}
+
+// tallyCases bins each scored case into clean vs. non-clean and
+// accumulates TP/FP/FN over the non-clean ones. Clean cases by
+// definition have zero expected findings, so they don't contribute
+// to precision/recall — only to the noise-rate denominator.
+func tallyCases(cases []CaseScore) caseTally {
+	var t caseTally
+	for _, cs := range cases {
 		if cs.Error != "" {
 			continue
 		}
@@ -238,62 +257,72 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 		// keeps the buckets disjoint.
 		isClean := cs.TruePositives == 0 && cs.FalseNegatives == 0 && len(cs.Matched) == 0 && len(cs.Missed) == 0
 		if isClean {
-			cleanCases++
-			cleanFindings += cs.Produced
+			t.cleanCases++
+			t.cleanFindings += cs.Produced
 			continue
 		}
-		nonCleanScored++
-		tp += cs.TruePositives
-		fp += cs.FalsePositives
-		fn += cs.FalseNegatives
+		t.nonCleanScored++
+		t.tp += cs.TruePositives
+		t.fp += cs.FalsePositives
+		t.fn += cs.FalseNegatives
 	}
+	return t
+}
 
-	if nonCleanScored == 0 {
-		// Leave Precision/Recall/F1 at their zero values. A consumer
-		// can detect "no measurement" by checking that nonCleanScored
-		// is reflected in the per-case array (every entry has Error
-		// set, or the dataset truly has no non-clean cases).
-		lr.Precision = 0
-		lr.Recall = 0
-		lr.F1 = 0
-	} else {
-		lr.Precision = ratio(tp, tp+fp)
-		lr.Recall = ratio(tp, tp+fn)
-		if lr.Precision+lr.Recall == 0 {
-			lr.F1 = 0
-		} else {
-			lr.F1 = 2 * lr.Precision * lr.Recall / (lr.Precision + lr.Recall)
-		}
+// qualityScores returns (precision, recall, F1). When no non-clean
+// case scored successfully — every fixture errored, or the dataset
+// has only clean cases — all three drop to 0 instead of the
+// CaseScore-level "Recall=1 when no expected findings" rule, which
+// at the dataset level would let a reviewer that crashed on every
+// real case proudly report 100 % recall.
+func qualityScores(t caseTally) (precision, recall, f1 float64) {
+	if t.nonCleanScored == 0 {
+		return 0, 0, 0
 	}
-	if cleanCases > 0 {
-		lr.NoiseRate = float64(cleanFindings) / float64(cleanCases)
+	precision = ratio(t.tp, t.tp+t.fp)
+	recall = ratio(t.tp, t.tp+t.fn)
+	if precision+recall > 0 {
+		f1 = 2 * precision * recall / (precision + recall)
 	}
+	return precision, recall, f1
+}
 
-	if len(durations) > 0 {
-		sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-		var total time.Duration
-		for _, d := range durations {
-			total += d
-		}
-		lr.TotalDurationMs = total.Milliseconds()
-		lr.MedianMs = durations[len(durations)/2].Milliseconds()
-		// Nearest-rank p95: idx = ⌈0.95·n⌉ - 1 (then clamp). The
-		// previous form `(n*95)/100` was a floor — for n=20 it picked
-		// index 19 (the maximum), one off from the documented
-		// "second-highest of 20" intent. Off-by-one only bites when
-		// 0.95·n is an integer (n=20, 40, 60, …); on the small Ns the
-		// bench actually runs (≤4 cases per LLM) both forms collapse
-		// to the max, so the user-visible numbers don't change today.
-		// Fixed for forward compatibility as the dataset grows.
-		idx := int(math.Ceil(0.95*float64(len(durations)))) - 1
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= len(durations) {
-			idx = len(durations) - 1
-		}
-		lr.P95Ms = durations[idx].Milliseconds()
+// fillTimingAggregates computes total / median / p95 wall-clock from
+// the durations of successful runs. The slice is sorted in place;
+// caller's view is mutated, which is fine because the only caller
+// drops the slice immediately after.
+func fillTimingAggregates(lr *LLMReport, durations []time.Duration) {
+	if len(durations) == 0 {
+		return
 	}
+	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+	var total time.Duration
+	for _, d := range durations {
+		total += d
+	}
+	lr.TotalDurationMs = total.Milliseconds()
+	lr.MedianMs = durations[len(durations)/2].Milliseconds()
+	lr.P95Ms = durations[p95Index(len(durations))].Milliseconds()
+}
+
+// p95Index returns the slice index for the 95th-percentile sample
+// using nearest-rank: idx = ⌈0.95·n⌉ - 1, clamped to [0, n-1]. The
+// previous form `(n*95)/100` was a floor — for n=20 it picked index
+// 19 (the maximum), one off from the documented "second-highest of
+// 20" intent. Off-by-one only bites when 0.95·n is an integer
+// (n=20, 40, 60, …); on the small Ns the bench actually runs
+// (≤4 cases per LLM) both forms collapse to the max, so the
+// user-visible numbers don't change today. Fixed for forward
+// compatibility as the dataset grows.
+func p95Index(n int) int {
+	idx := int(math.Ceil(0.95*float64(n))) - 1
+	if idx < 0 {
+		return 0
+	}
+	if idx >= n {
+		return n - 1
+	}
+	return idx
 }
 
 func ratio(num, den int) float64 {
