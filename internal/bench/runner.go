@@ -148,7 +148,11 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	// samples), since "two of three runs agreed" is more useful than
 	// "we threw the consistency number away."
 	if opts.Repeat > 1 {
-		cs.RunCount, cs.Jaccard = sampleConsistency(ctx, c, llm, opts, produced)
+		count, jac := sampleConsistency(ctx, c, llm, opts, produced)
+		cs.RunCount = count
+		if count >= 2 {
+			cs.Jaccard = &jac
+		}
 	}
 	return cs
 }
@@ -163,9 +167,9 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 // debugging variance actually wants — a transient rate-limit on run
 // 3 of 5 shouldn't blank the whole consistency number.
 //
-// Returns (1, 0) when no extra samples succeeded, which the JSON
-// omitempty rule will hide automatically; consumers should treat
-// run_count <= 1 as "consistency not measured."
+// Returns (1, 0) when no extra samples succeeded; the caller will not
+// set cs.Jaccard in this case. Consumers should treat run_count <= 1
+// (or a nil Jaccard) as "consistency not measured."
 func sampleConsistency(ctx context.Context, c Case, llm cli.LLM, opts Options, firstRun []ProducedFinding) (int, float64) {
 	runs := [][]ProducedFinding{firstRun}
 	for i := 1; i < opts.Repeat; i++ {
@@ -325,6 +329,12 @@ func fillLanguageAggregates(lr *LLMReport) {
 	for _, lang := range langs {
 		cases := byLang[lang]
 		t := tallyCases(cases)
+		// Skip languages where every case errored — "no data" is
+		// less misleading than F1=0.00 ("missed everything"). The
+		// languageF1 sentinel (-1) will render these as "—".
+		if t.nonCleanScored == 0 && t.cleanCases == 0 {
+			continue
+		}
 		p, r, f1 := qualityScores(t)
 		ls := LanguageScore{
 			Language:  lang,
@@ -356,10 +366,10 @@ func fillConsistencyAggregate(lr *LLMReport) {
 	var sum float64
 	measured := 0
 	for _, cs := range lr.Cases {
-		if cs.RunCount < 2 {
+		if cs.Jaccard == nil {
 			continue
 		}
-		sum += cs.Jaccard
+		sum += *cs.Jaccard
 		measured++
 	}
 	if measured > 0 {

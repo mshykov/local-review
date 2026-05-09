@@ -137,3 +137,26 @@ func TestWriteMarkdown_RendersZeroConsistency(t *testing.T) {
 		t.Errorf("zero consistency should render as 0.00, not be collapsed to —:\n%s", buf.String())
 	}
 }
+
+// TestWriteJSON_ConsistencyNullForSingleRun verifies that a nil
+// Consistency pointer emits as JSON null (field present with null value)
+// rather than being absent entirely. The omitempty tag was removed so
+// downstream consumers can distinguish "not measured" (null) from
+// "measured, zero overlap" (0.0) without a missing-field special case.
+func TestWriteJSON_ConsistencyNullForSingleRun(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "replay",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{LLM: "claude", Cases: []CaseScore{{CaseID: "x"}}},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteJSON(&buf, rep); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `"consistency": null`) {
+		t.Errorf("nil Consistency should appear as null in JSON, not be absent:\n%s", out)
+	}
+}

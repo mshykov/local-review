@@ -139,12 +139,16 @@ type CaseScore struct {
 	// same (case, LLM) pair was sampled (1 by default, > 1 when the
 	// caller passed --repeat). Jaccard is the |∩| / |∪| of finding
 	// (file, line) tuples across those runs — 1.0 means every run
-	// produced the same set, 0.0 means no overlap. Both fields stay
-	// at their zero values for a single-run bench, so JSON consumers
-	// can treat their presence as the "consistency was measured"
-	// signal.
-	RunCount int     `json:"run_count,omitempty"`
-	Jaccard  float64 `json:"jaccard,omitempty"`
+	// produced the same set, 0.0 means no overlap.
+	//
+	// Jaccard is pointer-typed so a measured-but-zero value (every run
+	// produced a completely different set of findings) renders as 0.0
+	// in JSON instead of being silently dropped by omitempty. JSON
+	// consumers should treat Jaccard != nil as the "consistency was
+	// measured" signal; RunCount >= 2 confirms the sample count.
+	// Both fields are absent in JSON for single-run benches.
+	RunCount int      `json:"run_count,omitempty"`
+	Jaccard  *float64 `json:"jaccard,omitempty"`
 
 	// Duration is the in-memory timing field used by the runner. Not
 	// serialised; DurationMs is what's emitted to JSON.
@@ -225,7 +229,7 @@ type LLMReport struct {
 	// case" (multi-run bench, model is totally inconsistent → 0.0).
 	// Codex flagged the prior float-with-omitempty shape: a real 0.0
 	// would silently disappear from output, hiding the worst case.
-	Consistency *float64 `json:"consistency,omitempty"`
+	Consistency *float64 `json:"consistency"`
 
 	// Wall-clock totals.
 	TotalDurationMs int64 `json:"total_duration_ms"`

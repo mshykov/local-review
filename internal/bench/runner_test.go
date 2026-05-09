@@ -321,6 +321,47 @@ clean: true
 	}
 }
 
+func TestFillLanguageAggregates_OmitsLanguageWhenAllCasesErrored(t *testing.T) {
+	// Per-language aggregate for a language where every case errored
+	// should be omitted (not emit F1=0.00, which looks like "missed
+	// everything" rather than "no data"). The text/markdown renderer
+	// then shows "—" for that language via the languageF1 sentinel.
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			{CaseID: "go-bug-1", Language: "go", TruePositives: 1},
+			{CaseID: "ts-bug-1", Language: "typescript", Error: "api error"},
+		},
+	}
+	fillLanguageAggregates(lr)
+
+	if len(lr.Languages) != 1 {
+		t.Fatalf("expected 1 language aggregate (go only), got %d: %+v", len(lr.Languages), lr.Languages)
+	}
+	if lr.Languages[0].Language != "go" {
+		t.Errorf("expected go, got %s", lr.Languages[0].Language)
+	}
+}
+
+func TestCaseScore_JaccardPointerDistinguishesMeasuredZero(t *testing.T) {
+	// Jaccard is *float64 so a measured-but-zero value (no overlap
+	// across any run) is distinguishable from "not measured" (nil).
+	// This pins the fix for the omitempty-float64 bug where 0.0
+	// would be silently dropped from JSON output.
+	notMeasured := CaseScore{RunCount: 0}
+	if notMeasured.Jaccard != nil {
+		t.Errorf("single-run CaseScore should have nil Jaccard, got %v", notMeasured.Jaccard)
+	}
+
+	zero := 0.0
+	measured := CaseScore{RunCount: 2, Jaccard: &zero}
+	if measured.Jaccard == nil {
+		t.Error("multi-run CaseScore with zero Jaccard should have non-nil pointer")
+	}
+	if *measured.Jaccard != 0.0 {
+		t.Errorf("expected 0.0, got %v", *measured.Jaccard)
+	}
+}
+
 func mkCase(t *testing.T, root, id, yaml string) {
 	t.Helper()
 	dir := filepath.Join(root, id)

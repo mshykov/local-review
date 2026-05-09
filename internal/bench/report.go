@@ -114,7 +114,9 @@ func writeOverallRow(w io.Writer, lr LLMReport, withCons bool) error {
 // anyConsistencyMeasured returns true when at least one LLM has a
 // non-nil Consistency pointer, indicating --repeat > 1 in live
 // mode produced an aggregate. Used to decide whether the
-// Consistency column appears in either text or markdown output.
+// Consistency column appears in the text report; the markdown
+// leaderboard always includes the Cons. column (rendering "—"
+// for unmeasured LLMs).
 func anyConsistencyMeasured(rep Report) bool {
 	for _, lr := range rep.LLMReports {
 		if lr.Consistency != nil {
