@@ -8,8 +8,9 @@ description: |
   error into a successful return. Combined with the unconditional
   `return err` on the next line (which fires when the encoder
   succeeded, where the outer `err` is still nil), the function now
-  reports success on every call. A failed disk write or a panic
-  inside MarshalJSON silently produces a zero-byte file and a happy
+  reports success on every call. A short disk write, a permission
+  error mid-write, or any other io.Writer failure surfaced through
+  Encode now silently produces a partial/zero-byte file and a happy
   caller. Fix: propagate the encoder error directly
   (`return json.NewEncoder(f).Encode(p)`).
 expected:

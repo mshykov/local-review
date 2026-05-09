@@ -15,3 +15,15 @@ expected:
     category: correctness
     severity: critical
     note: write to s.entries from goroutine without holding s.mu (data race)
+  # Refresh accepts ctx but never observes it — a real supplementary
+  # finding multiple reviewers raise. CodeRabbit pointed out (PR #58)
+  # that without listing it explicitly here, correct ctx-unused
+  # findings are scored as noise (FP) and penalise the reviewer for
+  # catching a second valid issue. Listing it so the leaderboard
+  # rewards thoroughness instead.
+  - file: server/cache.go
+    line: 21
+    window: 2
+    category: correctness
+    severity: warning
+    note: Refresh accepts ctx but never observes it; cancellation has no effect

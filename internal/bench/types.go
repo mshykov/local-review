@@ -135,18 +135,31 @@ type CaseScore struct {
 	// can tell live runs from cached ones.
 	Mode string `json:"mode"`
 
-	// Phase-2 consistency metric. RunCount is the number of times the
-	// same (case, LLM) pair was sampled (1 by default, > 1 when the
-	// caller passed --repeat). Jaccard is the |∩| / |∪| of finding
-	// (file, line) tuples across those runs — 1.0 means every run
-	// produced the same set, 0.0 means no overlap.
+	// Phase-2 consistency metric.
 	//
-	// Jaccard is pointer-typed so a measured-but-zero value (every run
-	// produced a completely different set of findings) renders as 0.0
-	// in JSON instead of being silently dropped by omitempty. JSON
-	// consumers should treat Jaccard != nil as the "consistency was
-	// measured" signal; RunCount >= 2 confirms the sample count.
-	// Both fields are absent in JSON for single-run benches.
+	// Attempts is the number of times the runner *tried* to sample
+	// this (case, LLM) pair (== opts.Repeat for repeated benches,
+	// 0 for single-run). RunCount is the number that actually
+	// returned output (Attempts minus the failures in
+	// sampleConsistency). When Attempts > RunCount, some repeats
+	// errored — Jaccard is computed only on the survivors, which
+	// would otherwise misleadingly report e.g. "1.0" for a 5-repeat
+	// case where 3 attempts crashed and the remaining 2 happened to
+	// agree. Surfacing the gap lets consumers treat such cases with
+	// skepticism instead of committing inflated stability scores to
+	// the leaderboard.
+	//
+	// Jaccard is the |∩| / |∪| of finding (file, line) tuples
+	// across the surviving runs — 1.0 means every run produced the
+	// same set, 0.0 means no overlap.
+	//
+	// Jaccard is pointer-typed so a measured-but-zero value (every
+	// run produced a completely different set of findings) renders
+	// as 0.0 in JSON instead of being silently dropped by omitempty.
+	// JSON consumers should treat Jaccard != nil as the "consistency
+	// was measured" signal; RunCount >= 2 confirms the sample count.
+	// All three fields are absent in JSON for single-run benches.
+	Attempts int      `json:"attempts,omitempty"`
 	RunCount int      `json:"run_count,omitempty"`
 	Jaccard  *float64 `json:"jaccard,omitempty"`
 

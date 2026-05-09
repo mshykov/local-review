@@ -244,7 +244,10 @@ expected:
 	fixtures := t.TempDir()
 	mkFixture(t, fixtures, "go-bug-1", "claude", "## Major Issues\n\n- foo.go:10 — bug\n")
 
-	cases, _ := LoadDataset(dataset)
+	cases, err := LoadDataset(dataset)
+	if err != nil {
+		t.Fatalf("LoadDataset: %v", err)
+	}
 	rep, err := Run(context.Background(), cases, Options{
 		LLMs:      []cli.LLM{{Name: "claude"}},
 		Source:    SourceReplay,

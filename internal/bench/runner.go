@@ -74,7 +74,7 @@ func Run(ctx context.Context, cases []Case, opts Options) (Report, error) {
 		return Report{}, errors.New("replay mode requires a fixtures directory")
 	}
 	if opts.Source == SourceReplay && opts.Repeat > 1 {
-		return Report{}, errors.New("--repeat > 1 is meaningless in replay mode (fixtures are deterministic; consistency would always score 1.0). Re-run live, or drop --repeat.")
+		return Report{}, errors.New("--repeat > 1 is meaningless in replay mode (fixtures are deterministic; consistency would always score 1.0); re-run live, or drop --repeat")
 	}
 
 	rep := Report{
@@ -112,14 +112,22 @@ func Run(ctx context.Context, cases []Case, opts Options) (Report, error) {
 // Jaccard consistency calculation. If the first sample errors, the
 // whole call short-circuits as an error — there's nothing to compare
 // against.
+//
+// Duration is measured across the entire scoring pass, including
+// the extra repeats. Codex flagged the prior shape (capture before
+// sampleConsistency) as understating wall-clock for --repeat runs:
+// with --repeat 5, only run 1's duration was reported, hiding 80%
+// of real spend. Median/P95 in the per-LLM aggregate now reflect
+// total per-case wall-clock, which is what a user comparing latency
+// between runs actually wants.
 func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore {
 	start := time.Now()
 	mode := modeName(opts.Source)
 
 	output, err := obtainReview(ctx, c, llm, opts)
-	dur := time.Since(start)
 
 	if err != nil {
+		dur := time.Since(start)
 		return CaseScore{
 			CaseID:     c.ID,
 			LLM:        llm.Name,
@@ -137,40 +145,50 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	cs.LLM = llm.Name
 	cs.Version = llm.Version
 	cs.Language = c.Language
-	cs.Duration = dur
-	cs.DurationMs = dur.Milliseconds()
 	cs.Mode = mode
 
 	// Phase-2 consistency: re-sample the same (case, LLM) up to
-	// opts.Repeat times and record the Jaccard similarity. Each extra
-	// sample is independent — if one errors we still report Jaccard
-	// against whichever samples succeeded (down to a minimum of 2
-	// samples), since "two of three runs agreed" is more useful than
-	// "we threw the consistency number away."
+	// opts.Repeat times and record the Jaccard similarity. Each
+	// extra sample is independent — if one errors we still report
+	// Jaccard against whichever samples succeeded (down to a
+	// minimum of 2 samples). Both the attempt count and the
+	// successful-run count are recorded so a "Jaccard 1.0 but 3/5
+	// runs failed" outcome stays interpretable instead of falsely
+	// implying every attempt agreed — codex caught this credibility
+	// hole in self-review. JSON consumers should treat any case
+	// with attempts > run_count with skepticism.
 	if opts.Repeat > 1 {
-		count, jac := sampleConsistency(ctx, c, llm, opts, produced)
+		attempts, count, jac := sampleConsistency(ctx, c, llm, opts, produced)
+		cs.Attempts = attempts
 		cs.RunCount = count
 		if count >= 2 {
 			cs.Jaccard = &jac
 		}
 	}
+
+	dur := time.Since(start)
+	cs.Duration = dur
+	cs.DurationMs = dur.Milliseconds()
 	return cs
 }
 
 // sampleConsistency runs the same (case, LLM) opts.Repeat - 1
-// additional times and returns (totalSuccessfulRuns, jaccard) where
-// jaccard is computed across all successful runs (including the
-// caller-supplied first one).
+// additional times and returns (attempts, successfulRuns, jaccard)
+// where jaccard is computed across all successful runs (including
+// the caller-supplied first one).
 //
-// Errors on extra samples are tolerated: we tally successful samples
-// and compute Jaccard over what landed. This matches what a human
-// debugging variance actually wants — a transient rate-limit on run
-// 3 of 5 shouldn't blank the whole consistency number.
+// Errors on extra samples are tolerated: we tally attempts and
+// successes separately and compute Jaccard over what landed. The
+// gap (attempts > successfulRuns) is surfaced via CaseScore.Attempts
+// so a high Jaccard built from few survivors doesn't get committed
+// to a leaderboard as proof of stability.
 //
-// Returns (1, 0) when no extra samples succeeded; the caller will not
-// set cs.Jaccard in this case. Consumers should treat run_count <= 1
-// (or a nil Jaccard) as "consistency not measured."
-func sampleConsistency(ctx context.Context, c Case, llm cli.LLM, opts Options, firstRun []ProducedFinding) (int, float64) {
+// Returns (opts.Repeat, len(runs), 0) when no extra samples
+// succeeded; the caller will not set cs.Jaccard in that case.
+// Consumers should treat run_count <= 1 (or a nil Jaccard) as
+// "consistency not measured."
+func sampleConsistency(ctx context.Context, c Case, llm cli.LLM, opts Options, firstRun []ProducedFinding) (attempts, successful int, jac float64) {
+	attempts = opts.Repeat
 	runs := [][]ProducedFinding{firstRun}
 	for i := 1; i < opts.Repeat; i++ {
 		out, err := obtainReview(ctx, c, llm, opts)
@@ -180,9 +198,9 @@ func sampleConsistency(ctx context.Context, c Case, llm cli.LLM, opts Options, f
 		runs = append(runs, ParseFindings(out))
 	}
 	if len(runs) < 2 {
-		return len(runs), 0
+		return attempts, len(runs), 0
 	}
-	return len(runs), jaccard(runs)
+	return attempts, len(runs), jaccard(runs)
 }
 
 // obtainReview returns the LLM's review markdown for one case, either

@@ -1,11 +1,12 @@
 ## Critical Issues
 
-- `app/config.py:8` — **`yaml.load(f)` without `Loader=SafeLoader` is
-  arbitrary-code-execution-class**. Older PyYAML resolves the no-Loader
-  call to `FullLoader`/unsafe Loader; either way, a config file that
-  contains `!!python/object/apply:os.system [...]` runs the command on
-  load. The previous `yaml.safe_load(f)` was the safe form — revert,
-  or pass `Loader=yaml.SafeLoader` explicitly.
+- `app/config.py:8` — **`yaml.load(..., Loader=yaml.UnsafeLoader)` is
+  arbitrary-code-execution-class.** UnsafeLoader resolves
+  `!!python/object/apply` tags, so a config file containing
+  `!!python/object/apply:os.system ["rm -rf ~"]` runs the command
+  on load. This is the canonical PyYAML deserialization-CVE shape
+  (CVE-2017-18342 et al.). The pre-diff `yaml.safe_load(f)` was the
+  safe form — revert, or pass `Loader=yaml.SafeLoader` explicitly.
 
 ## Major Issues
 

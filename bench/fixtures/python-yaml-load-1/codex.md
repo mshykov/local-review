@@ -1,8 +1,9 @@
 ## Critical Issues
 
-- app/config.py:8 — yaml.load without an explicit SafeLoader allows
-  arbitrary Python class instantiation via !!python/object tags.
-  Restore yaml.safe_load.
+- app/config.py:8 — yaml.load with Loader=yaml.UnsafeLoader allows
+  arbitrary Python class instantiation via !!python/object and
+  !!python/object/apply tags. A malicious config can run code on
+  load. Restore yaml.safe_load.
 
 ## Major Issues
 
