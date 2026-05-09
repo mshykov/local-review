@@ -12,19 +12,76 @@ import (
 //
 //	Bench: dataset=<path>  cases=N  mode=<cli|replay>
 //
-//	LLM      Precision  Recall  F1     Noise  Median   P95
-//	claude   0.83       0.71    0.77   0.50   4.5s     6.1s
+//	LLM      Precision  Recall  F1     Noise  Cons.  Median   P95
+//	claude   0.83       0.71    0.77   0.50   0.92   4.5s     6.1s
 //	gemini   ...
+//
+//	Per-language F1 (Phase 2):
+//	  go      claude=0.89  codex=0.71  gemini=0.50
+//	  python  ...
 //
 //	Per-case detail:
 //	  case-id              claude:F1=0.80  gemini:F1=0.50  codex:ERR
 //	  ...
+//
+// The "Cons." column is omitted when no LLM measured consistency
+// (single-run benches stay terse). The "Per-language F1" block is
+// omitted when the dataset has only one language.
 //
 // We aim for one screen of useful signal — full per-finding diagnostics
 // belong in --json output where consumers can filter at will.
 func WriteText(w io.Writer, rep Report) error {
 	if _, err := fmt.Fprintf(w, "Bench: dataset=%s  cases=%d  mode=%s\n\n", rep.Dataset, rep.CaseCount, rep.Mode); err != nil {
 		return err
+	}
+
+	if err := writeOverallTable(w, rep); err != nil {
+		return err
+	}
+
+	if hasLanguageSplits(rep) {
+		if err := writeLanguageBlock(w, rep); err != nil {
+			return err
+		}
+	}
+
+	if _, err := fmt.Fprintln(w, "\nPer-case detail:"); err != nil {
+		return err
+	}
+	for _, line := range perCaseLines(rep) {
+		if _, err := fmt.Fprintln(w, "  "+line); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// writeOverallTable prints the top per-LLM aggregate row. Adds a
+// Consistency column only when at least one LLM measured it
+// (--repeat > 1 in live mode), so single-run benches stay terse.
+func writeOverallTable(w io.Writer, rep Report) error {
+	showCons := false
+	for _, lr := range rep.LLMReports {
+		if lr.Consistency > 0 {
+			showCons = true
+			break
+		}
+	}
+
+	if showCons {
+		if _, err := fmt.Fprintf(w, "%-10s  %-9s  %-6s  %-6s  %-7s  %-6s  %-8s  %-8s\n", "LLM", "Precision", "Recall", "F1", "Noise", "Cons.", "Median", "P95"); err != nil {
+			return err
+		}
+		for _, lr := range rep.LLMReports {
+			if _, err := fmt.Fprintf(w, "%-10s  %-9.2f  %-6.2f  %-6.2f  %-7.2f  %-6.2f  %-8s  %-8s\n",
+				lr.LLM, lr.Precision, lr.Recall, lr.F1, lr.NoiseRate, lr.Consistency,
+				fmtMs(lr.MedianMs), fmtMs(lr.P95Ms),
+			); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	if _, err := fmt.Fprintf(w, "%-10s  %-9s  %-6s  %-6s  %-7s  %-8s  %-8s\n", "LLM", "Precision", "Recall", "F1", "Noise", "Median", "P95"); err != nil {
@@ -38,18 +95,77 @@ func WriteText(w io.Writer, rep Report) error {
 			return err
 		}
 	}
+	return nil
+}
 
-	if _, err := fmt.Fprintln(w, "\nPer-case detail:"); err != nil {
+// hasLanguageSplits returns true when at least one LLM has per-
+// language aggregates populated (the runner skips the split when the
+// dataset is single-language).
+func hasLanguageSplits(rep Report) bool {
+	for _, lr := range rep.LLMReports {
+		if len(lr.Languages) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// writeLanguageBlock prints "Per-language F1" — one row per language,
+// columns are LLMs in alphabetical order. Cell is the LLM's F1 on
+// that language, or "-" if the LLM has no scores for it (typically
+// because every case errored).
+func writeLanguageBlock(w io.Writer, rep Report) error {
+	if _, err := fmt.Fprintln(w, "\nPer-language F1:"); err != nil {
 		return err
 	}
-	caseLines := perCaseLines(rep)
-	for _, line := range caseLines {
-		if _, err := fmt.Fprintln(w, "  "+line); err != nil {
+	langs := collectLanguages(rep)
+	width := longestID(langs)
+	for _, lang := range langs {
+		var parts []string
+		for _, lr := range rep.LLMReports {
+			f1 := languageF1(lr, lang)
+			if f1 < 0 {
+				parts = append(parts, fmt.Sprintf("%s=-", lr.LLM))
+			} else {
+				parts = append(parts, fmt.Sprintf("%s=%.2f", lr.LLM, f1))
+			}
+		}
+		if _, err := fmt.Fprintf(w, "  %-*s  %s\n", width, lang, strings.Join(parts, "  ")); err != nil {
 			return err
 		}
 	}
-
 	return nil
+}
+
+// collectLanguages returns every language id present in any LLM's
+// per-language aggregates, sorted for deterministic output.
+func collectLanguages(rep Report) []string {
+	seen := make(map[string]struct{})
+	for _, lr := range rep.LLMReports {
+		for _, ls := range lr.Languages {
+			seen[ls.Language] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for l := range seen {
+		out = append(out, l)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// languageF1 returns the LLM's F1 on the given language, or -1 when
+// the LLM has no aggregate for that language. We use a sentinel
+// rather than 0 so the report can render "-" instead of misleading
+// "0.00" (which suggests "the LLM tried and missed everything"
+// rather than "the LLM never scored this language").
+func languageF1(lr LLMReport, lang string) float64 {
+	for _, ls := range lr.Languages {
+		if ls.Language == lang {
+			return ls.F1
+		}
+	}
+	return -1
 }
 
 // WriteJSON emits the full report as indented JSON. Consumers can diff

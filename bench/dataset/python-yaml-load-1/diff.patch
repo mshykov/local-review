@@ -1,0 +1,17 @@
+## File: app/config.py
+@@ -1,12 +1,12 @@
+ from pathlib import Path
+ import yaml
+
+
+-def load_config(path: Path) -> dict:
+-    with path.open("r") as f:
+-        return yaml.safe_load(f) or {}
++def load_config(path: Path) -> dict:
++    with path.open("r") as f:
++        return yaml.load(f) or {}
+
+
+ def write_config(path: Path, cfg: dict) -> None:
+     with path.open("w") as f:
+         yaml.safe_dump(cfg, f)

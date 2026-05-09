@@ -1,0 +1,26 @@
+## File: store/save.go
+@@ -1,22 +1,22 @@
+ package store
+
+ import (
+ 	"encoding/json"
+ 	"os"
+ )
+
+ type Payload struct {
+ 	ID    int    `json:"id"`
+ 	Email string `json:"email"`
+ }
+
+ func Save(path string, p Payload) error {
+ 	f, err := os.Create(path)
+ 	if err != nil {
+ 		return err
+ 	}
+ 	defer f.Close()
+-	return json.NewEncoder(f).Encode(p)
++	if err := json.NewEncoder(f).Encode(p); err != nil {
++		return nil
++	}
+ 	return err
+ }

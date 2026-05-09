@@ -107,6 +107,11 @@ type CaseScore struct {
 	LLM     string `json:"llm"`
 	Version string `json:"version,omitempty"`
 
+	// Language carries the case's language id ("go", "typescript", …)
+	// so per-language aggregation in the LLMReport doesn't have to
+	// re-walk the dataset to look it up.
+	Language string `json:"language,omitempty"`
+
 	// Counts that drive precision/recall.
 	TruePositives  int `json:"true_positives"`
 	FalsePositives int `json:"false_positives"`
@@ -129,6 +134,17 @@ type CaseScore struct {
 	// Mode is "cli" or "replay" — recorded in JSON output so consumers
 	// can tell live runs from cached ones.
 	Mode string `json:"mode"`
+
+	// Phase-2 consistency metric. RunCount is the number of times the
+	// same (case, LLM) pair was sampled (1 by default, > 1 when the
+	// caller passed --repeat). Jaccard is the |∩| / |∪| of finding
+	// (file, line) tuples across those runs — 1.0 means every run
+	// produced the same set, 0.0 means no overlap. Both fields stay
+	// at their zero values for a single-run bench, so JSON consumers
+	// can treat their presence as the "consistency was measured"
+	// signal.
+	RunCount int     `json:"run_count,omitempty"`
+	Jaccard  float64 `json:"jaccard,omitempty"`
 
 	// Duration is the in-memory timing field used by the runner. Not
 	// serialised; DurationMs is what's emitted to JSON.
@@ -169,6 +185,20 @@ func (s CaseScore) F1() float64 {
 	return 2 * p * r / (p + r)
 }
 
+// LanguageScore is the per-(LLM, language) aggregate. Phase 2 added
+// per-language splits so prompt-pack changes can be evaluated against
+// the language they target without being averaged out by the rest of
+// the dataset (e.g. tightening the Go pack shouldn't show up as a
+// regression on TypeScript cases).
+type LanguageScore struct {
+	Language  string  `json:"language"`
+	Cases     int     `json:"cases"`     // total cases scored in this language (incl. clean)
+	Precision float64 `json:"precision"` // micro-averaged across non-clean cases of this language
+	Recall    float64 `json:"recall"`
+	F1        float64 `json:"f1"`
+	NoiseRate float64 `json:"noise_rate"` // mean findings per clean case of this language
+}
+
 // LLMReport aggregates per-case scores for one LLM across the dataset.
 type LLMReport struct {
 	LLM     string      `json:"llm"`
@@ -184,6 +214,16 @@ type LLMReport struct {
 	// number of clean cases. Reported in "findings per clean diff" so
 	// the number is interpretable without knowing the dataset size.
 	NoiseRate float64 `json:"noise_rate"`
+
+	// Per-language aggregates, sorted by Language for deterministic
+	// output. Empty when the dataset has cases of only one language.
+	Languages []LanguageScore `json:"languages,omitempty"`
+
+	// Mean Jaccard similarity across cases when --repeat > 1 was used.
+	// Zero (and omitted from JSON) for single-run benches. Reported as
+	// "consistency": 0..1 where 1 means every run produced the same
+	// finding set on every case.
+	Consistency float64 `json:"consistency,omitempty"`
 
 	// Wall-clock totals.
 	TotalDurationMs int64 `json:"total_duration_ms"`

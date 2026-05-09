@@ -172,6 +172,108 @@ func TestReadFixture_RejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestRun_PerLanguageAggregates(t *testing.T) {
+	// Phase-2: when the dataset spans more than one language, every
+	// LLMReport should carry per-language aggregates sorted by id.
+	dataset := t.TempDir()
+	mkCase(t, dataset, "go-bug-1", `id: go-bug-1
+title: go bug
+language: go
+expected:
+  - file: foo.go
+    line: 10
+`)
+	mkCase(t, dataset, "ts-bug-1", `id: ts-bug-1
+title: ts bug
+language: typescript
+expected:
+  - file: bar.ts
+    line: 5
+`)
+
+	fixtures := t.TempDir()
+	mkFixture(t, fixtures, "go-bug-1", "claude", "## Major Issues\n\n- foo.go:10 — bug\n")
+	mkFixture(t, fixtures, "ts-bug-1", "claude", "## Major Issues\n\n- bar.ts:5 — bug\n")
+
+	cases, err := LoadDataset(dataset)
+	if err != nil {
+		t.Fatalf("LoadDataset: %v", err)
+	}
+
+	rep, err := Run(context.Background(), cases, Options{
+		LLMs:      []cli.LLM{{Name: "claude"}},
+		Source:    SourceReplay,
+		ReplayDir: fixtures,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	lr := rep.LLMReports[0]
+	if len(lr.Languages) != 2 {
+		t.Fatalf("expected 2 language aggregates (go, typescript), got %d: %+v", len(lr.Languages), lr.Languages)
+	}
+	if lr.Languages[0].Language != "go" || lr.Languages[1].Language != "typescript" {
+		t.Errorf("languages should be sorted alphabetically: got %s, %s", lr.Languages[0].Language, lr.Languages[1].Language)
+	}
+	for _, ls := range lr.Languages {
+		if ls.F1 != 1.0 {
+			t.Errorf("language %s F1 = %v, want 1.0", ls.Language, ls.F1)
+		}
+	}
+	// Per-case scores should also carry the language.
+	for _, cs := range lr.Cases {
+		if cs.Language == "" {
+			t.Errorf("case %q missing Language; should be propagated from Case.Language", cs.CaseID)
+		}
+	}
+}
+
+func TestRun_PerLanguageAggregates_OmittedWhenSingleLanguage(t *testing.T) {
+	// When the dataset is single-language the aggregator skips the
+	// split — saves clutter in the report and JSON for the common
+	// "I'm only benching Go right now" case.
+	dataset := t.TempDir()
+	mkCase(t, dataset, "go-bug-1", `id: go-bug-1
+title: go bug
+language: go
+expected:
+  - file: foo.go
+    line: 10
+`)
+	fixtures := t.TempDir()
+	mkFixture(t, fixtures, "go-bug-1", "claude", "## Major Issues\n\n- foo.go:10 — bug\n")
+
+	cases, _ := LoadDataset(dataset)
+	rep, err := Run(context.Background(), cases, Options{
+		LLMs:      []cli.LLM{{Name: "claude"}},
+		Source:    SourceReplay,
+		ReplayDir: fixtures,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(rep.LLMReports[0].Languages) != 0 {
+		t.Errorf("single-language dataset should have no per-language split; got %+v", rep.LLMReports[0].Languages)
+	}
+}
+
+func TestRun_ReplayWithRepeatIsError(t *testing.T) {
+	// --repeat > 1 is meaningless in replay (fixtures are
+	// deterministic; Jaccard would always be 1.0). Run must reject
+	// the combination so users don't ship a meaningless number to
+	// their leaderboard.
+	_, err := Run(context.Background(), []Case{{ID: "x"}}, Options{
+		LLMs:      []cli.LLM{{Name: "claude"}},
+		Source:    SourceReplay,
+		ReplayDir: t.TempDir(),
+		Repeat:    5,
+	})
+	if err == nil {
+		t.Error("expected error when --repeat > 1 in replay mode")
+	}
+}
+
 func TestRun_RecallZeroWhenAllNonCleanCasesError(t *testing.T) {
 	// Regression: prior fillAggregates returned Recall=1.0 when
 	// tp+fn==0, which masked the failure mode where every non-clean

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,17 +32,31 @@ type benchFlags struct {
 	// CLIs flake, a transient one-agent failure shouldn't kill the
 	// bench and lose data on agents that did succeed).
 	strict bool
+
+	// repeat is the per-(case, LLM) sample count for the Phase-2
+	// consistency metric (Jaccard similarity across runs). Default
+	// 1 = no repeat. Values > 1 only make sense in live mode;
+	// replay+repeat>1 errors out (fixtures are deterministic,
+	// Jaccard would always be 1.0).
+	repeat int
+
+	// markdownPath, when non-empty, writes a leaderboard-style
+	// markdown report (RESULTS.md shape) to that path. Independent
+	// of --out (JSON) — common workflow is `--markdown bench/RESULTS.md
+	// --out bench-results.json` to commit both.
+	markdownPath string
 }
 
-// benchCmd wires the `local-review bench` subcommand. Phase 1 of issue
-// #56: load a labelled dataset, run each diff through the configured
-// LLMs (or pre-recorded fixtures via --replay), score, print summary.
+// benchCmd wires the `local-review bench` subcommand. Phase 1 + 2 of
+// issue #56: load a labelled dataset, run each diff through the
+// configured LLMs (or pre-recorded fixtures via --replay), score,
+// print summary, optionally emit a markdown leaderboard.
 func benchCmd() *cobra.Command {
 	var bf benchFlags
 
 	cmd := &cobra.Command{
 		Use:   "bench",
-		Short: "Run the review-quality benchmark suite (Phase 1)",
+		Short: "Run the review-quality benchmark suite",
 		Long: `Run the local-review benchmark suite against a labelled dataset
 of diffs. For each diff, every active LLM produces a review; findings
 are scored against the labels (precision / recall / F1 + noise rate on
@@ -56,12 +71,24 @@ Two run modes:
                    calling the CLI. Used by CI for deterministic,
                    no-cost runs.
 
+Phase 2 additions:
+
+  --repeat N        sample each (case, LLM) N times in live mode and
+                    report Jaccard consistency across runs. Replay
+                    rejects this (fixtures are deterministic).
+  --markdown <path> write a leaderboard-style report (overall +
+                    per-language + per-case tables) to <path>,
+                    suitable for committing as bench/RESULTS.md.
+
 Examples:
 
-  local-review bench                              # live, default dataset
-  local-review bench --replay bench/fixtures      # deterministic replay
-  local-review bench --only claude,gemini --json  # restrict + JSON
-  local-review bench --out bench-results.json     # also save JSON to file
+  local-review bench                                       # live, default dataset
+  local-review bench --replay bench/fixtures               # deterministic replay
+  local-review bench --only claude,gemini --json           # restrict + JSON
+  local-review bench --out bench-results.json              # also save JSON to file
+  local-review bench --repeat 5 --only claude              # consistency check
+  local-review bench --replay bench/fixtures \
+       --markdown bench/RESULTS.md                         # update the leaderboard
 
 The dataset format and starter cases live under bench/. See
 bench/README.md for how to add a new case.`,
@@ -82,6 +109,8 @@ bench/README.md for how to add a new case.`,
 	cmd.Flags().BoolVar(&bf.jsonOut, "json", false, "emit JSON to stdout instead of the text summary")
 	cmd.Flags().StringVar(&bf.outFile, "out", "", "also write JSON to this path (text summary still goes to stdout unless --json)")
 	cmd.Flags().BoolVar(&bf.strict, "strict", false, "exit non-zero on any per-case error; default ON in --replay (CI gate), OFF in live mode")
+	cmd.Flags().IntVar(&bf.repeat, "repeat", 1, "sample each (case, LLM) N times for Jaccard consistency (live mode only; replay rejects N>1)")
+	cmd.Flags().StringVar(&bf.markdownPath, "markdown", "", "also write a leaderboard markdown file to this path (overall + per-language + per-case tables)")
 
 	return cmd
 }
@@ -147,6 +176,7 @@ func executeBench(ctx context.Context, bf benchFlags, cases []bench.Case, llms [
 		LLMs:      llms,
 		Source:    source,
 		ReplayDir: bf.replayDir,
+		Repeat:    bf.repeat,
 	})
 	if err != nil {
 		return bench.Report{}, err
@@ -155,14 +185,24 @@ func executeBench(ctx context.Context, bf benchFlags, cases []bench.Case, llms [
 	return rep, nil
 }
 
-// emitBenchReport handles the three output sinks: optional JSON file
-// via --out, then either JSON-to-stdout (--json) or the text summary.
-// Splitting this out is what got the cognitive-complexity sum under
-// the limit.
+// emitBenchReport handles the four output sinks:
+//   - --out <file>      JSON to disk
+//   - --markdown <file> leaderboard markdown to disk
+//   - --json            JSON to stdout
+//   - default           text summary to stdout
+//
+// The two file sinks are independent and additive (a CI workflow
+// typically wants both: bench-results.json for delta diffing,
+// RESULTS.md for human review). Stdout still gets text or JSON.
 func emitBenchReport(bf benchFlags, rep bench.Report) error {
 	if bf.outFile != "" {
 		if err := writeBenchJSONFile(bf.outFile, rep); err != nil {
 			return fmt.Errorf("write --out file: %w", err)
+		}
+	}
+	if bf.markdownPath != "" {
+		if err := writeBenchMarkdownFile(bf.markdownPath, rep); err != nil {
+			return fmt.Errorf("write --markdown file: %w", err)
 		}
 	}
 	if bf.jsonOut {
@@ -267,6 +307,22 @@ func dedupeStrings(in []string) []string {
 // indistinguishable from a clean run — exactly the failure mode
 // the bench is supposed to surface, not hide.
 func writeBenchJSONFile(path string, rep bench.Report) (retErr error) {
+	return writeBenchToFile(path, rep, bench.WriteJSON)
+}
+
+// writeBenchMarkdownFile writes the leaderboard markdown report to
+// path, creating parent directories as needed. Used by --markdown.
+// Same Close-error discipline as writeBenchJSONFile so a partial
+// write on a full disk fails the bench instead of silently shipping
+// a truncated leaderboard.
+func writeBenchMarkdownFile(path string, rep bench.Report) error {
+	return writeBenchToFile(path, rep, bench.WriteMarkdown)
+}
+
+// writeBenchToFile is the shared driver for the two file sinks. The
+// emitter callback decides the wire format; this function owns the
+// directory-creation, open, deferred-close-with-error-check pattern.
+func writeBenchToFile(path string, rep bench.Report, emit func(io.Writer, bench.Report) error) (retErr error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -281,5 +337,5 @@ func writeBenchJSONFile(path string, rep bench.Report) (retErr error) {
 			retErr = fmt.Errorf("close %s: %w", path, cerr)
 		}
 	}()
-	return bench.WriteJSON(f, rep)
+	return emit(f, rep)
 }

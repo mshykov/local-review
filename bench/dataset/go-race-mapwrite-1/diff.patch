@@ -1,0 +1,30 @@
+## File: server/cache.go
+@@ -1,28 +1,28 @@
+ package server
+
+ import (
+ 	"context"
+ 	"sync"
+ )
+
+ type Cache struct {
+ 	mu      sync.Mutex
+ 	entries map[string]string
+ }
+
+ func (s *Cache) Get(key string) (string, bool) {
+ 	s.mu.Lock()
+ 	defer s.mu.Unlock()
+ 	v, ok := s.entries[key]
+ 	return v, ok
+ }
+
+-func (s *Cache) Refresh(ctx context.Context, k, v string) {
+-	s.mu.Lock()
+-	defer s.mu.Unlock()
+-	s.entries[k] = v
++func (s *Cache) Refresh(ctx context.Context, k, v string) {
++	go func() {
++		s.entries[k] = v
++	}()
+ }

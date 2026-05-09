@@ -1,0 +1,17 @@
+id: python-yaml-load-1
+title: yaml.load without SafeLoader allows arbitrary code execution
+language: python
+description: |
+  load_config() switched from yaml.safe_load to yaml.load with no
+  Loader argument. Older PyYAML versions resolve this to FullLoader/
+  unsafe Loader, which can instantiate arbitrary Python classes via
+  !!python/object tags — meaning any user who can ship a YAML file
+  to this loader can execute arbitrary code. Fix is yaml.safe_load
+  or explicit Loader=SafeLoader.
+expected:
+  - file: app/config.py
+    line: 8
+    window: 2
+    category: security
+    severity: critical
+    note: yaml.load without SafeLoader → arbitrary code execution via !!python/object

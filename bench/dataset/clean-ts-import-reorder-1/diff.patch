@@ -1,0 +1,14 @@
+## File: src/api/users.ts
+@@ -1,8 +1,8 @@
+-import { db } from "../db";
+-import { Request, Response } from "express";
+-import { logger } from "./logger";
+-import { Cache } from "../cache/cache";
++import { Request, Response } from "express";
++
++import { Cache } from "../cache/cache";
++import { db } from "../db";
++import { logger } from "./logger";
+
+ export async function getUser(req: Request, res: Response) {
+   logger.info("getUser", { id: req.query.id });
