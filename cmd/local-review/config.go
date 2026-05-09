@@ -80,9 +80,12 @@ func printPromptResolution(w io.Writer, cfg config.Config) error {
 	langs, err := prompts.Available()
 	if err != nil {
 		// Available() failure means the embedded FS is broken —
-		// surface but don't fail the whole command.
-		fmt.Fprintf(w, "\n# (could not list available packs: %v)\n", err)
-		return nil
+		// surface but don't fail the whole command. Check the
+		// write error: a broken pipe here is a real failure mode
+		// (config | head -5) and silently dropping it would mask
+		// truncated output, which codex caught in self-review.
+		_, werr := fmt.Fprintf(w, "\n# (could not list available packs: %v)\n", err)
+		return werr
 	}
 	sort.Strings(langs)
 

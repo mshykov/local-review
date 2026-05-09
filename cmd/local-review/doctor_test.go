@@ -381,3 +381,23 @@ func TestCheckPromptOverride_QuietWhenDirHasOverrides(t *testing.T) {
 		t.Errorf("expected silence when override dir is populated, got: %q", buf.String())
 	}
 }
+
+func TestCheckPromptOverride_StrayMarkdownDoesNotCount(t *testing.T) {
+	// Codex caught this in self-review: pre-fix, ANY *.md file
+	// counted as an override, so a stray README.md silenced the
+	// "no overrides" warning even though no real customization
+	// applied. The check now matches against known language ids.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# notes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "TODO.md"), []byte("- write go.md"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: dir}}
+	checkPromptOverride(&buf, cfg)
+	if !strings.Contains(buf.String(), "no <language>.md") {
+		t.Errorf("README.md / TODO.md should not count as override files; expected warning, got: %q", buf.String())
+	}
+}

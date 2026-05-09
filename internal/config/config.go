@@ -255,8 +255,33 @@ func mergeFrom(dst *Config, path string) error {
 	if err := yaml.Unmarshal(b, &layer); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
+	// Resolve any path-typed field that's natural to express
+	// relative to the config file's directory before merging. The
+	// most important case (codex flagged it on PR self-review):
+	// `prompts.pack_dir: .local-review/prompts` in a repo's YAML
+	// must point at <repo-root>/.local-review/prompts no matter
+	// where the user runs `local-review` from. Pre-fix, running
+	// from a subdirectory silently fell through to embedded packs.
+	resolveRelativePaths(&layer, filepath.Dir(path))
 	merge(dst, layer)
 	return nil
+}
+
+// resolveRelativePaths rewrites path-typed config fields to absolute
+// paths interpreted relative to baseDir (the config file's directory).
+// Absolute paths and empty strings pass through unchanged. CLI-flag
+// overrides bypass this routine because they ride on top of the
+// already-merged config and are naturally interpreted relative to
+// the user's CWD (which is what shell users expect from
+// `--prompt-pack-dir ./prompts`).
+func resolveRelativePaths(layer *Config, baseDir string) {
+	if p := layer.Prompts.PackDir; p != "" && !filepath.IsAbs(p) {
+		layer.Prompts.PackDir = filepath.Join(baseDir, p)
+	}
+	// StorageConfig.BasePath is intentionally LEFT relative — the
+	// existing storage code resolves it relative to CWD on every
+	// invocation, and tests + docs depend on that behaviour. Changing
+	// it here would be a backwards-incompatible shift; deferred.
 }
 
 // merge does a shallow overlay: any non-zero field in src replaces dst.

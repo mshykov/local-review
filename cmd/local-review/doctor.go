@@ -10,8 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"strings"
+
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
+	"github.com/mshykov/local-review/internal/prompts"
 )
 
 // claudeSessionFreshness caps how stale a session file can be before
@@ -149,17 +152,49 @@ func checkPromptOverride(w io.Writer, cfg config.Config) {
 		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q is unreadable: %v\n", dir, err)
 		return
 	}
+	// Codex caught this in self-review: counting any *.md file
+	// silenced the diagnostic when the user dropped a README.md
+	// into the prompts directory but no actual override files —
+	// "looks populated" but nothing applies. Match against the
+	// known language-id set so a stray file is never miscounted
+	// as an override.
+	knownLangs := promptLanguageSet()
 	overrideCount := 0
 	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
 		name := e.Name()
-		if !e.IsDir() && len(name) > 3 && name[len(name)-3:] == ".md" {
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		lang := strings.TrimSuffix(name, ".md")
+		if _, ok := knownLangs[lang]; ok {
 			overrideCount++
 		}
 	}
 	if overrideCount == 0 {
-		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q has no <language>.md files.\n", dir)
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q has no <language>.md files matching a shipped pack.\n", dir)
 		fmt.Fprintln(w, "  Drop a file like `go.md` or `default.md` into the directory to override the embedded pack.")
 	}
+}
+
+// promptLanguageSet returns the set of language ids that have a
+// shipped pack, used to validate override filenames in pack_dir.
+// Pulled from prompts.Available so adding a new language pack
+// automatically extends the doctor check without a separate edit.
+// Returns an empty set on error (the embedded FS would have to be
+// broken; the resolver itself catches that case loudly).
+func promptLanguageSet() map[string]struct{} {
+	ids, err := prompts.Available()
+	if err != nil {
+		return map[string]struct{}{}
+	}
+	out := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 // errWriter is an io.Writer that captures the first error from the

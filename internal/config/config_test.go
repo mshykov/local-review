@@ -268,6 +268,75 @@ storage:
 	}
 }
 
+func TestLoadUsesRepoYAML_PromptsPackDir_ResolvedRelativeToConfig(t *testing.T) {
+	// Issue #55 / codex self-review iter-1: a relative `pack_dir`
+	// in the YAML must resolve relative to the config file's
+	// directory, not the user's CWD. Pre-fix, running
+	// `local-review` from a subdirectory silently fell through to
+	// embedded packs because the resolver looked at
+	// <subdir>/.local-review/prompts instead of
+	// <repo-root>/.local-review/prompts.
+	repoRoot := t.TempDir()
+	overrideDir := filepath.Join(repoRoot, ".local-review", "prompts")
+	if err := os.MkdirAll(overrideDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoCfg := filepath.Join(repoRoot, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: .local-review/prompts
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the user running from a subdirectory by chdir'ing
+	// into one before Load. If the loader is correct, the
+	// resolved PackDir should still point at <repoRoot>/.local-review/prompts.
+	subdir := filepath.Join(repoRoot, "internal", "deep", "nested")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origCwd, _ := os.Getwd()
+	defer os.Chdir(origCwd)
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	wantAbs, _ := filepath.Abs(overrideDir)
+	gotAbs, _ := filepath.Abs(cfg.Prompts.PackDir)
+	if wantAbs != gotAbs {
+		t.Errorf("PackDir = %q (abs %q), want abs %q\n— relative path was resolved against CWD instead of the config file directory",
+			cfg.Prompts.PackDir, gotAbs, wantAbs)
+	}
+}
+
+func TestLoadUsesRepoYAML_PromptsPackDir_AbsolutePathPreserved(t *testing.T) {
+	// Absolute paths must pass through unchanged — only relative
+	// paths get rewritten. A user with a corporate-shared prompt
+	// dir at /etc/local-review/prompts should not have it
+	// re-rooted.
+	dir := t.TempDir()
+	repoCfg := filepath.Join(dir, ".local-review.yml")
+	abs := "/etc/local-review/prompts"
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: `+abs+`
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Prompts.PackDir != abs {
+		t.Errorf("PackDir = %q, want absolute %q (must pass through)", cfg.Prompts.PackDir, abs)
+	}
+}
+
 func TestLoadUsesRepoYAML_PromptsCustomization(t *testing.T) {
 	// Issue #55: v0.8 prompts customization layer must round-trip
 	// through Load + the merge overlay. The maintenance-contract
@@ -292,8 +361,16 @@ prompts:
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.Prompts.PackDir != ".local-review/prompts" {
-		t.Errorf("Prompts.PackDir = %q, want %q", cfg.Prompts.PackDir, ".local-review/prompts")
+	// Load resolves relative pack_dir against the config file's
+	// directory (see TestLoadUsesRepoYAML_PromptsPackDir_ResolvedRelativeToConfig
+	// for the why), so the value comes back absolute. Verify it
+	// ends with the expected suffix so the test stays portable
+	// across temp-dir paths.
+	if !strings.HasSuffix(cfg.Prompts.PackDir, filepath.Join(".local-review", "prompts")) {
+		t.Errorf("Prompts.PackDir = %q, want suffix .local-review/prompts", cfg.Prompts.PackDir)
+	}
+	if !filepath.IsAbs(cfg.Prompts.PackDir) {
+		t.Errorf("Prompts.PackDir = %q, want absolute path", cfg.Prompts.PackDir)
 	}
 	if !strings.Contains(cfg.Prompts.Prepend, "House rule") {
 		t.Errorf("Prompts.Prepend = %q, want it to contain 'House rule'", cfg.Prompts.Prepend)
