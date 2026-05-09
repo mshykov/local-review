@@ -60,42 +60,74 @@ func WriteText(w io.Writer, rep Report) error {
 // writeOverallTable prints the top per-LLM aggregate row. Adds a
 // Consistency column only when at least one LLM measured it
 // (--repeat > 1 in live mode), so single-run benches stay terse.
+//
+// Visibility is gated on `Consistency != nil` (the runner sets the
+// pointer only when a case had RunCount >= 2), not `> 0` — claude
+// originally caught that "> 0" would hide a measured-but-zero
+// outcome, which is exactly the worst case the metric is supposed
+// to surface.
 func writeOverallTable(w io.Writer, rep Report) error {
-	showCons := false
-	for _, lr := range rep.LLMReports {
-		if lr.Consistency > 0 {
-			showCons = true
-			break
-		}
-	}
+	showCons := anyConsistencyMeasured(rep)
 
+	headers := []string{"LLM", "Precision", "Recall", "F1", "Noise"}
 	if showCons {
-		if _, err := fmt.Fprintf(w, "%-10s  %-9s  %-6s  %-6s  %-7s  %-6s  %-8s  %-8s\n", "LLM", "Precision", "Recall", "F1", "Noise", "Cons.", "Median", "P95"); err != nil {
-			return err
-		}
-		for _, lr := range rep.LLMReports {
-			if _, err := fmt.Fprintf(w, "%-10s  %-9.2f  %-6.2f  %-6.2f  %-7.2f  %-6.2f  %-8s  %-8s\n",
-				lr.LLM, lr.Precision, lr.Recall, lr.F1, lr.NoiseRate, lr.Consistency,
-				fmtMs(lr.MedianMs), fmtMs(lr.P95Ms),
-			); err != nil {
-				return err
-			}
-		}
-		return nil
+		headers = append(headers, "Cons.")
 	}
-
-	if _, err := fmt.Fprintf(w, "%-10s  %-9s  %-6s  %-6s  %-7s  %-8s  %-8s\n", "LLM", "Precision", "Recall", "F1", "Noise", "Median", "P95"); err != nil {
+	headers = append(headers, "Median", "P95")
+	if err := writeOverallHeader(w, showCons); err != nil {
 		return err
 	}
 	for _, lr := range rep.LLMReports {
-		if _, err := fmt.Fprintf(w, "%-10s  %-9.2f  %-6.2f  %-6.2f  %-7.2f  %-8s  %-8s\n",
-			lr.LLM, lr.Precision, lr.Recall, lr.F1, lr.NoiseRate,
-			fmtMs(lr.MedianMs), fmtMs(lr.P95Ms),
-		); err != nil {
+		if err := writeOverallRow(w, lr, showCons); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func writeOverallHeader(w io.Writer, withCons bool) error {
+	var err error
+	if withCons {
+		_, err = fmt.Fprintf(w, "%-10s  %-9s  %-6s  %-6s  %-7s  %-6s  %-8s  %-8s\n",
+			"LLM", "Precision", "Recall", "F1", "Noise", "Cons.", "Median", "P95")
+	} else {
+		_, err = fmt.Fprintf(w, "%-10s  %-9s  %-6s  %-6s  %-7s  %-8s  %-8s\n",
+			"LLM", "Precision", "Recall", "F1", "Noise", "Median", "P95")
+	}
+	return err
+}
+
+func writeOverallRow(w io.Writer, lr LLMReport, withCons bool) error {
+	var err error
+	if withCons {
+		// A measured case where every run disagreed renders as
+		// "0.00" (a number we want users to see), not "—".
+		cons := "—"
+		if lr.Consistency != nil {
+			cons = fmt.Sprintf("%.2f", *lr.Consistency)
+		}
+		_, err = fmt.Fprintf(w, "%-10s  %-9.2f  %-6.2f  %-6.2f  %-7.2f  %-6s  %-8s  %-8s\n",
+			lr.LLM, lr.Precision, lr.Recall, lr.F1, lr.NoiseRate, cons,
+			fmtMs(lr.MedianMs), fmtMs(lr.P95Ms))
+	} else {
+		_, err = fmt.Fprintf(w, "%-10s  %-9.2f  %-6.2f  %-6.2f  %-7.2f  %-8s  %-8s\n",
+			lr.LLM, lr.Precision, lr.Recall, lr.F1, lr.NoiseRate,
+			fmtMs(lr.MedianMs), fmtMs(lr.P95Ms))
+	}
+	return err
+}
+
+// anyConsistencyMeasured returns true when at least one LLM has a
+// non-nil Consistency pointer, indicating --repeat > 1 in live
+// mode produced an aggregate. Used to decide whether the
+// Consistency column appears in either text or markdown output.
+func anyConsistencyMeasured(rep Report) bool {
+	for _, lr := range rep.LLMReports {
+		if lr.Consistency != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // hasLanguageSplits returns true when at least one LLM has per-

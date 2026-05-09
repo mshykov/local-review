@@ -95,11 +95,12 @@ func TestWriteMarkdown_OmitsLanguagesWhenSingleLanguage(t *testing.T) {
 }
 
 func TestWriteMarkdown_RendersConsistencyWhenPresent(t *testing.T) {
+	cons := 0.92
 	rep := Report{
 		Dataset: "x", CaseCount: 1, Mode: "cli",
 		Generated: time.Now(),
 		LLMReports: []LLMReport{
-			{LLM: "claude", Consistency: 0.92, Cases: []CaseScore{{CaseID: "x"}}},
+			{LLM: "claude", Consistency: &cons, Cases: []CaseScore{{CaseID: "x"}}},
 		},
 	}
 	var buf bytes.Buffer
@@ -108,5 +109,31 @@ func TestWriteMarkdown_RendersConsistencyWhenPresent(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "0.92") {
 		t.Errorf("consistency 0.92 not rendered:\n%s", buf.String())
+	}
+}
+
+// TestWriteMarkdown_RendersZeroConsistency: a measured-but-zero
+// consistency (every run produced totally different findings) must
+// render as "0.00" — not be collapsed to "—" alongside unmeasured.
+// Codex flagged this in self-review as the worst case the metric
+// is supposed to surface.
+func TestWriteMarkdown_RendersZeroConsistency(t *testing.T) {
+	zero := 0.0
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{LLM: "claude", Consistency: &zero, Cases: []CaseScore{{CaseID: "x"}}},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	// The cell must show "0.00", and the "—" must not appear inside
+	// the consistency column. We assert against the row pattern so
+	// the test doesn't false-pass on stray dashes elsewhere.
+	if !strings.Contains(buf.String(), "| 0.00 |") {
+		t.Errorf("zero consistency should render as 0.00, not be collapsed to —:\n%s", buf.String())
 	}
 }

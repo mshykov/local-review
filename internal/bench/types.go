@@ -220,10 +220,12 @@ type LLMReport struct {
 	Languages []LanguageScore `json:"languages,omitempty"`
 
 	// Mean Jaccard similarity across cases when --repeat > 1 was used.
-	// Zero (and omitted from JSON) for single-run benches. Reported as
-	// "consistency": 0..1 where 1 means every run produced the same
-	// finding set on every case.
-	Consistency float64 `json:"consistency,omitempty"`
+	// Pointer-typed so JSON consumers can distinguish "not measured"
+	// (single-run bench → null) from "measured, zero overlap on every
+	// case" (multi-run bench, model is totally inconsistent → 0.0).
+	// Codex flagged the prior float-with-omitempty shape: a real 0.0
+	// would silently disappear from output, hiding the worst case.
+	Consistency *float64 `json:"consistency,omitempty"`
 
 	// Wall-clock totals.
 	TotalDurationMs int64 `json:"total_duration_ms"`

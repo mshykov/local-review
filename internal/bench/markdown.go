@@ -79,9 +79,14 @@ func writeMarkdownOverall(w io.Writer, rep Report) error {
 		return err
 	}
 	for _, lr := range rep.LLMReports {
+		// Pointer-typed Consistency lets a measured-but-zero case
+		// (every run produced totally different findings) render as
+		// "0.00" instead of being collapsed to "—" alongside the
+		// "not measured" case. The latter is single-run benches; we
+		// still want to call the former out as a bad signal.
 		cons := "—"
-		if lr.Consistency > 0 {
-			cons = fmt.Sprintf("%.2f", lr.Consistency)
+		if lr.Consistency != nil {
+			cons = fmt.Sprintf("%.2f", *lr.Consistency)
 		}
 		if _, err := fmt.Fprintf(w, "| %s | %.2f | %.2f | %.2f | %.2f | %s | %s | %s |\n",
 			lr.LLM, lr.Precision, lr.Recall, lr.F1, lr.NoiseRate, cons,

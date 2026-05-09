@@ -1,6 +1,6 @@
 # local-review bench leaderboard
 
-_Generated 2026-05-09 07:21 UTC_ · _Dataset: bench/dataset (10 cases)_ · _Mode: replay_
+_Generated 2026-05-09 07:25 UTC_ · _Dataset: bench/dataset (10 cases)_ · _Mode: replay_
 
 ## Overall
 

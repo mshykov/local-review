@@ -346,6 +346,12 @@ func fillLanguageAggregates(lr *LLMReport) {
 // that errored or were single-run don't contribute to the mean —
 // otherwise a one-error case would silently drag the consistency
 // number toward 0.
+//
+// Sets lr.Consistency only when at least one case was measured so
+// the *float64 stays nil for single-run benches (the JSON output
+// then renders as null, distinguishing "not measured" from
+// "measured, zero overlap on every case" — that latter case
+// produces a real 0.0).
 func fillConsistencyAggregate(lr *LLMReport) {
 	var sum float64
 	measured := 0
@@ -357,7 +363,8 @@ func fillConsistencyAggregate(lr *LLMReport) {
 		measured++
 	}
 	if measured > 0 {
-		lr.Consistency = sum / float64(measured)
+		mean := sum / float64(measured)
+		lr.Consistency = &mean
 	}
 }
 
