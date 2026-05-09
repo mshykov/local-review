@@ -10,30 +10,30 @@ import (
 // WriteMarkdown emits a leaderboard-style report suitable for
 // committing to bench/RESULTS.md. Phase 2 of issue #56:
 //
-//   # local-review bench leaderboard
+//	# local-review bench leaderboard
 //
-//   _Generated 2026-05-08T..._  ·  _Dataset: bench/dataset (10 cases)_  ·  _Mode: replay_
+//	_Generated 2026-05-08T..._  ·  _Dataset: bench/dataset (10 cases)_  ·  _Mode: replay_
 //
-//   ## Overall
+//	## Overall
 //
-//   | LLM | Precision | Recall | F1 | Noise | Cons. | Median | P95 |
-//   | --- | --- | --- | --- | --- | --- | --- | --- |
-//   | claude | 0.83 | 0.91 | 0.87 | 0.12 | — | 4.5s | 6.1s |
-//   | ...
+//	| LLM | Precision | Recall | F1 | Noise | Cons. | Median | P95 |
+//	| --- | --- | --- | --- | --- | --- | --- | --- |
+//	| claude | 0.83 | 0.91 | 0.87 | 0.12 | — | 4.5s | 6.1s |
+//	| ...
 //
-//   ## Per-language F1
+//	## Per-language F1
 //
-//   | LLM | go (4) | python (3) | typescript (3) |
-//   | --- | --- | --- | --- |
-//   | claude | 0.89 | 0.71 | 0.82 |
-//   | ...
+//	| LLM | go (4) | python (3) | typescript (3) |
+//	| --- | --- | --- | --- |
+//	| claude | 0.89 | 0.71 | 0.82 |
+//	| ...
 //
-//   ## Per-case detail
+//	## Per-case detail
 //
-//   | Case | Lang | claude | codex | gemini |
-//   | --- | --- | --- | --- | --- |
-//   | go-nil-deref-1 | go | F1=1.00 | F1=0.50 | F1=0.40 |
-//   | ...
+//	| Case | Lang | claude | codex | gemini |
+//	| --- | --- | --- | --- | --- |
+//	| go-nil-deref-1 | go | F1=1.00 | F1=0.50 | F1=0.40 |
+//	| ...
 //
 // Sections are omitted when the underlying data isn't there: the
 // per-language block stays out for single-language datasets, and the
