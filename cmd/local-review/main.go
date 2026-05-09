@@ -144,8 +144,20 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.PersistentFlags().StringVar(&sf.codexModel, "codex-model", "", "override codex's model")
 	root.PersistentFlags().StringVar(&sf.mergeWith, "merge-with", "", "agent to use for merging findings (default: auto)")
 
-	// prompt customization (issue #55)
-	root.PersistentFlags().StringVar(&sf.promptPackDir, "prompt-pack-dir", "", "override directory for language pack files (e.g. .local-review/prompts); falls through to embedded packs for missing files")
+	// prompt customization (issue #55).
+	//
+	// Path resolution is intentionally asymmetric between the YAML
+	// config and this flag, matching the user's likely mental model:
+	//   - `prompts.pack_dir: .local-review/prompts` in
+	//     ./.local-review.yml resolves relative to the config file's
+	//     directory (the repo root), so checking out the repo and
+	//     running `local-review` from anywhere inside it Just Works.
+	//   - `--prompt-pack-dir ./prompts` on the command line resolves
+	//     relative to the user's CWD — the same as every other path
+	//     they pass to a shell tool.
+	// Both end up as absolute paths in the resolved Config; the
+	// difference is what each form is interpreted relative to.
+	root.PersistentFlags().StringVar(&sf.promptPackDir, "prompt-pack-dir", "", "override directory for language pack files (e.g. .local-review/prompts); falls through to embedded packs for missing files. Resolved relative to CWD; YAML's prompts.pack_dir resolves relative to the config file.")
 
 	// Group commands so --help reads as three sections (Review / Setup /
 	// Other) instead of one alphabetical wall. Cobra renders any command

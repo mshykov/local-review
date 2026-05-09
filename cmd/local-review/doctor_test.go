@@ -382,6 +382,52 @@ func TestCheckPromptOverride_QuietWhenDirHasOverrides(t *testing.T) {
 	}
 }
 
+func TestCheckPromptOverride_WarnsOnUnreadableOverride(t *testing.T) {
+	// Self-review iter 2 (claude+codex consensus): a known-language
+	// override file that exists but isn't readable (perms drift, NFS
+	// hiccup, broken symlink) was silently skipped by the resolver
+	// AND passed the count check in doctor — so the user saw "all
+	// good" but no customization actually applied. Now: doctor
+	// actively probes readability and warns. Skips on Windows where
+	// chmod 000 doesn't strip read access the same way.
+	if isWindows() {
+		t.Skip("chmod 0 doesn't deny read on Windows")
+	}
+	dir := t.TempDir()
+	good := filepath.Join(dir, "default.md")
+	bad := filepath.Join(dir, "go.md")
+	if err := os.WriteFile(good, []byte("# default override"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bad, []byte("# go override"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(bad, 0o644) })
+
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: dir}}
+	checkPromptOverride(&buf, cfg)
+	out := buf.String()
+	if !strings.Contains(out, "unreadable") {
+		t.Errorf("expected 'unreadable' warning, got: %q", out)
+	}
+	if !strings.Contains(out, "go.md") {
+		t.Errorf("expected the unreadable filename in the warning, got: %q", out)
+	}
+	if strings.Contains(out, "default.md") {
+		t.Errorf("readable file should not appear in the unreadable warning, got: %q", out)
+	}
+}
+
+// isWindows is a tiny helper to skip permission tests that don't
+// work the same way on Windows (chmod 000 doesn't deny read).
+// runtime.GOOS would be more idiomatic but pulling in the stdlib
+// runtime package for a single-use check is overkill; checking the
+// path separator is just as reliable for our cross-platform CI.
+func isWindows() bool {
+	return os.PathSeparator == '\\'
+}
+
 func TestCheckPromptOverride_StrayMarkdownDoesNotCount(t *testing.T) {
 	// Codex caught this in self-review: pre-fix, ANY *.md file
 	// counted as an override, so a stray README.md silenced the

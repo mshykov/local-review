@@ -152,14 +152,23 @@ func checkPromptOverride(w io.Writer, cfg config.Config) {
 		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q is unreadable: %v\n", dir, err)
 		return
 	}
-	// Codex caught this in self-review: counting any *.md file
-	// silenced the diagnostic when the user dropped a README.md
-	// into the prompts directory but no actual override files —
-	// "looks populated" but nothing applies. Match against the
-	// known language-id set so a stray file is never miscounted
-	// as an override.
+	// Two things to check, both caught by self-review iterations:
+	//
+	// 1. Counting any *.md file silenced the diagnostic when the
+	//    user dropped a README.md into the prompts directory but
+	//    no actual override files. Fix: match against the known
+	//    language-id set.
+	//
+	// 2. A known-language override file that EXISTS but isn't
+	//    READABLE (perms drift, broken symlink, NFS hiccup) would
+	//    pass the count check but get silently skipped at review
+	//    time by the resolver's fall-through-on-error contract.
+	//    Fix: actively probe readability here, where surfacing the
+	//    problem doesn't disrupt a real review run. The resolver
+	//    stays resilient; doctor stays loud.
 	knownLangs := promptLanguageSet()
 	overrideCount := 0
+	var unreadable []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -169,13 +178,29 @@ func checkPromptOverride(w io.Writer, cfg config.Config) {
 			continue
 		}
 		lang := strings.TrimSuffix(name, ".md")
-		if _, ok := knownLangs[lang]; ok {
-			overrideCount++
+		if _, ok := knownLangs[lang]; !ok {
+			continue
 		}
+		overrideCount++
+		path := filepath.Join(dir, name)
+		f, err := os.Open(path)
+		if err != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", name, err))
+			continue
+		}
+		_ = f.Close()
 	}
 	if overrideCount == 0 {
 		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q has no <language>.md files matching a shipped pack.\n", dir)
 		fmt.Fprintln(w, "  Drop a file like `go.md` or `default.md` into the directory to override the embedded pack.")
+		return
+	}
+	if len(unreadable) > 0 {
+		fmt.Fprintf(w, "\n⚠ Prompt override file(s) in %q present but unreadable:\n", dir)
+		for _, u := range unreadable {
+			fmt.Fprintf(w, "    %s\n", u)
+		}
+		fmt.Fprintln(w, "  Reviews will silently fall through to embedded packs for those languages. Fix permissions or remove the file.")
 	}
 }
 

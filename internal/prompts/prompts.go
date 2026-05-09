@@ -134,10 +134,31 @@ func loadBody(language, packDir string) (string, string, error) {
 
 // readOverride returns (body, abs path, true) when packDir contains a
 // readable <language>.md, or (_, _, false) for any "fall through" case
-// (file missing, unreadable, empty after trim). Empty files fall
-// through deliberately — an accidentally-empty override file would
-// otherwise silently neuter the entire system prompt, which is the
-// worst possible failure mode for a review tool.
+// (file missing, unreadable, empty after trim).
+//
+// Fall-through-on-any-error is intentional. The alternatives —
+// returning an error from Resolve, or surfacing a warning per
+// review — were considered and rejected:
+//
+//   - A transient permission glitch on one override file (mount
+//     drop, NFS hiccup, post-deploy chmod race) would otherwise
+//     turn every review into a hard failure, exactly when users
+//     are trying to ship.
+//   - The resolver runs on the hot path of every review; warning
+//     spam there would train users to ignore it, the worst
+//     possible outcome for a "house rules aren't applying"
+//     diagnostic.
+//
+// Visibility instead lives in `local-review doctor`, which actively
+// probes pack_dir for unreadable known-language files and surfaces
+// them once at setup-check time. See checkPromptOverride in
+// cmd/local-review/doctor.go.
+//
+// Empty files (whitespace-only after trim) also fall through —
+// that defends against the worst failure mode here, where an
+// accidentally-truncated go.md would silently neuter the entire
+// system prompt instead of falling back to a known-good embedded
+// pack.
 func readOverride(packDir, language string) (string, string, bool) {
 	path := filepath.Join(packDir, language+".md")
 	b, err := os.ReadFile(path)
