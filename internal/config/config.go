@@ -30,6 +30,10 @@ type Config struct {
 	LLMs    map[string]LLMConfig `yaml:"llms"`
 	Merge   MergeConfig          `yaml:"merge"`
 	Storage StorageConfig        `yaml:"storage"`
+
+	// v0.8: prompt-pack customization (issue #55). Lets teams ship
+	// their own house rules without forking the binary.
+	Prompts PromptsConfig `yaml:"prompts"`
 }
 
 // Provider holds LLM endpoint settings. Defaults to OpenAI; any
@@ -84,6 +88,28 @@ type MergeConfig struct {
 // StorageConfig controls where reviews are saved (v0.1+).
 type StorageConfig struct {
 	BasePath string `yaml:"base_path"` // base directory for reviews
+}
+
+// PromptsConfig customises the language prompt packs the binary ships
+// with. Issue #55: teams want to tune review tone, severity bar, or
+// add house rules without forking. Three knobs, all optional, all
+// composable:
+//
+//   - PackDir: directory of override files keyed by language id. A
+//     `go.md` in this directory replaces the embedded `go.md`. Files
+//     not present fall through to the embedded pack of the same name.
+//   - Prepend / Append: free-form text spliced before/after whatever
+//     pack content was loaded. Survives an upstream pack update —
+//     the prepend/append text is yours, the pack body keeps tracking
+//     upstream improvements.
+//
+// All three apply to BOTH the single-LLM fallback path AND the
+// per-LLM CLI invocations (claude/gemini/codex), so a team's house
+// rules reach every reviewer.
+type PromptsConfig struct {
+	PackDir string `yaml:"pack_dir"` // directory of override <language>.md files
+	Prepend string `yaml:"prepend"`  // text spliced BEFORE the pack body
+	Append  string `yaml:"append"`   // text spliced AFTER the pack body
 }
 
 // boolPtr returns a pointer to a bool value (helper for defaults).
@@ -229,8 +255,33 @@ func mergeFrom(dst *Config, path string) error {
 	if err := yaml.Unmarshal(b, &layer); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
+	// Resolve any path-typed field that's natural to express
+	// relative to the config file's directory before merging. The
+	// most important case (codex flagged it on PR self-review):
+	// `prompts.pack_dir: .local-review/prompts` in a repo's YAML
+	// must point at <repo-root>/.local-review/prompts no matter
+	// where the user runs `local-review` from. Pre-fix, running
+	// from a subdirectory silently fell through to embedded packs.
+	resolveRelativePaths(&layer, filepath.Dir(path))
 	merge(dst, layer)
 	return nil
+}
+
+// resolveRelativePaths rewrites path-typed config fields to absolute
+// paths interpreted relative to baseDir (the config file's directory).
+// Absolute paths and empty strings pass through unchanged. CLI-flag
+// overrides bypass this routine because they ride on top of the
+// already-merged config and are naturally interpreted relative to
+// the user's CWD (which is what shell users expect from
+// `--prompt-pack-dir ./prompts`).
+func resolveRelativePaths(layer *Config, baseDir string) {
+	if p := layer.Prompts.PackDir; p != "" && !filepath.IsAbs(p) {
+		layer.Prompts.PackDir = filepath.Join(baseDir, p)
+	}
+	// StorageConfig.BasePath is intentionally LEFT relative — the
+	// existing storage code resolves it relative to CWD on every
+	// invocation, and tests + docs depend on that behaviour. Changing
+	// it here would be a backwards-incompatible shift; deferred.
 }
 
 // merge does a shallow overlay: any non-zero field in src replaces dst.
@@ -243,9 +294,9 @@ func mergeFrom(dst *Config, path string) error {
 // merger (mergo, etc.) would be terser but the project deliberately
 // avoids vendor SDKs / heavy reflection to keep the binary small and
 // the cascade behavior auditable. The cost is: when you add a field
-// to Config / Provider / Review / LLMConfig / MergeConfig / StorageConfig,
-// you MUST add a corresponding overlay branch here, or user overrides
-// for that field will silently no-op.
+// to Config / Provider / Review / LLMConfig / MergeConfig / StorageConfig
+// / PromptsConfig, you MUST add a corresponding overlay branch here, or
+// user overrides for that field will silently no-op.
 //
 // History: this contract was violated in v0.1 — `LLMConfig.Mode` was
 // added to the schema but never wired through, leaving the documented
@@ -345,6 +396,17 @@ func merge(dst *Config, src Config) {
 	// v0.1: Storage settings
 	if src.Storage.BasePath != "" {
 		dst.Storage.BasePath = src.Storage.BasePath
+	}
+
+	// v0.8: Prompts customization (issue #55).
+	if src.Prompts.PackDir != "" {
+		dst.Prompts.PackDir = src.Prompts.PackDir
+	}
+	if src.Prompts.Prepend != "" {
+		dst.Prompts.Prepend = src.Prompts.Prepend
+	}
+	if src.Prompts.Append != "" {
+		dst.Prompts.Append = src.Prompts.Append
 	}
 }
 

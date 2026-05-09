@@ -49,14 +49,27 @@ func (r *Reviewer) Run(ctx context.Context, mode git.Mode, ref string) (Report, 
 		packID = lang.Dominant(paths)
 	}
 
-	pack, err := prompts.Get(packID)
+	// Resolve picks up any user override (PackDir / Prepend / Append
+	// from cfg.Prompts, issue #55) so a team's house rules reach the
+	// single-LLM fallback path the same way they reach the multi-LLM
+	// CLI invokers — both paths share one resolver. The mapping is
+	// inlined here AND in cmd/local-review/runner.go selectPromptPack
+	// to keep internal/prompts free of an import dependency on
+	// internal/config; the three-field copy is too small to warrant
+	// a shared helper, and inlining matches the project's "manual
+	// walk over config fields" style (see merge() in config.go).
+	pack, err := prompts.Resolve(packID, prompts.ResolveOptions{
+		PackDir: r.cfg.Prompts.PackDir,
+		Prepend: r.cfg.Prompts.Prepend,
+		Append:  r.cfg.Prompts.Append,
+	})
 	if err != nil {
 		return Report{}, fmt.Errorf("load prompt pack %q: %w", packID, err)
 	}
 
 	user := buildUserMessage(diffs)
 	raw, err := r.client.Complete(ctx, []llm.Message{
-		{Role: "system", Content: pack},
+		{Role: "system", Content: pack.Content},
 		{Role: "user", Content: user},
 	}, true)
 	if err != nil {

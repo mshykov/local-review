@@ -1095,8 +1095,10 @@ func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred
 // Mirrors the single-LLM logic in internal/review/review.go: an
 // explicit review.prompt_pack in config wins, otherwise auto-detect
 // from the dominant language across the diff paths. The returned
-// string is the embedded pack content; the markdown-output override
-// is added by each invoker in internal/cli/invoker.go.
+// string is the resolved pack content (embedded body plus any
+// cfg.Prompts.PackDir override and cfg.Prompts.Prepend/Append, per
+// issue #55); the markdown-output override is added by each invoker
+// in internal/cli/invoker.go.
 func selectPromptPack(cfg config.Config, diffs []git.Diff) (string, error) {
 	packID := cfg.Review.PromptPack
 	if packID == "" {
@@ -1106,9 +1108,13 @@ func selectPromptPack(cfg config.Config, diffs []git.Diff) (string, error) {
 		}
 		packID = lang.Dominant(paths)
 	}
-	pack, err := prompts.Get(packID)
+	pack, err := prompts.Resolve(packID, prompts.ResolveOptions{
+		PackDir: cfg.Prompts.PackDir,
+		Prepend: cfg.Prompts.Prepend,
+		Append:  cfg.Prompts.Append,
+	})
 	if err != nil {
 		return "", fmt.Errorf("load prompt pack %q: %w", packID, err)
 	}
-	return pack, nil
+	return pack.Content, nil
 }

@@ -268,6 +268,137 @@ storage:
 	}
 }
 
+func TestLoadUsesRepoYAML_PromptsPackDir_ResolvedRelativeToConfig(t *testing.T) {
+	// Issue #55 / codex self-review iter-1: a relative `pack_dir`
+	// in the YAML must resolve relative to the config file's
+	// directory, not the user's CWD. Pre-fix, running
+	// `local-review` from a subdirectory silently fell through to
+	// embedded packs because the resolver looked at
+	// <subdir>/.local-review/prompts instead of
+	// <repo-root>/.local-review/prompts.
+	repoRoot := t.TempDir()
+	overrideDir := filepath.Join(repoRoot, ".local-review", "prompts")
+	if err := os.MkdirAll(overrideDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repoCfg := filepath.Join(repoRoot, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: .local-review/prompts
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate the user running from a subdirectory by chdir'ing
+	// into one before Load. If the loader is correct, the
+	// resolved PackDir should still point at <repoRoot>/.local-review/prompts.
+	subdir := filepath.Join(repoRoot, "internal", "deep", "nested")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Restore CWD on test exit. Check the Chdir-back error: if we
+	// can't get back to where we started, subsequent tests in the
+	// same `go test` invocation could silently misbehave; better
+	// to fail loudly here. (t.Chdir would be cleaner but it's
+	// Go 1.24+; module is 1.23.)
+	t.Cleanup(func() {
+		if err := os.Chdir(origCwd); err != nil {
+			t.Errorf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	wantAbs, _ := filepath.Abs(overrideDir)
+	gotAbs, _ := filepath.Abs(cfg.Prompts.PackDir)
+	if wantAbs != gotAbs {
+		t.Errorf("PackDir = %q (abs %q), want abs %q\n— relative path was resolved against CWD instead of the config file directory",
+			cfg.Prompts.PackDir, gotAbs, wantAbs)
+	}
+}
+
+func TestLoadUsesRepoYAML_PromptsPackDir_AbsolutePathPreserved(t *testing.T) {
+	// Absolute paths must pass through unchanged — only relative
+	// paths get rewritten. A user with a corporate-shared prompt
+	// dir at /etc/local-review/prompts should not have it
+	// re-rooted.
+	dir := t.TempDir()
+	repoCfg := filepath.Join(dir, ".local-review.yml")
+	// Use an OS-native absolute path (filepath.Abs of a temp
+	// subdir) instead of hardcoding /etc/... — Windows CI runners
+	// would fail on Unix-style absolute paths. Codex caught this
+	// in PR #60 self-review iter 3.
+	abs, err := filepath.Abs(filepath.Join(t.TempDir(), "corp-prompts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: `+abs+`
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Prompts.PackDir != abs {
+		t.Errorf("PackDir = %q, want absolute %q (must pass through)", cfg.Prompts.PackDir, abs)
+	}
+}
+
+func TestLoadUsesRepoYAML_PromptsCustomization(t *testing.T) {
+	// Issue #55: v0.8 prompts customization layer must round-trip
+	// through Load + the merge overlay. The maintenance-contract
+	// test (TestMergeCoversAllExportedFields) catches a missing
+	// overlay branch with reflection; this test pins the YAML
+	// shape users actually write.
+	dir := t.TempDir()
+	repoCfg := filepath.Join(dir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: .local-review/prompts
+  prepend: |
+    House rule: never approve commented-out code.
+  append: |
+    Output language: English only.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Load resolves relative pack_dir against the config file's
+	// directory (see TestLoadUsesRepoYAML_PromptsPackDir_ResolvedRelativeToConfig
+	// for the why), so the value comes back absolute. Verify it
+	// ends with the expected suffix so the test stays portable
+	// across temp-dir paths.
+	if !strings.HasSuffix(cfg.Prompts.PackDir, filepath.Join(".local-review", "prompts")) {
+		t.Errorf("Prompts.PackDir = %q, want suffix .local-review/prompts", cfg.Prompts.PackDir)
+	}
+	if !filepath.IsAbs(cfg.Prompts.PackDir) {
+		t.Errorf("Prompts.PackDir = %q, want absolute path", cfg.Prompts.PackDir)
+	}
+	if !strings.Contains(cfg.Prompts.Prepend, "House rule") {
+		t.Errorf("Prompts.Prepend = %q, want it to contain 'House rule'", cfg.Prompts.Prepend)
+	}
+	if !strings.Contains(cfg.Prompts.Append, "English only") {
+		t.Errorf("Prompts.Append = %q, want it to contain 'English only'", cfg.Prompts.Append)
+	}
+}
+
 func TestValidate_Success(t *testing.T) {
 	cfg := Defaults()
 	if err := cfg.Validate(); err != nil {
@@ -383,6 +514,11 @@ func nonZeroConfig() Config {
 		},
 		Storage: StorageConfig{
 			BasePath: "/tmp/test-reviews",
+		},
+		Prompts: PromptsConfig{
+			PackDir: "/etc/local-review/prompts",
+			Prepend: "House rule sentinel.",
+			Append:  "Output sentinel.",
 		},
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mshykov/local-review/internal/cli"
+	"github.com/mshykov/local-review/internal/config"
 )
 
 // withFakeHome points all auth checks at a temp dir for the duration
@@ -311,5 +313,144 @@ func TestClassify(t *testing.T) {
 				t.Errorf("auth detail %q missing substring %q", gotAuth.detail, tc.wantSub)
 			}
 		})
+	}
+}
+
+// ----------------------------------------------------------------
+// v0.8 / issue #55: doctor warns on missing/empty pack_dir.
+// ----------------------------------------------------------------
+
+func TestCheckPromptOverride_Quiet_WhenUnset(t *testing.T) {
+	// pack_dir empty → no warning. Most users land here.
+	var buf bytes.Buffer
+	checkPromptOverride(&buf, config.Config{})
+	if buf.Len() != 0 {
+		t.Errorf("expected silent output when pack_dir is unset, got: %q", buf.String())
+	}
+}
+
+func TestCheckPromptOverride_WarnsOnMissingDir(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: "/nope/does/not/exist"}}
+	checkPromptOverride(&buf, cfg)
+	got := buf.String()
+	for _, want := range []string{"⚠", "pack_dir", "does not exist"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning missing %q\n%s", want, got)
+		}
+	}
+}
+
+func TestCheckPromptOverride_WarnsWhenDirIsAFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "oops.md")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: path}}
+	checkPromptOverride(&buf, cfg)
+	got := buf.String()
+	if !strings.Contains(got, "is a file") {
+		t.Errorf("expected 'is a file' warning, got: %q", got)
+	}
+}
+
+func TestCheckPromptOverride_WarnsOnEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: dir}}
+	checkPromptOverride(&buf, cfg)
+	got := buf.String()
+	if !strings.Contains(got, "no <language>.md") {
+		t.Errorf("expected 'no <language>.md' warning on empty dir, got: %q", got)
+	}
+}
+
+func TestCheckPromptOverride_QuietWhenDirHasOverrides(t *testing.T) {
+	// Happy path: pack_dir points at a directory with at least one
+	// override file → no warning, the user knows what they're doing.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.md"), []byte("# override"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: dir}}
+	checkPromptOverride(&buf, cfg)
+	if buf.Len() != 0 {
+		t.Errorf("expected silence when override dir is populated, got: %q", buf.String())
+	}
+}
+
+func TestCheckPromptOverride_WarnsOnUnreadableOverride(t *testing.T) {
+	// Self-review iter 2 (claude+codex consensus): a known-language
+	// override file that exists but isn't readable (perms drift, NFS
+	// hiccup, broken symlink) was silently skipped by the resolver
+	// AND passed the count check in doctor — so the user saw "all
+	// good" but no customization actually applied. Now: doctor
+	// actively probes readability and warns.
+	//
+	// Skips on platforms where chmod 0 doesn't actually deny read:
+	// Windows (different ACL model) and Unix-as-root (CAP_DAC_READ_
+	// SEARCH bypasses mode bits). Codex flagged the prior shape as
+	// environment-flaky in iter-3 review.
+	if isWindows() {
+		t.Skip("chmod 0 doesn't deny read on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses mode-bit permissions")
+	}
+	dir := t.TempDir()
+	good := filepath.Join(dir, "default.md")
+	bad := filepath.Join(dir, "go.md")
+	if err := os.WriteFile(good, []byte("# default override"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bad, []byte("# go override"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(bad, 0o644) })
+
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: dir}}
+	checkPromptOverride(&buf, cfg)
+	out := buf.String()
+	if !strings.Contains(out, "unreadable") {
+		t.Errorf("expected 'unreadable' warning, got: %q", out)
+	}
+	if !strings.Contains(out, "go.md") {
+		t.Errorf("expected the unreadable filename in the warning, got: %q", out)
+	}
+	if strings.Contains(out, "default.md") {
+		t.Errorf("readable file should not appear in the unreadable warning, got: %q", out)
+	}
+}
+
+// isWindows is a tiny helper to skip permission tests that don't
+// work the same way on Windows (chmod 000 doesn't deny read).
+// runtime.GOOS would be more idiomatic but pulling in the stdlib
+// runtime package for a single-use check is overkill; checking the
+// path separator is just as reliable for our cross-platform CI.
+func isWindows() bool {
+	return os.PathSeparator == '\\'
+}
+
+func TestCheckPromptOverride_StrayMarkdownDoesNotCount(t *testing.T) {
+	// Codex caught this in self-review: pre-fix, ANY *.md file
+	// counted as an override, so a stray README.md silenced the
+	// "no overrides" warning even though no real customization
+	// applied. The check now matches against known language ids.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# notes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "TODO.md"), []byte("- write go.md"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: dir}}
+	checkPromptOverride(&buf, cfg)
+	if !strings.Contains(buf.String(), "no <language>.md") {
+		t.Errorf("README.md / TODO.md should not count as override files; expected warning, got: %q", buf.String())
 	}
 }

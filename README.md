@@ -260,6 +260,48 @@ Each pack is a markdown file (in [`internal/prompts/packs/`](internal/prompts/pa
 
 See [`docs/prompt-packs.md`](docs/prompt-packs.md) for how to write or override one.
 
+### Customise the review prompt (v0.8+)
+
+Different teams have different opinions about what's a "warning" vs a "nit." Forking the binary to change the bundled packs is a heavy hammer. Three lighter knobs in `.local-review.yml`:
+
+```yaml
+prompts:
+  # 1. Per-language override directory. A `<language>.md` file here
+  #    replaces the embedded pack of the same name. Missing files
+  #    fall through to the embedded pack — partial overrides are
+  #    fine.
+  pack_dir: .local-review/prompts
+
+  # 2. Inline rules spliced BEFORE every pack body. Use for house
+  #    rules that should colour the entire review.
+  prepend: |
+    Additional house rules:
+    - Never approve commented-out code.
+    - Flag any new dependency in package.json or go.mod.
+
+  # 3. Inline rules spliced AFTER every pack body. Use for output-
+  #    shape rules the LLM should see last.
+  append: |
+    Output language: English only.
+```
+
+All three apply to the multi-LLM path AND the single-LLM fallback, so a team's customizations reach every reviewer (claude, gemini, codex).
+
+For one-off runs, `--prompt-pack-dir <dir>` overrides `prompts.pack_dir` for a single review without touching the YAML.
+
+`local-review config` shows where each language's prompt actually came from:
+
+```text
+# Resolved prompt sources:
+#   default      embedded
+#   go           /Users/me/repo/.local-review/prompts/go.md
+#   python       embedded+prepend
+#   rust         embedded
+#   typescript   embedded
+```
+
+`local-review doctor` actively probes the prompt configuration and warns on every misconfiguration the resolver tolerates silently: missing `pack_dir`, `pack_dir` pointing at a file (not a directory), `pack_dir` with no `<language>.md` files matching a shipped pack, or known-language override files that exist but aren't readable. The resolver itself stays fall-through-on-error so a transient FS glitch can't kill every review; doctor surfaces the same conditions once at setup-check time.
+
 ## What it does NOT do (yet)
 
 - **No multi-file refactor reasoning.** local-review reviews diffs, not architectures.

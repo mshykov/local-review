@@ -6,11 +6,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/mshykov/local-review/internal/cli"
+	"github.com/mshykov/local-review/internal/config"
+	"github.com/mshykov/local-review/internal/prompts"
 )
 
 // claudeSessionFreshness caps how stale a session file can be before
@@ -108,7 +111,121 @@ func runDoctor(out io.Writer) error {
 
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%d/%d LLMs ready for multi-review.\n", readyCount, len(llms))
+
+	// Issue #55: warn when prompts.pack_dir is configured but the
+	// directory is missing/empty. A misconfigured override is silent
+	// at runtime (the resolver falls through to embedded packs), so
+	// without doctor surfacing it the user would only notice their
+	// house rules aren't applying after running a review and seeing
+	// the wrong tone.
+	if cfgErr == nil {
+		checkPromptOverride(w, cfg)
+	}
+
 	return w.err
+}
+
+// checkPromptOverride writes a warning line when cfg.Prompts.PackDir
+// is set but doesn't resolve to a populated directory of <lang>.md
+// override files. Silent fall-through is the documented Resolve
+// behaviour, but at the doctor level we surface it explicitly so a
+// typo'd path or an unmounted directory becomes visible.
+func checkPromptOverride(w io.Writer, cfg config.Config) {
+	dir := cfg.Prompts.PackDir
+	if dir == "" {
+		return
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q does not exist or is unreadable (%v)\n", dir, err)
+		fmt.Fprintln(w, "  Reviews will fall through to the embedded packs. Fix the path or remove `prompts.pack_dir` from your config.")
+		return
+	}
+	if !info.IsDir() {
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q is a file, not a directory.\n", dir)
+		fmt.Fprintln(w, "  prompts.pack_dir must point at a directory of <language>.md override files (e.g. go.md, default.md).")
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q is unreadable: %v\n", dir, err)
+		return
+	}
+	// Two things to check, both caught by self-review iterations:
+	//
+	// 1. Counting any *.md file silenced the diagnostic when the
+	//    user dropped a README.md into the prompts directory but
+	//    no actual override files. Fix: match against the known
+	//    language-id set.
+	//
+	// 2. A known-language override file that EXISTS but isn't
+	//    READABLE (perms drift, broken symlink, NFS hiccup) would
+	//    pass the count check but get silently skipped at review
+	//    time by the resolver's fall-through-on-error contract.
+	//    Fix: actively probe readability here, where surfacing the
+	//    problem doesn't disrupt a real review run. The resolver
+	//    stays resilient; doctor stays loud.
+	knownLangs := promptLanguageSet()
+	overrideCount := 0
+	var unreadable []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		lang := strings.TrimSuffix(name, ".md")
+		if _, ok := knownLangs[lang]; !ok {
+			continue
+		}
+		overrideCount++
+		path := filepath.Join(dir, name)
+		f, err := os.Open(path)
+		if err != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", name, err))
+			continue
+		}
+		// Close error here is informational only — Open succeeded
+		// so the file is readable; a Close-time I/O hiccup
+		// (typically on networked filesystems) doesn't change the
+		// "is this override usable?" answer. Surface it for
+		// debugging anyway so users on flaky FS get the breadcrumb.
+		if cerr := f.Close(); cerr != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s (close: %v)", name, cerr))
+		}
+	}
+	if overrideCount == 0 {
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q has no <language>.md files matching a shipped pack.\n", dir)
+		fmt.Fprintln(w, "  Drop a file like `go.md` or `default.md` into the directory to override the embedded pack.")
+		return
+	}
+	if len(unreadable) > 0 {
+		fmt.Fprintf(w, "\n⚠ Prompt override file(s) in %q present but unreadable:\n", dir)
+		for _, u := range unreadable {
+			fmt.Fprintf(w, "    %s\n", u)
+		}
+		fmt.Fprintln(w, "  Reviews will silently fall through to embedded packs for those languages. Fix permissions or remove the file.")
+	}
+}
+
+// promptLanguageSet returns the set of language ids that have a
+// shipped pack, used to validate override filenames in pack_dir.
+// Pulled from prompts.Available so adding a new language pack
+// automatically extends the doctor check without a separate edit.
+// Returns an empty set on error (the embedded FS would have to be
+// broken; the resolver itself catches that case loudly).
+func promptLanguageSet() map[string]struct{} {
+	ids, err := prompts.Available()
+	if err != nil {
+		return map[string]struct{}{}
+	}
+	out := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 // errWriter is an io.Writer that captures the first error from the
