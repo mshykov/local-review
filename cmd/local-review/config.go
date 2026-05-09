@@ -99,9 +99,13 @@ func printPromptResolution(w io.Writer, cfg config.Config) error {
 	}
 	for _, lang := range langs {
 		pack, err := prompts.Resolve(lang, opts)
-		source := "<resolve error>"
-		if err == nil {
-			source = pack.Source
+		// Include the actual error text in the displayed source
+		// when Resolve fails — codex flagged the prior "<resolve
+		// error>" placeholder as unhelpful for debugging
+		// misconfiguration ("which file? what error?").
+		source := pack.Source
+		if err != nil {
+			source = fmt.Sprintf("<resolve error: %v>", err)
 		}
 		if _, err := fmt.Fprintf(w, "#   %-12s %s\n", lang, source); err != nil {
 			return err

@@ -187,7 +187,14 @@ func checkPromptOverride(w io.Writer, cfg config.Config) {
 			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", name, err))
 			continue
 		}
-		_ = f.Close()
+		// Close error here is informational only — Open succeeded
+		// so the file is readable; a Close-time I/O hiccup
+		// (typically on networked filesystems) doesn't change the
+		// "is this override usable?" answer. Surface it for
+		// debugging anyway so users on flaky FS get the breadcrumb.
+		if cerr := f.Close(); cerr != nil {
+			unreadable = append(unreadable, fmt.Sprintf("%s (close: %v)", name, cerr))
+		}
 	}
 	if overrideCount == 0 {
 		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q has no <language>.md files matching a shipped pack.\n", dir)

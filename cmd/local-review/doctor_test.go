@@ -388,10 +388,17 @@ func TestCheckPromptOverride_WarnsOnUnreadableOverride(t *testing.T) {
 	// hiccup, broken symlink) was silently skipped by the resolver
 	// AND passed the count check in doctor — so the user saw "all
 	// good" but no customization actually applied. Now: doctor
-	// actively probes readability and warns. Skips on Windows where
-	// chmod 000 doesn't strip read access the same way.
+	// actively probes readability and warns.
+	//
+	// Skips on platforms where chmod 0 doesn't actually deny read:
+	// Windows (different ACL model) and Unix-as-root (CAP_DAC_READ_
+	// SEARCH bypasses mode bits). Codex flagged the prior shape as
+	// environment-flaky in iter-3 review.
 	if isWindows() {
 		t.Skip("chmod 0 doesn't deny read on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses mode-bit permissions")
 	}
 	dir := t.TempDir()
 	good := filepath.Join(dir, "default.md")

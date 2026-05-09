@@ -248,16 +248,22 @@ func TestResolve_AcceptsValidLanguageIDs(t *testing.T) {
 }
 
 func TestPathInsideDir(t *testing.T) {
+	// Build OS-native paths via filepath.Join + a temp-dir base so
+	// the test passes on Windows too — codex flagged the prior
+	// hardcoded `/a` paths as Unix-only. The temp-dir base is
+	// real (so filepath.Clean has something canonical to work
+	// with) but doesn't need to contain real files; pathInsideDir
+	// is a pure lexical check.
+	base := t.TempDir()
 	cases := []struct {
 		dir, path string
 		want      bool
 	}{
-		{"/a", "/a/b.md", true},
-		{"/a", "/a/sub/b.md", true},
-		{"/a", "/a", true},
-		{"/a", "/a/../b.md", false}, // walks out via ..
-		{"/a", "/b.md", false},      // outside
-		{"/a/b", "/a/c.md", false},  // sibling, outside
+		{base, filepath.Join(base, "b.md"), true},
+		{base, filepath.Join(base, "sub", "b.md"), true},
+		{base, base, true},
+		{base, filepath.Join(base, "..", "b.md"), false},         // walks out via ..
+		{base, filepath.Join(filepath.Dir(base), "b.md"), false}, // sibling-of-base, outside
 	}
 	for _, tc := range cases {
 		if got := pathInsideDir(tc.path, tc.dir); got != tc.want {
