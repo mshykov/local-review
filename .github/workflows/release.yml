@@ -61,6 +61,15 @@ jobs:
     outputs:
       should_release: ${{ steps.gate.outputs.should_release }}
       version: ${{ steps.bump.outputs.version }}
+      # pr_number is exported so downstream steps in this job and
+      # in later jobs can reuse the gate's already-resolved value
+      # instead of re-querying /commits/<sha>/pulls. CodeRabbit
+      # caught the second lookup in `Determine version` racing
+      # against the same indexing-lag window the gate retries
+      # past — a fresh empty-result there would silently downgrade
+      # a `minor` release to `patch` because label detection
+      # would see an empty label set.
+      pr_number: ${{ steps.gate.outputs.pr_number }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -88,13 +97,44 @@ jobs:
           # Look up the PR via the GitHub API using the commit SHA. This works
           # for all merge strategies (squash, merge commit, rebase) — unlike
           # parsing the commit subject which only works for merge commits.
-          pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
-            --jq '.[0].number' 2>/dev/null || echo "")
-          if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
-            echo "No PR found for commit ${COMMIT_SHA} — skipping release"
+          #
+          # Retry with exponential backoff: GitHub's
+          # /commits/<sha>/pulls endpoint has a few-seconds indexing
+          # lag after a merge. The release workflow typically fires
+          # within ~5–10s of the merge event, hitting that window.
+          # Real example (v0.8.0 / PR #60): workflow ran 7s after
+          # merge, the lookup returned empty, the gate skipped
+          # release, and the maintainer had to fall back to manual
+          # workflow_dispatch.
+          #
+          # Total retry budget: ~75s (5 attempts at 0s, 5s, 10s,
+          # 20s, 40s). Plenty for a release workflow whose own
+          # build job costs minutes; cheap insurance against a
+          # silent skip.
+          pr_number=""
+          for delay in 0 5 10 20 40; do
+            if [ "$delay" -gt 0 ]; then
+              echo "PR lookup empty — retrying in ${delay}s (API consistency lag)"
+              sleep "$delay"
+            fi
+            pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
+              --jq '.[0].number' 2>/dev/null || echo "")
+            if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
+              break
+            fi
+            pr_number=""
+          done
+          if [ -z "$pr_number" ]; then
+            echo "No PR found for commit ${COMMIT_SHA} after retries — skipping release"
+            echo "(If this was a release-labeled merge, GitHub's commit-to-PR index"
+            echo " may be unusually slow today. Re-run the workflow, or use"
+            echo " workflow_dispatch with an explicit version to ship now.)"
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Export pr_number so downstream steps and jobs reuse this
+          # already-resolved value instead of re-querying the API.
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
 
           labels=$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || echo "")
           if echo "$labels" | grep -qxF "release"; then
@@ -111,8 +151,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MANUAL_VERSION: ${{ inputs.version }}
-          COMMIT_SHA: ${{ github.sha }}
-          REPO: ${{ github.repository }}
+          # Reuse the gate's already-resolved pr_number rather than
+          # hitting /commits/<sha>/pulls again. Two reasons:
+          #   1. Correctness — the second lookup races against the
+          #      same indexing-lag window the gate retries past.
+          #      Pre-fix, an empty result here silently downgraded
+          #      a `minor` release to `patch` because label
+          #      detection saw an empty label set. CodeRabbit
+          #      caught this on PR #61 review.
+          #   2. Avoids a redundant API call that's already paid
+          #      its consistency-tax up in the gate.
+          PR_NUMBER: ${{ steps.gate.outputs.pr_number }}
         run: |
           if [ -n "$MANUAL_VERSION" ]; then
             echo "version=$MANUAL_VERSION" >> "$GITHUB_OUTPUT"
@@ -123,9 +172,7 @@ jobs:
           version="${latest_tag#v}"
           IFS='.' read -r major minor patch <<< "$version"
 
-          pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
-            --jq '.[0].number' 2>/dev/null || echo "")
-          labels=$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || echo "")
+          labels=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' || echo "")
 
           # Bump labels follow strict semver — see docs/RELEASE_PROCESS.md
           # "Label cheat sheet" for when each is appropriate. Quick reminder:
