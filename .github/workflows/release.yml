@@ -88,10 +88,38 @@ jobs:
           # Look up the PR via the GitHub API using the commit SHA. This works
           # for all merge strategies (squash, merge commit, rebase) — unlike
           # parsing the commit subject which only works for merge commits.
-          pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
-            --jq '.[0].number' 2>/dev/null || echo "")
-          if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
-            echo "No PR found for commit ${COMMIT_SHA} — skipping release"
+          #
+          # Retry with exponential backoff: GitHub's
+          # /commits/<sha>/pulls endpoint has a few-seconds indexing
+          # lag after a merge. The release workflow typically fires
+          # within ~5–10s of the merge event, hitting that window.
+          # Real example (v0.8.0 / PR #60): workflow ran 7s after
+          # merge, the lookup returned empty, the gate skipped
+          # release, and the maintainer had to fall back to manual
+          # workflow_dispatch.
+          #
+          # Total retry budget: ~75s (5 attempts at 0s, 5s, 10s,
+          # 20s, 40s). Plenty for a release workflow whose own
+          # build job costs minutes; cheap insurance against a
+          # silent skip.
+          pr_number=""
+          for delay in 0 5 10 20 40; do
+            if [ "$delay" -gt 0 ]; then
+              echo "PR lookup empty — retrying in ${delay}s (API consistency lag)"
+              sleep "$delay"
+            fi
+            pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
+              --jq '.[0].number' 2>/dev/null || echo "")
+            if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
+              break
+            fi
+            pr_number=""
+          done
+          if [ -z "$pr_number" ]; then
+            echo "No PR found for commit ${COMMIT_SHA} after retries — skipping release"
+            echo "(If this was a release-labeled merge, GitHub's commit-to-PR index"
+            echo " may be unusually slow today. Re-run the workflow, or use"
+            echo " workflow_dispatch with an explicit version to ship now.)"
             echo "should_release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
