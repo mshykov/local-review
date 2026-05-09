@@ -6,27 +6,154 @@
 // Get(language) returns the language-specific pack when present, or
 // the default pack otherwise. This is the language-aware-but-tool-
 // agnostic split: the binary is one thing; the rules are pluggable.
+//
+// Resolve(language, ResolveOptions) layers user customization on top
+// (issue #55, v0.8): a per-language override file from a config-pointed
+// directory, plus optional prepend/append text. Used by both the
+// single-LLM fallback path and the multi-LLM CLI invokers so a team's
+// house rules reach every reviewer.
 package prompts
 
 import (
 	"embed"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
 //go:embed packs/*.md
 var fs embed.FS
 
+// Pack is the resolved prompt content plus a human-readable label of
+// where it came from. Source values:
+//
+//	"embedded"               — the upstream pack baked into the binary
+//	"<absolute path>.md"     — a user-supplied override file
+//	"embedded+prepend"       — embedded pack with house rules prepended
+//	"embedded+append"        — same idea, appended
+//	"embedded+prepend+append"  / "<path>+prepend" / etc. for combos
+//
+// `local-review config` prints Source so users can see at a glance
+// which prompt actually fed the review (the most common debugging
+// question after "did my override take effect?"). Source is not
+// security-sensitive — it carries the resolved override path verbatim.
+type Pack struct {
+	Content string
+	Source  string
+}
+
+// ResolveOptions carries the runtime knobs that turn an embedded pack
+// into the user's final prompt. Zero value = identical to Get(language)
+// — no override directory, no prepend/append, "embedded" Source.
+type ResolveOptions struct {
+	// PackDir is a directory of <language>.md files that override the
+	// matching embedded pack. A `go.md` in this directory replaces the
+	// embedded `go.md`; a missing file falls through to the embedded
+	// pack of the same language. Empty = no override directory.
+	PackDir string
+
+	// Prepend is text spliced BEFORE the pack body (whether embedded
+	// or override). Use for house rules that should colour the entire
+	// review ("never approve commented-out code", "prefer TypeScript
+	// over JavaScript in new code").
+	Prepend string
+
+	// Append is text spliced AFTER the pack body. Use for output-shape
+	// rules ("respond in English only", "include a one-line summary at
+	// the end") that the LLM should see last.
+	Append string
+}
+
 // Get returns the text of the named pack. If the language has no
-// dedicated pack, the default pack is returned.
+// dedicated pack, the default pack is returned. Backward-compatible
+// pre-v0.8 wrapper around Resolve with empty options.
 func Get(language string) (string, error) {
+	p, err := Resolve(language, ResolveOptions{})
+	if err != nil {
+		return "", err
+	}
+	return p.Content, nil
+}
+
+// Resolve returns the prompt pack for `language`, applying user
+// customization in this order:
+//
+//  1. Body: opts.PackDir/<language>.md (if present) → embedded
+//     <language>.md → embedded default.md.
+//  2. Prepend opts.Prepend (if set), separated by a blank line.
+//  3. Append opts.Append (if set), separated by a blank line.
+//
+// The Source field on the returned Pack labels what actually got
+// loaded (file path or "embedded") so callers can surface it to
+// users. A missing PackDir entry is NOT an error — fall-through is
+// the documented behaviour. PackDir is missing AS A WHOLE returns no
+// error either; that case is surfaced by `local-review doctor`.
+func Resolve(language string, opts ResolveOptions) (Pack, error) {
+	body, source, err := loadBody(language, opts.PackDir)
+	if err != nil {
+		return Pack{}, err
+	}
+
+	content := body
+	tags := []string{}
+	if s := strings.TrimSpace(opts.Prepend); s != "" {
+		content = opts.Prepend + "\n\n" + content
+		tags = append(tags, "prepend")
+	}
+	if s := strings.TrimSpace(opts.Append); s != "" {
+		content = content + "\n\n" + opts.Append
+		tags = append(tags, "append")
+	}
+	if len(tags) > 0 {
+		source = source + "+" + strings.Join(tags, "+")
+	}
+
+	return Pack{Content: content, Source: source}, nil
+}
+
+// loadBody picks the pack body — a user override file if present in
+// packDir, else the embedded language pack, else the embedded default.
+// Returns (body, sourceLabel, err). Errors only when the embedded
+// default is missing (build broken).
+func loadBody(language, packDir string) (string, string, error) {
+	if packDir != "" {
+		if body, path, ok := readOverride(packDir, language); ok {
+			return body, path, nil
+		}
+	}
 	if b, err := fs.ReadFile("packs/" + language + ".md"); err == nil {
-		return string(b), nil
+		return string(b), "embedded", nil
 	}
 	b, err := fs.ReadFile("packs/default.md")
 	if err != nil {
-		return "", fmt.Errorf("default prompt pack missing from binary: %w", err)
+		return "", "", fmt.Errorf("default prompt pack missing from binary: %w", err)
 	}
-	return string(b), nil
+	return string(b), "embedded", nil
+}
+
+// readOverride returns (body, abs path, true) when packDir contains a
+// readable <language>.md, or (_, _, false) for any "fall through" case
+// (file missing, unreadable, empty after trim). Empty files fall
+// through deliberately — an accidentally-empty override file would
+// otherwise silently neuter the entire system prompt, which is the
+// worst possible failure mode for a review tool.
+func readOverride(packDir, language string) (string, string, bool) {
+	path := filepath.Join(packDir, language+".md")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", false
+	}
+	if strings.TrimSpace(string(b)) == "" {
+		return "", "", false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		// Couldn't resolve absolute path; the relative path still
+		// uniquely identifies the override file from cwd.
+		abs = path
+	}
+	return string(b), abs, true
 }
 
 // Available returns the language ids that have dedicated packs.

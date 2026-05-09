@@ -2,9 +2,14 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"sort"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	"github.com/mshykov/local-review/internal/config"
+	"github.com/mshykov/local-review/internal/prompts"
 )
 
 func configCmd(sf *sharedFlags) *cobra.Command {
@@ -55,7 +60,49 @@ which settings are being used.`,
 			if err := enc.Close(); err != nil {
 				return fmt.Errorf("flush config output: %w", err)
 			}
-			return nil
+			// Append the per-language prompt resolution as YAML
+			// comments. Issue #55 acceptance: "config shows the
+			// resolved prompt source (embedded vs override path)" —
+			// a YAML round-trip alone wouldn't reveal that, since
+			// PromptsConfig only carries inputs. The block below
+			// shows what each language *actually* loaded.
+			return printPromptResolution(cmd.OutOrStdout(), cfg)
 		},
 	}
+}
+
+// printPromptResolution writes a comment block listing each available
+// language pack and where the resolver actually loaded it from. Lives
+// after the main YAML dump so a `config | yq` pipeline can still
+// parse the structured part; the comment lines are valid YAML
+// (skipped by parsers) and human-readable.
+func printPromptResolution(w io.Writer, cfg config.Config) error {
+	langs, err := prompts.Available()
+	if err != nil {
+		// Available() failure means the embedded FS is broken —
+		// surface but don't fail the whole command.
+		fmt.Fprintf(w, "\n# (could not list available packs: %v)\n", err)
+		return nil
+	}
+	sort.Strings(langs)
+
+	if _, err := fmt.Fprintln(w, "\n# Resolved prompt sources:"); err != nil {
+		return err
+	}
+	opts := prompts.ResolveOptions{
+		PackDir: cfg.Prompts.PackDir,
+		Prepend: cfg.Prompts.Prepend,
+		Append:  cfg.Prompts.Append,
+	}
+	for _, lang := range langs {
+		pack, err := prompts.Resolve(lang, opts)
+		source := "<resolve error>"
+		if err == nil {
+			source = pack.Source
+		}
+		if _, err := fmt.Fprintf(w, "#   %-12s %s\n", lang, source); err != nil {
+			return err
+		}
+	}
+	return nil
 }

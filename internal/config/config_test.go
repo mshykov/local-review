@@ -268,6 +268,41 @@ storage:
 	}
 }
 
+func TestLoadUsesRepoYAML_PromptsCustomization(t *testing.T) {
+	// Issue #55: v0.8 prompts customization layer must round-trip
+	// through Load + the merge overlay. The maintenance-contract
+	// test (TestMergeCoversAllExportedFields) catches a missing
+	// overlay branch with reflection; this test pins the YAML
+	// shape users actually write.
+	dir := t.TempDir()
+	repoCfg := filepath.Join(dir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: .local-review/prompts
+  prepend: |
+    House rule: never approve commented-out code.
+  append: |
+    Output language: English only.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Prompts.PackDir != ".local-review/prompts" {
+		t.Errorf("Prompts.PackDir = %q, want %q", cfg.Prompts.PackDir, ".local-review/prompts")
+	}
+	if !strings.Contains(cfg.Prompts.Prepend, "House rule") {
+		t.Errorf("Prompts.Prepend = %q, want it to contain 'House rule'", cfg.Prompts.Prepend)
+	}
+	if !strings.Contains(cfg.Prompts.Append, "English only") {
+		t.Errorf("Prompts.Append = %q, want it to contain 'English only'", cfg.Prompts.Append)
+	}
+}
+
 func TestValidate_Success(t *testing.T) {
 	cfg := Defaults()
 	if err := cfg.Validate(); err != nil {
@@ -383,6 +418,11 @@ func nonZeroConfig() Config {
 		},
 		Storage: StorageConfig{
 			BasePath: "/tmp/test-reviews",
+		},
+		Prompts: PromptsConfig{
+			PackDir: "/etc/local-review/prompts",
+			Prepend: "House rule sentinel.",
+			Append:  "Output sentinel.",
 		},
 	}
 }

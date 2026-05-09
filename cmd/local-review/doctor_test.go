@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mshykov/local-review/internal/cli"
+	"github.com/mshykov/local-review/internal/config"
 )
 
 // withFakeHome points all auth checks at a temp dir for the duration
@@ -311,5 +313,71 @@ func TestClassify(t *testing.T) {
 				t.Errorf("auth detail %q missing substring %q", gotAuth.detail, tc.wantSub)
 			}
 		})
+	}
+}
+
+// ----------------------------------------------------------------
+// v0.8 / issue #55: doctor warns on missing/empty pack_dir.
+// ----------------------------------------------------------------
+
+func TestCheckPromptOverride_Quiet_WhenUnset(t *testing.T) {
+	// pack_dir empty → no warning. Most users land here.
+	var buf bytes.Buffer
+	checkPromptOverride(&buf, config.Config{})
+	if buf.Len() != 0 {
+		t.Errorf("expected silent output when pack_dir is unset, got: %q", buf.String())
+	}
+}
+
+func TestCheckPromptOverride_WarnsOnMissingDir(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: "/nope/does/not/exist"}}
+	checkPromptOverride(&buf, cfg)
+	got := buf.String()
+	for _, want := range []string{"⚠", "pack_dir", "does not exist"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning missing %q\n%s", want, got)
+		}
+	}
+}
+
+func TestCheckPromptOverride_WarnsWhenDirIsAFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "oops.md")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: path}}
+	checkPromptOverride(&buf, cfg)
+	got := buf.String()
+	if !strings.Contains(got, "is a file") {
+		t.Errorf("expected 'is a file' warning, got: %q", got)
+	}
+}
+
+func TestCheckPromptOverride_WarnsOnEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: dir}}
+	checkPromptOverride(&buf, cfg)
+	got := buf.String()
+	if !strings.Contains(got, "no <language>.md") {
+		t.Errorf("expected 'no <language>.md' warning on empty dir, got: %q", got)
+	}
+}
+
+func TestCheckPromptOverride_QuietWhenDirHasOverrides(t *testing.T) {
+	// Happy path: pack_dir points at a directory with at least one
+	// override file → no warning, the user knows what they're doing.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.md"), []byte("# override"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: dir}}
+	checkPromptOverride(&buf, cfg)
+	if buf.Len() != 0 {
+		t.Errorf("expected silence when override dir is populated, got: %q", buf.String())
 	}
 }

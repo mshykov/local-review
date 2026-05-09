@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mshykov/local-review/internal/cli"
+	"github.com/mshykov/local-review/internal/config"
 )
 
 // claudeSessionFreshness caps how stale a session file can be before
@@ -108,7 +109,57 @@ func runDoctor(out io.Writer) error {
 
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "%d/%d LLMs ready for multi-review.\n", readyCount, len(llms))
+
+	// Issue #55: warn when prompts.pack_dir is configured but the
+	// directory is missing/empty. A misconfigured override is silent
+	// at runtime (the resolver falls through to embedded packs), so
+	// without doctor surfacing it the user would only notice their
+	// house rules aren't applying after running a review and seeing
+	// the wrong tone.
+	if cfgErr == nil {
+		checkPromptOverride(w, cfg)
+	}
+
 	return w.err
+}
+
+// checkPromptOverride writes a warning line when cfg.Prompts.PackDir
+// is set but doesn't resolve to a populated directory of <lang>.md
+// override files. Silent fall-through is the documented Resolve
+// behaviour, but at the doctor level we surface it explicitly so a
+// typo'd path or an unmounted directory becomes visible.
+func checkPromptOverride(w io.Writer, cfg config.Config) {
+	dir := cfg.Prompts.PackDir
+	if dir == "" {
+		return
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q does not exist or is unreadable (%v)\n", dir, err)
+		fmt.Fprintln(w, "  Reviews will fall through to the embedded packs. Fix the path or remove `prompts.pack_dir` from your config.")
+		return
+	}
+	if !info.IsDir() {
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q is a file, not a directory.\n", dir)
+		fmt.Fprintln(w, "  prompts.pack_dir must point at a directory of <language>.md override files (e.g. go.md, default.md).")
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q is unreadable: %v\n", dir, err)
+		return
+	}
+	overrideCount := 0
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() && len(name) > 3 && name[len(name)-3:] == ".md" {
+			overrideCount++
+		}
+	}
+	if overrideCount == 0 {
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q has no <language>.md files.\n", dir)
+		fmt.Fprintln(w, "  Drop a file like `go.md` or `default.md` into the directory to override the embedded pack.")
+	}
 }
 
 // errWriter is an io.Writer that captures the first error from the

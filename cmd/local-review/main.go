@@ -80,6 +80,14 @@ type sharedFlags struct {
 	geminiModel string
 	codexModel  string
 	mergeWith   string
+
+	// v0.8 prompt-customization (issue #55). One-off override of
+	// cfg.Prompts.PackDir for a single review — useful for "review
+	// this PR with strict mode" or for trying a new house pack
+	// without editing the YAML. Prepend/Append don't get CLI flags
+	// because their values are typically multi-line — config-only
+	// is the right ergonomic choice for those.
+	promptPackDir string
 }
 
 func main() {
@@ -135,6 +143,9 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.PersistentFlags().StringVar(&sf.geminiModel, "gemini-model", "", "override gemini's model")
 	root.PersistentFlags().StringVar(&sf.codexModel, "codex-model", "", "override codex's model")
 	root.PersistentFlags().StringVar(&sf.mergeWith, "merge-with", "", "agent to use for merging findings (default: auto)")
+
+	// prompt customization (issue #55)
+	root.PersistentFlags().StringVar(&sf.promptPackDir, "prompt-pack-dir", "", "override directory for language pack files (e.g. .local-review/prompts); falls through to embedded packs for missing files")
 
 	// Group commands so --help reads as three sections (Review / Setup /
 	// Other) instead of one alphabetical wall. Cobra renders any command
@@ -323,6 +334,15 @@ func applyFlagsToConfig(cfg *config.Config, sf *sharedFlags) {
 	// which made the preview misleading.
 	if sf.mergeWith != "" {
 		cfg.Merge.PreferredLLM = sf.mergeWith
+	}
+
+	// --prompt-pack-dir overrides cfg.Prompts.PackDir for one-off
+	// runs (issue #55). Per the v0.6.x retrospective on the merge
+	// contract: this needs a corresponding branch in
+	// `local-review config` so the print previews what'll actually
+	// be loaded — see configCmd's printer for the pair.
+	if sf.promptPackDir != "" {
+		cfg.Prompts.PackDir = sf.promptPackDir
 	}
 }
 
