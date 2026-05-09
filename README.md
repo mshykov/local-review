@@ -291,7 +291,7 @@ For one-off runs, `--prompt-pack-dir <dir>` overrides `prompts.pack_dir` for a s
 
 `local-review config` shows where each language's prompt actually came from:
 
-```
+```text
 # Resolved prompt sources:
 #   default      embedded
 #   go           /Users/me/repo/.local-review/prompts/go.md
@@ -300,7 +300,7 @@ For one-off runs, `--prompt-pack-dir <dir>` overrides `prompts.pack_dir` for a s
 #   typescript   embedded
 ```
 
-`local-review doctor` warns if `pack_dir` is set but the directory is missing or empty (a typo would otherwise silently fall through to embedded packs and make you wonder why your house rules aren't applying).
+`local-review doctor` actively probes the prompt configuration and warns on every misconfiguration the resolver tolerates silently: missing `pack_dir`, `pack_dir` pointing at a file (not a directory), `pack_dir` with no `<language>.md` files matching a shipped pack, or known-language override files that exist but aren't readable. The resolver itself stays fall-through-on-error so a transient FS glitch can't kill every review; doctor surfaces the same conditions once at setup-check time.
 
 ## What it does NOT do (yet)
 

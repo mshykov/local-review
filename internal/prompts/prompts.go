@@ -229,6 +229,14 @@ func readOverride(packDir, language string) (string, string, bool) {
 // (Lexically resolved); we deliberately don't follow symlinks
 // here — symlinks inside a controlled pack_dir are typically
 // legitimate (e.g., shared org-wide override repo mounted in).
+//
+// Future hardening: when the project moves to Go 1.24+, replace
+// the lexical Rel-based check with `os.Root` / `os.OpenInRoot`
+// (added in Go 1.24, hardened against TOCTOU and symlink-escape
+// races that any check-then-open approach inherently has). The
+// current go.mod targets 1.23 so the 1.24 API isn't available
+// yet; the regex gate + Rel check is sufficient for the threat
+// model in the meantime. Tracked for the next Go-version bump.
 func pathInsideDir(filePath, dir string) bool {
 	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(filePath))
 	if err != nil {

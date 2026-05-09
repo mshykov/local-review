@@ -296,8 +296,20 @@ prompts:
 	if err := os.MkdirAll(subdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	origCwd, _ := os.Getwd()
-	defer os.Chdir(origCwd)
+	origCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Restore CWD on test exit. Check the Chdir-back error: if we
+	// can't get back to where we started, subsequent tests in the
+	// same `go test` invocation could silently misbehave; better
+	// to fail loudly here. (t.Chdir would be cleaner but it's
+	// Go 1.24+; module is 1.23.)
+	t.Cleanup(func() {
+		if err := os.Chdir(origCwd); err != nil {
+			t.Errorf("restore cwd: %v", err)
+		}
+	})
 	if err := os.Chdir(subdir); err != nil {
 		t.Fatal(err)
 	}
