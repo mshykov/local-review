@@ -1,0 +1,9 @@
+id: clean-ts-import-reorder-1
+title: Pure import reorder — no behavioural change
+language: typescript
+description: |
+  Reorders the imports in src/api/users.ts to alphabetical order
+  (third-party first, then internal). No symbols added or removed,
+  no logic touched. A clean reviewer should be silent (or at most
+  emit a nit; we count anything beyond zero as noise).
+clean: true

@@ -1,0 +1,29 @@
+id: go-race-mapwrite-1
+title: Concurrent map write without holding the mutex
+language: go
+description: |
+  Cache.Get reads s.entries under s.mu, but the new asynchronous
+  Cache.Refresh fan-out writes to s.entries from a goroutine without
+  acquiring the lock. Concurrent reads + unsynchronised writes are a
+  Go data race; under the race detector this fails the test suite,
+  in production it can corrupt the map and panic. Fix is to take
+  s.mu for the write, or move the write to the calling goroutine.
+expected:
+  - file: server/cache.go
+    line: 22
+    window: 3
+    category: correctness
+    severity: critical
+    note: write to s.entries from goroutine without holding s.mu (data race)
+  # Refresh accepts ctx but never observes it — a real supplementary
+  # finding multiple reviewers raise. CodeRabbit pointed out (PR #58)
+  # that without listing it explicitly here, correct ctx-unused
+  # findings are scored as noise (FP) and penalise the reviewer for
+  # catching a second valid issue. Listing it so the leaderboard
+  # rewards thoroughness instead.
+  - file: server/cache.go
+    line: 21
+    window: 2
+    category: correctness
+    severity: warning
+    note: Refresh accepts ctx but never observes it; cancellation has no effect

@@ -2,14 +2,18 @@
 
 This directory holds the **review-quality benchmark** introduced in
 issue #56. It gives the project a reproducible signal — precision,
-recall, F1, noise rate — for prompt and model changes, instead of
-shipping releases on vibes.
+recall, F1, noise rate, consistency — for prompt and model changes,
+instead of shipping releases on vibes.
 
-This is **Phase 1**: a small hand-curated dataset, an in-CLI scorer,
-and a deterministic replay mode for CI. Phase 2 grows the dataset and
-adds consistency runs; Phase 3 adds cross-tool comparisons (CodeRabbit,
-Copilot review, etc.) and an LLM-as-judge backstop. See the issue for
-the long-term roadmap.
+**Phase 1** shipped the harness: a small hand-curated dataset, an
+in-CLI scorer, and a deterministic replay mode for CI.
+**Phase 2** (this directory's current state) added per-language
+splits, consistency runs (`--repeat N`, Jaccard similarity), a
+markdown leaderboard (`--markdown bench/RESULTS.md`), and grew the
+dataset to **10 cases** spanning Go, TypeScript, Python, and Rust.
+**Phase 3** (planned) adds cross-tool comparisons (CodeRabbit,
+Copilot review, etc.) and an LLM-as-judge backstop. See the issue
+for the long-term roadmap.
 
 ## Layout
 
@@ -49,6 +53,9 @@ Useful flags:
 | `--only claude,codex` | restrict to a subset of agents |
 | `--json` | emit machine-readable JSON to stdout |
 | `--out <path>` | also write JSON to disk (text still goes to stdout) |
+| `--markdown <path>` | also write a leaderboard markdown table to disk (Phase 2) |
+| `--repeat N` | sample each (case, LLM) N times for Jaccard consistency (live mode only; Phase 2) |
+| `--strict` | exit non-zero on any per-case error; default ON in `--replay` |
 
 ## Scoring rules
 
@@ -76,6 +83,18 @@ Aggregates across the dataset:
   *clean* case (`clean: true` in `case.yaml`). Lower is better. A
   noisy reviewer trains people to ignore findings, which is worse
   than missing some bugs.
+* **Per-language F1** is the same micro-average computed against
+  each language subset. Lets you see "did the new prompt pack help
+  Go without regressing TypeScript?" without arithmetic. The split
+  is omitted automatically when the dataset has only one language.
+* **Consistency** is the mean Jaccard similarity (over `--repeat N`
+  live runs) of finding `(file, line)` sets per case. 1.0 means
+  every run produced the same set, 0.0 means no overlap. Severity
+  and snippet are deliberately ignored — LLMs paraphrase the same
+  finding's title across runs, but `file:line` survives. Replay
+  mode rejects `--repeat > 1` (fixtures are deterministic; the
+  number would always be 1.0 and tell you nothing about the
+  underlying model).
 * **Median / p95** wall-clock are computed from successful runs
   only. Errors don't pollute timing.
 
@@ -134,13 +153,31 @@ behaviour changes meaningfully — otherwise replay scores measure
 "how the v0.6 prompt pack scored on cached v0.6 outputs," which is
 not what a v0.7 release actually ships.
 
+## Updating the leaderboard
+
+`bench/RESULTS.md` is the human-readable leaderboard. To refresh it
+from the current dataset + fixtures:
+
+```sh
+local-review bench --replay bench/fixtures \
+    --markdown bench/RESULTS.md \
+    --out bench-results.json
+```
+
+Commit both files. Diffing `bench-results.json` between commits is
+the cheapest way to see "did this prompt-pack change move anything?".
+
 ## Limitations to call out
 
-* The dataset is small (Phase 1 ships ~4 cases). Numbers are
-  illustrative, not authoritative.
+* Phase 2 ships **10 cases**. Issue #56 targets 50–100; we add cases
+  as real PRs surface them. Numbers from a 10-case bench are
+  directional, not authoritative.
 * Line-window matching has occasional false-positive matches when a
   reviewer happens to comment on an adjacent unrelated thing. This
   is a known cost of not requiring category match.
+* Consistency / Jaccard is **only meaningful for live runs**. In
+  replay mode the harness refuses `--repeat > 1` rather than
+  silently shipping 1.0 to the leaderboard.
 * We don't yet score the **merge** step — only individual agent
   reviews. Phase 3 candidate.
 * The finding parser recognises a curated allow-list of

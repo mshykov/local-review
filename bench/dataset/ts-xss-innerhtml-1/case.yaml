@@ -1,0 +1,16 @@
+id: ts-xss-innerhtml-1
+title: XSS via direct innerHTML assignment of user input
+language: typescript
+description: |
+  renderComment() switched from textContent to innerHTML so the
+  display can render bold/italic markdown, but pipes the raw `body`
+  in unchanged — any HTML the commenter posts (including <script>)
+  executes in the page's origin. Fix is sanitisation (DOMPurify) or
+  reverting to textContent and rendering markdown server-side.
+expected:
+  - file: src/ui/comment.ts
+    line: 6
+    window: 2
+    category: security
+    severity: critical
+    note: innerHTML = user-supplied body without sanitisation → stored XSS

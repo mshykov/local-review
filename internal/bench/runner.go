@@ -44,6 +44,21 @@ type Options struct {
 	// Timeout per case per LLM. Zero falls back to llm.TimeoutSec, then
 	// to 120 seconds.
 	Timeout time.Duration
+
+	// Repeat is the number of times each (case, LLM) pair is sampled
+	// to compute Jaccard consistency. Zero or one means "no repeat";
+	// the bench runs once and CaseScore.Jaccard stays nil (not
+	// measured — absent from JSON output). Values > 1 are only
+	// meaningful for SourceLive — replay fixtures are deterministic
+	// and the Phase-2 consistency-runs check would always score 1.0,
+	// so Run errors out for replay+Repeat>1 rather than producing a
+	// meaningless number.
+	//
+	// The first run's findings still drive precision/recall/F1; the
+	// extra runs only feed the Jaccard calculation. This keeps the
+	// quality scores comparable to single-run benches and avoids
+	// "did variance cause that regression?" ambiguity.
+	Repeat int
 }
 
 // Run scores each case against each LLM and returns an aggregated
@@ -51,13 +66,16 @@ type Options struct {
 // abort the run — one flaky agent shouldn't take down the rest.
 //
 // Returns an error only on caller-mistake conditions (no LLMs, replay
-// mode with no replay dir).
+// mode with no replay dir, --repeat > 1 in replay mode).
 func Run(ctx context.Context, cases []Case, opts Options) (Report, error) {
 	if len(opts.LLMs) == 0 {
 		return Report{}, errors.New("no LLMs to bench (pass --only or authenticate at least one CLI)")
 	}
 	if opts.Source == SourceReplay && opts.ReplayDir == "" {
 		return Report{}, errors.New("replay mode requires a fixtures directory")
+	}
+	if opts.Source == SourceReplay && opts.Repeat > 1 {
+		return Report{}, errors.New("--repeat > 1 is meaningless in replay mode (fixtures are deterministic; consistency would always score 1.0); re-run live, or drop --repeat")
 	}
 
 	rep := Report{
@@ -88,18 +106,34 @@ func Run(ctx context.Context, cases []Case, opts Options) (Report, error) {
 
 // scoreOne runs a single (case, LLM) pair. Always returns a CaseScore
 // — on error the score has Error set and zero TP/FP/FN.
+//
+// When opts.Repeat > 1, the (case, LLM) pair is sampled repeat times.
+// The first sample drives precision/recall/F1 (so quality scores stay
+// comparable to single-run benches), and the full run set feeds the
+// Jaccard consistency calculation. If the first sample errors, the
+// whole call short-circuits as an error — there's nothing to compare
+// against.
+//
+// Duration is measured across the entire scoring pass, including
+// the extra repeats. Codex flagged the prior shape (capture before
+// sampleConsistency) as understating wall-clock for --repeat runs:
+// with --repeat 5, only run 1's duration was reported, hiding 80%
+// of real spend. Median/P95 in the per-LLM aggregate now reflect
+// total per-case wall-clock, which is what a user comparing latency
+// between runs actually wants.
 func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore {
 	start := time.Now()
 	mode := modeName(opts.Source)
 
 	output, err := obtainReview(ctx, c, llm, opts)
-	dur := time.Since(start)
 
 	if err != nil {
+		dur := time.Since(start)
 		return CaseScore{
 			CaseID:     c.ID,
 			LLM:        llm.Name,
 			Version:    llm.Version,
+			Language:   c.Language,
 			Duration:   dur,
 			DurationMs: dur.Milliseconds(),
 			Error:      err.Error(),
@@ -111,10 +145,63 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	cs := Score(c, produced)
 	cs.LLM = llm.Name
 	cs.Version = llm.Version
+	cs.Language = c.Language
+	cs.Mode = mode
+
+	// Phase-2 consistency: re-sample the same (case, LLM) up to
+	// opts.Repeat times and record the Jaccard similarity. Each
+	// extra sample is independent — if one errors we still report
+	// Jaccard against whichever samples succeeded (down to a
+	// minimum of 2 samples). Both the attempt count and the
+	// successful-run count are recorded so a "Jaccard 1.0 but 3/5
+	// runs failed" outcome stays interpretable instead of falsely
+	// implying every attempt agreed — codex caught this credibility
+	// hole in self-review. JSON consumers should treat any case
+	// with attempts > run_count with skepticism.
+	if opts.Repeat > 1 {
+		attempts, count, jac := sampleConsistency(ctx, c, llm, opts, produced)
+		cs.Attempts = attempts
+		cs.RunCount = count
+		if count >= 2 {
+			cs.Jaccard = &jac
+		}
+	}
+
+	dur := time.Since(start)
 	cs.Duration = dur
 	cs.DurationMs = dur.Milliseconds()
-	cs.Mode = mode
 	return cs
+}
+
+// sampleConsistency runs the same (case, LLM) opts.Repeat - 1
+// additional times and returns (attempts, successfulRuns, jaccard)
+// where jaccard is computed across all successful runs (including
+// the caller-supplied first one).
+//
+// Errors on extra samples are tolerated: we tally attempts and
+// successes separately and compute Jaccard over what landed. The
+// gap (attempts > successfulRuns) is surfaced via CaseScore.Attempts
+// so a high Jaccard built from few survivors doesn't get committed
+// to a leaderboard as proof of stability.
+//
+// Returns (opts.Repeat, len(runs), 0) when no extra samples
+// succeeded; the caller will not set cs.Jaccard in that case.
+// Consumers should treat run_count <= 1 (or a nil Jaccard) as
+// "consistency not measured."
+func sampleConsistency(ctx context.Context, c Case, llm cli.LLM, opts Options, firstRun []ProducedFinding) (attempts, successful int, jac float64) {
+	attempts = opts.Repeat
+	runs := [][]ProducedFinding{firstRun}
+	for i := 1; i < opts.Repeat; i++ {
+		out, err := obtainReview(ctx, c, llm, opts)
+		if err != nil {
+			continue
+		}
+		runs = append(runs, ParseFindings(out))
+	}
+	if len(runs) < 2 {
+		return attempts, len(runs), 0
+	}
+	return attempts, len(runs), jaccard(runs)
 }
 
 // obtainReview returns the LLM's review markdown for one case, either
@@ -228,7 +315,86 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 	if tally.cleanCases > 0 {
 		lr.NoiseRate = float64(tally.cleanFindings) / float64(tally.cleanCases)
 	}
+	fillLanguageAggregates(lr)
+	fillConsistencyAggregate(lr)
 	fillTimingAggregates(lr, durations)
+}
+
+// fillLanguageAggregates groups CaseScore entries by their Language
+// field and computes per-language precision / recall / F1 / noise.
+// Skips the split entirely when the dataset has only one language
+// (empty Languages slice tells the report writer "don't bother
+// printing a per-language section").
+func fillLanguageAggregates(lr *LLMReport) {
+	byLang := make(map[string][]CaseScore)
+	for _, cs := range lr.Cases {
+		lang := cs.Language
+		if lang == "" {
+			lang = "default"
+		}
+		byLang[lang] = append(byLang[lang], cs)
+	}
+	if len(byLang) <= 1 {
+		return
+	}
+
+	langs := make([]string, 0, len(byLang))
+	for l := range byLang {
+		langs = append(langs, l)
+	}
+	sort.Strings(langs)
+
+	out := make([]LanguageScore, 0, len(langs))
+	for _, lang := range langs {
+		cases := byLang[lang]
+		t := tallyCases(cases)
+		// Skip languages where every case errored — "no data" is
+		// less misleading than F1=0.00 ("missed everything"). The
+		// languageF1 sentinel (-1) will render these as "—".
+		if t.nonCleanScored == 0 && t.cleanCases == 0 {
+			continue
+		}
+		p, r, f1 := qualityScores(t)
+		ls := LanguageScore{
+			Language:  lang,
+			Cases:     len(cases),
+			Precision: p,
+			Recall:    r,
+			F1:        f1,
+		}
+		if t.cleanCases > 0 {
+			ls.NoiseRate = float64(t.cleanFindings) / float64(t.cleanCases)
+		}
+		out = append(out, ls)
+	}
+	lr.Languages = out
+}
+
+// fillConsistencyAggregate computes the mean Jaccard across cases
+// where consistency was actually measured (RunCount >= 2). Cases
+// that errored or were single-run don't contribute to the mean —
+// otherwise a one-error case would silently drag the consistency
+// number toward 0.
+//
+// Sets lr.Consistency only when at least one case was measured so
+// the *float64 stays nil for single-run benches (the JSON output
+// then renders as null, distinguishing "not measured" from
+// "measured, zero overlap on every case" — that latter case
+// produces a real 0.0).
+func fillConsistencyAggregate(lr *LLMReport) {
+	var sum float64
+	measured := 0
+	for _, cs := range lr.Cases {
+		if cs.Jaccard == nil {
+			continue
+		}
+		sum += *cs.Jaccard
+		measured++
+	}
+	if measured > 0 {
+		mean := sum / float64(measured)
+		lr.Consistency = &mean
+	}
 }
 
 // caseTally collects the running sums fillAggregates needs. Lives as

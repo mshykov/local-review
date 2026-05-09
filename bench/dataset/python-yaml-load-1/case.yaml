@@ -1,0 +1,26 @@
+id: python-yaml-load-1
+title: yaml.load with UnsafeLoader allows arbitrary code execution
+language: python
+description: |
+  load_config() switched from yaml.safe_load to yaml.load with
+  Loader=yaml.UnsafeLoader. UnsafeLoader resolves !!python/object
+  and !!python/object/apply tags, instantiating arbitrary Python
+  classes — e.g. a YAML file containing
+  `!!python/object/apply:os.system ["rm -rf ~"]` runs the command
+  on load. This is the canonical PyYAML deserialization-CVE class
+  (CVE-2017-18342 et al.). Fix is yaml.safe_load (or explicit
+  Loader=SafeLoader).
+
+  Note: in PyYAML 6.x, calling yaml.load without any Loader
+  argument now raises — so we use the explicit UnsafeLoader form
+  to model the real shape of bad code in the wild. CodeRabbit
+  flagged the original Loader-less framing as both technically
+  inaccurate (FullLoader does not run !!python/object/apply) and
+  dead-on-arrival in modern PyYAML.
+expected:
+  - file: app/config.py
+    line: 8
+    window: 2
+    category: security
+    severity: critical
+    note: yaml.load with UnsafeLoader → arbitrary code execution via !!python/object/apply

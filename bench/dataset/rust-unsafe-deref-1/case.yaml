@@ -1,0 +1,17 @@
+id: rust-unsafe-deref-1
+title: Unsafe dereference of a possibly-null pointer in FFI shim
+language: rust
+description: |
+  read_message() takes a *const u8 from C, builds a slice with a
+  caller-supplied length, and passes the bytes to from_utf8_unchecked.
+  Two compounding problems: the pointer is dereferenced inside an
+  `unsafe` block without a null check, and `from_utf8_unchecked` skips
+  UTF-8 validation — invalid bytes produce undefined behaviour. Safe
+  fix is `from_utf8` (validating) plus an explicit null guard.
+expected:
+  - file: src/ffi.rs
+    line: 9
+    window: 2
+    category: security
+    severity: critical
+    note: dereference of *const u8 with no null check + from_utf8_unchecked

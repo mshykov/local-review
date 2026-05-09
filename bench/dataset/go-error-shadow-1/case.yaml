@@ -1,0 +1,22 @@
+id: go-error-shadow-1
+title: Encoder error swallowed — function returns nil on write failure
+language: go
+description: |
+  Save() opens a file with os.Create (fine) and then encodes a JSON
+  payload. The new code wraps the encode call in `if err := ...
+  Encode(p); err != nil { return nil }` — converting any encoder
+  error into a successful return. Combined with the unconditional
+  `return err` on the next line (which fires when the encoder
+  succeeded, where the outer `err` is still nil), the function now
+  reports success on every call. A short disk write, a permission
+  error mid-write, or any other io.Writer failure surfaced through
+  Encode now silently produces a partial/zero-byte file and a happy
+  caller. Fix: propagate the encoder error directly
+  (`return json.NewEncoder(f).Encode(p)`).
+expected:
+  - file: store/save.go
+    line: 19
+    window: 2
+    category: correctness
+    severity: major
+    note: encoder error replaced with nil — caller never learns about write failure
