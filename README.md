@@ -26,11 +26,10 @@
 
 > 📋 **Looking for the human-readable code review checklist this tool implements?** See [**CHECKLIST.md**](CHECKLIST.md) — OWASP 2025-aligned, with severity tiers and concrete measurables. Use it for human reviews, or run `local-review review` to get an LLM pass against the same rules.
 
-> ✨ **New in v0.7** — *Smarter, more visible reviews.* Three changes you'll notice on your first run after upgrading:
+> ✨ **New in v0.8** — *Measure what you ship, customise what you check.* Two things teams asked for:
 >
-> - **Diff-too-large preflight.** Agents whose context window can't fit the prompt + diff are skipped *before* the run starts, with a one-line hint on how to scope smaller. No more 5-minute fan-outs that fail with N opaque errors.
-> - **Per-LLM token visibility.** Each completion line shows the prompt and response size for that agent (`· 12.3k in / 4.5k out`); the closing line aggregates the run total. Same data persists in `<commit>_metadata.json`. (For Anthropic, "in" includes cache-read tokens — these numbers are *prompt size*, not billed amount; check your vendor dashboard for actual spend.)
-> - **Live progress streaming.** Per-agent lines print as each agent finishes — no more blank terminal while the slow one grinds. See [CHANGELOG](CHANGELOG.md#070---2026-05-07) for the full notes.
+> - **`local-review bench` — quality benchmark harness.** A reproducible signal — precision / recall / F1, noise rate, consistency, per-language splits — for prompt + model changes. Load a labelled dataset of diffs, run each through every active LLM (or pre-recorded fixtures via `--replay`), get a markdown leaderboard you can commit. See [`bench/README.md`](bench/README.md) and [`bench/RESULTS.md`](bench/RESULTS.md). Closes #56 Phase 1 + 2.
+> - **Prompt customization (#55).** Ship house rules without forking. Three knobs in `.local-review.yml`: `prompts.pack_dir` (per-language override directory), `prompts.prepend` (rules spliced before every pack), `prompts.append` (output-shape rules). All three apply to both the multi-LLM CLI path and the single-LLM fallback. `--prompt-pack-dir <dir>` for one-off overrides. See the [Customise the review prompt](#customise-the-review-prompt-v08) section below or the full notes in [CHANGELOG](CHANGELOG.md#080---2026-05-09).
 
 ---
 
@@ -238,7 +237,7 @@ Common flags:
 | `--max-findings <n>` | Cap output (single-LLM fallback only) |
 | `--json` | Emit JSON (single-LLM fallback only — see below) |
 
-In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the post-v0.7 roadmap — no fixed date; we'll unpark it when the third user asks for it.
+In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the post-v0.8 roadmap — no fixed date; we'll unpark it when the third user asks for it.
 
 Config wins by default; flags override config at runtime (e.g., `--only codex` runs codex even if your config sets `codex.enabled: false`).
 
