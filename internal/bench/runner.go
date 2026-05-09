@@ -47,11 +47,12 @@ type Options struct {
 
 	// Repeat is the number of times each (case, LLM) pair is sampled
 	// to compute Jaccard consistency. Zero or one means "no repeat";
-	// the bench runs once and the per-case Jaccard stays at 0. Values
-	// > 1 are only meaningful for SourceLive — replay fixtures are
-	// deterministic and the Phase-2 consistency-runs check would
-	// always score 1.0, so Run errors out for replay+Repeat>1 rather
-	// than producing a meaningless number.
+	// the bench runs once and CaseScore.Jaccard stays nil (not
+	// measured — absent from JSON output). Values > 1 are only
+	// meaningful for SourceLive — replay fixtures are deterministic
+	// and the Phase-2 consistency-runs check would always score 1.0,
+	// so Run errors out for replay+Repeat>1 rather than producing a
+	// meaningless number.
 	//
 	// The first run's findings still drive precision/recall/F1; the
 	// extra runs only feed the Jaccard calculation. This keeps the
