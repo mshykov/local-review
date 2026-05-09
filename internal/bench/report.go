@@ -68,12 +68,6 @@ func WriteText(w io.Writer, rep Report) error {
 // to surface.
 func writeOverallTable(w io.Writer, rep Report) error {
 	showCons := anyConsistencyMeasured(rep)
-
-	headers := []string{"LLM", "Precision", "Recall", "F1", "Noise"}
-	if showCons {
-		headers = append(headers, "Cons.")
-	}
-	headers = append(headers, "Median", "P95")
 	if err := writeOverallHeader(w, showCons); err != nil {
 		return err
 	}
