@@ -6,11 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"strings"
 
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"

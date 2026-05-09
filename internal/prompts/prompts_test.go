@@ -194,6 +194,78 @@ func TestResolve_PackDirPlusPrependPlusAppend(t *testing.T) {
 	}
 }
 
+func TestResolve_RejectsLanguageWithPathTraversal(t *testing.T) {
+	// Critical security check: a hostile repo config like
+	// `review.prompt_pack: ../../etc/passwd` must be refused
+	// outright. Without this gate, the resolver would build
+	// <pack_dir>/../../etc/passwd.md and load whatever was at
+	// that location into the system prompt — which then flows to
+	// the LLM and can come back in the model's review output.
+	// Threat model: CI runner checking out an attacker-controlled
+	// commit. (Codex flagged this in PR #60 self-review iter 3.)
+	bad := []string{
+		"../../etc/passwd",
+		"../escape",
+		"/absolute/path",
+		"with/slash",
+		`with\backslash`,
+		"..",
+		".",
+		".hidden",
+		"UPPERCASE",
+		"with space",
+		"with.dot", // dot in middle would let `lang.md` become `lang.md.md` resolution variants
+		"",
+	}
+	for _, lang := range bad {
+		_, err := Resolve(lang, ResolveOptions{})
+		if err == nil {
+			t.Errorf("Resolve(%q) should be refused as invalid language id", lang)
+		}
+	}
+}
+
+func TestResolve_AcceptsValidLanguageIDs(t *testing.T) {
+	// Every shipped pack id (from Available()) must pass the
+	// language-id validation gate. Adding a new pack must keep
+	// this happy.
+	ids, err := Available()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lang := range ids {
+		if _, err := Resolve(lang, ResolveOptions{}); err != nil {
+			t.Errorf("Resolve(%q) on a shipped pack should not be refused: %v", lang, err)
+		}
+	}
+	// Also a few user-style custom ids that the validation should
+	// permit (people do invent house-style packs).
+	for _, lang := range []string{"acme", "acme-house", "house_v2", "a1"} {
+		if _, err := Resolve(lang, ResolveOptions{}); err != nil {
+			t.Errorf("Resolve(%q) on a custom-but-valid id should not be refused: %v", lang, err)
+		}
+	}
+}
+
+func TestPathInsideDir(t *testing.T) {
+	cases := []struct {
+		dir, path string
+		want      bool
+	}{
+		{"/a", "/a/b.md", true},
+		{"/a", "/a/sub/b.md", true},
+		{"/a", "/a", true},
+		{"/a", "/a/../b.md", false}, // walks out via ..
+		{"/a", "/b.md", false},      // outside
+		{"/a/b", "/a/c.md", false},  // sibling, outside
+	}
+	for _, tc := range cases {
+		if got := pathInsideDir(tc.path, tc.dir); got != tc.want {
+			t.Errorf("pathInsideDir(%q, %q) = %v, want %v", tc.path, tc.dir, got, tc.want)
+		}
+	}
+}
+
 func TestResolve_PackDirRejectsNonExistent(t *testing.T) {
 	// Resolve does NOT error on a missing PackDir — that's
 	// surfaced by `local-review doctor` instead. The resolver's

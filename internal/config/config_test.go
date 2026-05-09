@@ -321,7 +321,14 @@ func TestLoadUsesRepoYAML_PromptsPackDir_AbsolutePathPreserved(t *testing.T) {
 	// re-rooted.
 	dir := t.TempDir()
 	repoCfg := filepath.Join(dir, ".local-review.yml")
-	abs := "/etc/local-review/prompts"
+	// Use an OS-native absolute path (filepath.Abs of a temp
+	// subdir) instead of hardcoding /etc/... — Windows CI runners
+	// would fail on Unix-style absolute paths. Codex caught this
+	// in PR #60 self-review iter 3.
+	abs, err := filepath.Abs(filepath.Join(t.TempDir(), "corp-prompts"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(repoCfg, []byte(`
 prompts:
   pack_dir: `+abs+`

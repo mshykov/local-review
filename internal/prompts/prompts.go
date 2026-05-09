@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -90,6 +91,18 @@ func Get(language string) (string, error) {
 // the documented behaviour. PackDir is missing AS A WHOLE returns no
 // error either; that case is surfaced by `local-review doctor`.
 func Resolve(language string, opts ResolveOptions) (Pack, error) {
+	// Validate the language id against a strict allow-list before
+	// anywhere uses it to construct a filesystem path. Without this
+	// guard, a hostile repo config (`review.prompt_pack:
+	// ../../etc/passwd`) could escape `pack_dir` and load arbitrary
+	// files into the system prompt — which is then sent to the LLM
+	// in plaintext and can come back in the model's review output.
+	// The threat model is a CI runner checking out an attacker-
+	// controlled commit. (Codex flagged this in PR self-review iter 3.)
+	if err := validateLanguageID(language); err != nil {
+		return Pack{}, err
+	}
+
 	body, source, err := loadBody(language, opts.PackDir)
 	if err != nil {
 		return Pack{}, err
@@ -132,6 +145,27 @@ func loadBody(language, packDir string) (string, string, error) {
 	return string(b), "embedded", nil
 }
 
+// languageIDRE bounds what a language id can contain. Strict on
+// purpose: lowercase alphanumeric + dash + underscore, no path
+// separators, no leading dot, no embedded dot. Every shipped pack
+// id (default, go, python, rust, typescript, java, ruby, csharp,
+// php) fits the set. A user adding a custom language ("acme-house")
+// fits too. Path-traversal sequences ("..", "/etc") do not.
+var languageIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// validateLanguageID is the security gate Resolve calls before any
+// path construction. Returning an explicit error (rather than
+// silently falling back to the default pack) means a misconfigured
+// `review.prompt_pack:` value fails fast instead of being dropped
+// on the floor — the user finds out at the start of the run, not
+// after the LLM has produced a review against a different pack.
+func validateLanguageID(s string) error {
+	if !languageIDRE.MatchString(s) {
+		return fmt.Errorf("invalid language id %q: must match [a-z0-9][a-z0-9_-]* (no path separators, no leading dot)", s)
+	}
+	return nil
+}
+
 // readOverride returns (body, abs path, true) when packDir contains a
 // readable <language>.md, or (_, _, false) for any "fall through" case
 // (file missing, unreadable, empty after trim).
@@ -161,6 +195,17 @@ func loadBody(language, packDir string) (string, string, error) {
 // pack.
 func readOverride(packDir, language string) (string, string, bool) {
 	path := filepath.Join(packDir, language+".md")
+
+	// Belt-and-suspenders containment check: even though
+	// validateLanguageID already rejected path-traversal in
+	// `language`, also confirm that the resolved file path lives
+	// under packDir. Catches any future caller that constructs a
+	// path outside the validation gate, and any edge case the
+	// regex misses (e.g., a future encoding shift on Windows).
+	if !pathInsideDir(path, packDir) {
+		return "", "", false
+	}
+
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return "", "", false
@@ -175,6 +220,24 @@ func readOverride(packDir, language string) (string, string, bool) {
 		abs = path
 	}
 	return string(b), abs, true
+}
+
+// pathInsideDir returns true when filePath, after cleaning, sits
+// inside dir. Used as the second line of defence against path
+// traversal: validateLanguageID is the primary gate, this is the
+// "what if the gate ever leaks?" check. Both paths are cleaned
+// (Lexically resolved); we deliberately don't follow symlinks
+// here — symlinks inside a controlled pack_dir are typically
+// legitimate (e.g., shared org-wide override repo mounted in).
+func pathInsideDir(filePath, dir string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(filePath))
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 // Available returns the language ids that have dedicated packs.
