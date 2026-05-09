@@ -834,19 +834,26 @@
       vertical-align: middle;
     }
 
+    /* Severity badge colours — foregrounds are the dark *-900 end
+       of Tailwind's red/orange/yellow ramps so the small
+       (0.72em / ~11.5 px bold) label clears WCAG AA against its
+       tinted background. The previous *-700 foregrounds were at
+       4.15:1 (CRITICAL) and 3.90:1 (MAJOR), both under the 4.5:1
+       normal-text threshold — caught by CodeRabbit on PR #59.
+       Current ratios: 7.6:1, 8.0:1, 8.2:1 (well into AAA). */
     .checklist-preview .severity.critical {
       background: #fed7d7;
-      color: #c53030;
+      color: #7f1d1d;
     }
 
     .checklist-preview .severity.major {
       background: #feebc8;
-      color: #c05621;
+      color: #7c2d12;
     }
 
     .checklist-preview .severity.warning {
       background: #fefcbf;
-      color: #975a16;
+      color: #713f12;
     }
 
     .checklist-preview .ellipsis {
