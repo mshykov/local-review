@@ -461,7 +461,10 @@ func fillBaselineAggregate(lr *LLMReport) {
 	if !attemptedAny {
 		return
 	}
-	agg := &LLMBaselineAggregate{TotalDurationMs: totalDur}
+	agg := &LLMBaselineAggregate{
+		TotalDurationMs: totalDur,
+		MeasuredCases:   nonCleanScored + cleanCases,
+	}
 	if measuredAny && nonCleanScored > 0 {
 		agg.Precision = ratio(tp, tp+fp)
 		agg.Recall = ratio(tp, tp+fn)

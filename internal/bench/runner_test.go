@@ -325,6 +325,13 @@ func TestFillBaselineAggregate_MicroAveragesNonClean(t *testing.T) {
 	if lr.Baseline.TotalDurationMs != 180 {
 		t.Errorf("baseline total duration = %v, want 180", lr.Baseline.TotalDurationMs)
 	}
+	// MeasuredCases tracks how many cases produced numeric data
+	// (one non-clean + one clean = 2). Renderers gate numeric
+	// delta cells on this, so a regression here would silently
+	// re-introduce the iter-3 misleading-headline bug.
+	if lr.Baseline.MeasuredCases != 2 {
+		t.Errorf("baseline measured cases = %d, want 2", lr.Baseline.MeasuredCases)
+	}
 }
 
 func TestFillBaselineAggregate_NilWhenNoCaseMeasured(t *testing.T) {
@@ -363,6 +370,12 @@ func TestFillBaselineAggregate_ZeroAggregateWhenAllBaselinesErrored(t *testing.T
 	}
 	if lr.Baseline.F1 != 0 || lr.Baseline.Precision != 0 || lr.Baseline.Recall != 0 || lr.Baseline.NoiseRate != 0 {
 		t.Errorf("aggregate should be zero-valued when every baseline errored, got %+v", lr.Baseline)
+	}
+	// MeasuredCases==0 is the renderer's signal to render "—"
+	// instead of numeric delta cells. Without it, the report
+	// would print "0.91 (+0.91)" against an unmeasured baseline.
+	if lr.Baseline.MeasuredCases != 0 {
+		t.Errorf("MeasuredCases must be 0 when every baseline errored, got %d", lr.Baseline.MeasuredCases)
 	}
 }
 

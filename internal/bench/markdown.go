@@ -84,7 +84,10 @@ func writeMarkdownUplift(w io.Writer, rep Report) error {
 		if errs > 0 {
 			errLabel = fmt.Sprintf("%d ⚠", errs)
 		}
-		if lr.Baseline == nil {
+		if !baselineHasNumericData(lr.Baseline) {
+			// Same gating as the text renderer: a zero-cases
+			// aggregate must not produce numeric delta cells. See
+			// baselineHasNumericData for rationale.
 			if _, err := fmt.Fprintf(w, "| %s | — | — | — | — | %s |\n", lr.LLM, errLabel); err != nil {
 				return err
 			}

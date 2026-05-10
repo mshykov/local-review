@@ -119,7 +119,14 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 	}
 	for _, lr := range rep.LLMReports {
 		errs := countBaselineErrors(lr)
-		if lr.Baseline == nil {
+		if !baselineHasNumericData(lr.Baseline) {
+			// Either uplift wasn't run for this LLM, or every
+			// baseline pass errored. Render a single status line
+			// instead of numeric deltas — iter-3 self-review
+			// flagged that printing "0.91 (+0.91)" against a
+			// zero-baseline that nobody measured is a misleading
+			// headline. The aggregate may still be present in
+			// JSON for the "feature attempted" signal.
 			label := "(not measured)"
 			if errs > 0 {
 				label = fmt.Sprintf("(baseline failed on %d case(s))", errs)
@@ -151,6 +158,17 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 		}
 	}
 	return nil
+}
+
+// baselineHasNumericData returns true when the aggregate carries
+// at least one case worth of measured numbers. False when nil
+// (uplift not run) OR present-but-MeasuredCases==0 (uplift
+// attempted, every baseline errored). Renderers gate the numeric
+// delta cells on this so an attempted-but-fully-failed run never
+// shows up as "treatment 0.91 (+0.91)" — that would imply the
+// raw model scored 0 when in fact it was never scored at all.
+func baselineHasNumericData(b *LLMBaselineAggregate) bool {
+	return b != nil && b.MeasuredCases > 0
 }
 
 // fmtUpliftCell renders a single "treatment (Δsign)" cell —

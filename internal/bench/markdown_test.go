@@ -127,6 +127,7 @@ func TestWriteMarkdown_RendersUpliftBlock(t *testing.T) {
 				Cases: []CaseScore{{CaseID: "x"}},
 				Baseline: &LLMBaselineAggregate{
 					Precision: 0.59, Recall: 0.70, F1: 0.64, NoiseRate: 0.30,
+					MeasuredCases: 1,
 				},
 			},
 		},
@@ -190,6 +191,47 @@ func TestWriteMarkdown_FlagsBaselineErrors(t *testing.T) {
 	}
 	if !strings.Contains(out, "1 ⚠") {
 		t.Errorf("expected baseline-error count cell to render '1 ⚠'; got:\n%s", out)
+	}
+}
+
+// TestWriteMarkdown_DashesOutZeroMeasuredCases verifies that an
+// attempted-but-fully-failed --uplift run renders "—" in the
+// numeric delta cells, not "0.91 (+0.91)" against a zero
+// baseline that nobody actually measured. Iter-3 self-review
+// flagged the misleading-headline bug here as the major issue
+// to close before the PR ships. The aggregate stays in the JSON
+// (signal: feature attempted) but the renderer must refuse to
+// invent a numeric delta from a phantom baseline.
+func TestWriteMarkdown_DashesOutZeroMeasuredCases(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:       "claude",
+				Precision: 0.83, Recall: 1.00, F1: 0.91, NoiseRate: 0.0,
+				Cases: []CaseScore{
+					{CaseID: "x", BaselineError: "timeout"},
+				},
+				Baseline: &LLMBaselineAggregate{MeasuredCases: 0},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "## Uplift over baseline") {
+		t.Fatalf("uplift block must appear; got:\n%s", out)
+	}
+	// The row must NOT carry numeric delta cells like "0.91 (+0.91)"
+	// — the renderer should fall through to the "—" branch.
+	if strings.Contains(out, "0.91 (+0.91)") {
+		t.Errorf("zero-measured baseline must not produce numeric delta; got:\n%s", out)
+	}
+	if !strings.Contains(out, "| claude | — | — | — | — |") {
+		t.Errorf("expected dashed-out row for claude, got:\n%s", out)
 	}
 }
 

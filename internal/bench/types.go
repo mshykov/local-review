@@ -338,6 +338,20 @@ type LLMBaselineAggregate struct {
 	F1              float64 `json:"f1"`
 	NoiseRate       float64 `json:"noise_rate"`
 	TotalDurationMs int64   `json:"total_duration_ms"`
+
+	// MeasuredCases is the number of cases that actually
+	// contributed numeric data to this aggregate (i.e., the
+	// baseline pass returned output and was scored). Distinct
+	// from the LLM's total case count: zero means "uplift was
+	// attempted but every baseline pass errored." Renderers
+	// gate numeric delta cells on this — without it, an
+	// attempted-but-fully-failed run looks like "baseline F1 =
+	// 0.00, treatment F1 = 0.91, uplift = +0.91" which the
+	// iter-3 self-review flagged as a misleading headline. The
+	// JSON aggregate stays present (the "feature attempted"
+	// signal) but the rendered delta now says "—" with a
+	// "baseline failed on N case(s)" note.
+	MeasuredCases int `json:"measured_cases"`
 }
 
 // Report is the top-level bench output.
