@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+# Pin GITHUB_TOKEN to least-privilege. The CI job only checks out
+# the code, runs gofmt / vet / test / build — no API writes, no
+# artifact uploads, no PR comments. Without this block the token
+# inherits the repo / org default scopes, flagged by GitHub code
+# scanning (rule: workflow has no explicit permissions).
+# bench.yml, release.yml, and sonar.yml already pin their own;
+# this closes the gap on the last workflow.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
