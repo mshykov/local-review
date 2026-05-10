@@ -102,7 +102,7 @@ jobs:
           go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6
+        uses: SonarSource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432 # v8.0.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           # SONAR_HOST_URL only needed for self-hosted SonarQube; SonarCloud
