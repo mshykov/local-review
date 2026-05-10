@@ -66,6 +66,24 @@ type ResolveOptions struct {
 	Append string
 }
 
+// BaselinePrompt is the minimal "raw model" system prompt the
+// bench's --uplift mode uses to measure what local-review's
+// language-specific packs add over a generic prompt. Deliberately
+// generic — the kind of thing a developer would type into
+// Claude.app or ChatGPT without specialised tooling. Honest
+// baseline: short, asks for bugs, asks for file:line locations
+// (so the bench parser can score the output), asks for brevity.
+//
+// Don't tune this for performance. The point is to measure what
+// a no-effort baseline produces, then show the delta against the
+// shipped pack. Tuning the baseline would inflate "uplift" by
+// making the comparison artificially low.
+const BaselinePrompt = `You are a code reviewer. Read the following git diff and list any bugs, security issues, or other problems you find.
+
+For each finding, include the file path and line number using "path/to/file.ext:LINE" format so they can be located.
+
+Be concise. Don't praise the code; only report problems. If you find nothing, say so.`
+
 // Get returns the text of the named pack. If the language has no
 // dedicated pack, the default pack is returned. Backward-compatible
 // pre-v0.8 wrapper around Resolve with empty options.

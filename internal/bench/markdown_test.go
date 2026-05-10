@@ -112,6 +112,191 @@ func TestWriteMarkdown_RendersConsistencyWhenPresent(t *testing.T) {
 	}
 }
 
+// TestWriteMarkdown_RendersUpliftBlock verifies the --uplift
+// section appears with treatment / baseline / signed delta cells
+// when at least one LLM has a Baseline aggregate. Single-pass
+// benches (no Baseline) must omit the section entirely.
+func TestWriteMarkdown_RendersUpliftBlock(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:       "claude",
+				Precision: 0.83, Recall: 1.00, F1: 0.91, NoiseRate: 0.00,
+				Cases: []CaseScore{{CaseID: "x"}},
+				Baseline: &LLMBaselineAggregate{
+					Precision: 0.59, Recall: 0.70, F1: 0.64, NoiseRate: 0.30,
+					MeasuredNonCleanCases: 1, MeasuredCleanCases: 1,
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"## Uplift over baseline",
+		"| LLM | F1 (Δ) | Precision (Δ) | Recall (Δ) | Noise (Δ) | Baseline errors |",
+		"| claude |", // row exists
+		"+0.27",      // F1 delta = 0.91 - 0.64 = +0.27
+		"+0.30",      // Recall delta = 1.00 - 0.70 = +0.30
+		"-0.30",      // Noise delta = 0.00 - 0.30 = -0.30 (regression direction is good here)
+		"| 0 |",      // no baseline errors → "0" in the rightmost cell
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("uplift block missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+}
+
+// TestWriteMarkdown_FlagsBaselineErrors verifies that when --uplift
+// recorded baseline failures, the uplift section is shown (so users
+// see the partial-coverage warning rather than seeing nothing) and
+// the per-LLM row carries a baseline-error count. Without the flag,
+// a leaderboard could quietly compare treatment-of-N against
+// baseline-of-M-<-N and inflate apparent uplift.
+func TestWriteMarkdown_FlagsBaselineErrors(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 2, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:       "claude",
+				Precision: 0.83, Recall: 1.00, F1: 0.91, NoiseRate: 0.0,
+				Cases: []CaseScore{
+					{CaseID: "x", BaselineError: "timeout after 120s"},
+					{CaseID: "y"},
+				},
+				// Direct-renderer test: simulate an older Report (pre
+				// iter-2 fix) or a hand-constructed one where Baseline
+				// is nil but BaselineError is set on a case. The
+				// renderer must still surface the failure count
+				// regardless of how the aggregate got there — robust
+				// to both runner-produced and externally-constructed
+				// reports.
+				Baseline: nil,
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "## Uplift over baseline") {
+		t.Errorf("uplift block must appear when any case has BaselineError; got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 ⚠") {
+		t.Errorf("expected baseline-error count cell to render '1 ⚠'; got:\n%s", out)
+	}
+}
+
+// TestWriteMarkdown_DashesOutZeroMeasuredCases verifies that an
+// attempted-but-fully-failed --uplift run renders "—" in the
+// numeric delta cells, not "0.91 (+0.91)" against a zero
+// baseline that nobody actually measured. Iter-3 self-review
+// flagged the misleading-headline bug here as the major issue
+// to close before the PR ships. The aggregate stays in the JSON
+// (signal: feature attempted) but the renderer must refuse to
+// invent a numeric delta from a phantom baseline.
+func TestWriteMarkdown_DashesOutZeroMeasuredCases(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:       "claude",
+				Precision: 0.83, Recall: 1.00, F1: 0.91, NoiseRate: 0.0,
+				Cases: []CaseScore{
+					{CaseID: "x", BaselineError: "timeout"},
+				},
+				Baseline: &LLMBaselineAggregate{MeasuredNonCleanCases: 0, MeasuredCleanCases: 0},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "## Uplift over baseline") {
+		t.Fatalf("uplift block must appear; got:\n%s", out)
+	}
+	// The row must NOT carry numeric delta cells like "0.91 (+0.91)"
+	// — the renderer should fall through to the "—" branch.
+	if strings.Contains(out, "0.91 (+0.91)") {
+		t.Errorf("zero-measured baseline must not produce numeric delta; got:\n%s", out)
+	}
+	if !strings.Contains(out, "| claude | — | — | — | — |") {
+		t.Errorf("expected dashed-out row for claude, got:\n%s", out)
+	}
+}
+
+// TestWriteMarkdown_AsymmetricCoverageDashesUnmeasuredHalf verifies
+// that when baseline succeeded only on clean cases (or only on
+// non-clean cases), the renderer shows the half it has data for
+// and dashes out the other half. Iter-4 self-review flagged the
+// previous all-or-nothing gate as letting a "baseline succeeded
+// 0/3 non-clean cases" run still print "F1 0.91 (+0.91)" against
+// the phantom zero baseline.
+func TestWriteMarkdown_AsymmetricCoverageDashesUnmeasuredHalf(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 2, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:       "claude",
+				Precision: 0.83, Recall: 1.00, F1: 0.91, NoiseRate: 0.0,
+				Cases: []CaseScore{
+					{CaseID: "x"},
+					{CaseID: "clean", Clean: true},
+				},
+				// Baseline: only clean coverage measured; non-clean
+				// pass errored on every case it touched.
+				Baseline: &LLMBaselineAggregate{
+					NoiseRate:             0.30,
+					MeasuredNonCleanCases: 0,
+					MeasuredCleanCases:    1,
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	// Noise must render numerically (-0.30 delta).
+	if !strings.Contains(out, "-0.30") {
+		t.Errorf("expected noise delta to render numerically; got:\n%s", out)
+	}
+	// F1 / Precision / Recall must dash out — no non-clean baseline
+	// ever scored. The row shape is "| claude | — | — | — | 0.00 (-0.30) | 0 |".
+	if !strings.Contains(out, "| claude | — | — | — |") {
+		t.Errorf("expected F1/Precision/Recall to dash out for zero non-clean coverage; got:\n%s", out)
+	}
+}
+
+func TestWriteMarkdown_OmitsUpliftWhenNotMeasured(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "replay",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{LLM: "claude", Cases: []CaseScore{{CaseID: "x"}}},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "Uplift over baseline") {
+		t.Errorf("uplift section should be omitted when no LLM has a Baseline; got:\n%s", buf.String())
+	}
+}
+
 // TestWriteMarkdown_RendersZeroConsistency: a measured-but-zero
 // consistency (every run produced totally different findings) must
 // render as "0.00" — not be collapsed to "—" alongside unmeasured.

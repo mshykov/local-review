@@ -43,6 +43,11 @@ func Score(c Case, produced []ProducedFinding) CaseScore {
 	cs := CaseScore{
 		CaseID:   c.ID,
 		Produced: len(produced),
+		// Clean propagates from the dataset (Case.Clean OR no
+		// expected findings). Decoupled from TP/FN counts so
+		// aggregate code paths don't have to re-derive it from
+		// treatment-side scoring output.
+		Clean: c.Clean || len(c.Expected) == 0,
 	}
 
 	// Make a mutable copy so we can mark items as consumed without

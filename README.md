@@ -17,21 +17,101 @@
 </p>
 
 <p align="center">
-  <a href="#install">Install</a> •
-  <a href="#quick-start">Quick Start</a> •
-  <a href="#multi-llm-reviews">Multi-LLM</a> •
+  <a href="#get-started">Get started</a> •
   <a href="CHECKLIST.md">Checklist</a> •
+  <a href="#customise-for-your-team">Customise</a> •
+  <a href="#multi-llm-is-the-default">Multi-LLM</a> •
   <a href="https://mshykov.github.io/local-review">Website</a>
 </p>
 
-> 📋 **Looking for the human-readable code review checklist this tool implements?** See [**CHECKLIST.md**](CHECKLIST.md) — OWASP 2025-aligned, with severity tiers and concrete measurables. Use it for human reviews, or run `local-review review` to get an LLM pass against the same rules.
+---
 
-> ✨ **New in v0.8** — *Measure what you ship, customise what you check.* Two things teams asked for:
->
-> - **`local-review bench` — quality benchmark harness.** A reproducible signal — precision / recall / F1, noise rate, consistency, per-language splits — for prompt + model changes. Load a labelled dataset of diffs, run each through every active LLM (or pre-recorded fixtures via `--replay`), get a markdown leaderboard you can commit. See [`bench/README.md`](bench/README.md) and [`bench/RESULTS.md`](bench/RESULTS.md). Closes #56 Phase 1 + 2.
-> - **Prompt customization (#55).** Ship house rules without forking. Three knobs in `.local-review.yml`: `prompts.pack_dir` (per-language override directory), `prompts.prepend` (rules spliced before every pack), `prompts.append` (output-shape rules). All three apply to both the multi-LLM CLI path and the single-LLM fallback. `--prompt-pack-dir <dir>` for one-off overrides. See the [Customise the review prompt](#customise-the-review-prompt-v08) section below or the full notes in [CHANGELOG](CHANGELOG.md#080---2026-05-09).
+## Get started
+
+**1. Install.** Single binary, no Node/Python/Docker:
+
+```sh
+brew install mshykov/tap/local-review
+```
+
+Or `curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh`, or grab a binary from [Releases](https://github.com/mshykov/local-review/releases), or `go install github.com/mshykov/local-review/cmd/local-review@latest`.
+
+**2. Authenticate at least one LLM.** Claude is the easiest free option:
+
+```sh
+npm install -g @anthropic-ai/claude-code
+claude login
+```
+
+Or use Gemini (free key) or Codex (ChatGPT Plus / OpenAI API). Any combination works — every authenticated LLM joins the review automatically. `local-review doctor` shows the state.
+
+**3. (Optional) Add a `.local-review.yml` to your repo** for house rules:
+
+```yaml
+# .local-review.yml — every field is optional
+prompts:
+  prepend: |
+    Additional house rules:
+    - Never approve commented-out code.
+    - Flag any new dependency in package.json or go.mod.
+review:
+  min_severity: warning   # nit | info | warning | major | critical
+```
+
+You can ship the whole pack of overrides this way — see [Customise for your team](#customise-for-your-team) below.
+
+**4. Review your current branch** vs `main`:
+
+```sh
+local-review review
+```
+
+Findings print to your terminal. The tool exits non-zero on `major` / `critical`, so it slots straight into a pre-commit hook.
+
+**5. (Optional) See how the LLMs scored on a labelled benchmark.** The repo ships with [`bench/RESULTS.md`](bench/RESULTS.md) — a leaderboard generated from a 10-case dataset spanning Go / TS / Python / Rust:
+
+```sh
+local-review bench --replay bench/fixtures   # read pre-recorded fixtures, free
+local-review bench --uplift --only claude    # measure vs raw-LLM baseline (live, costs tokens)
+```
+
+See [`bench/README.md`](bench/README.md) for the methodology.
 
 ---
+
+## Just want the checklist?
+
+Every check `local-review` applies is published as a human-readable [**CHECKLIST.md**](CHECKLIST.md) — OWASP-2025-aligned, with severity tiers and concrete measurables. Paste it into your team wiki, run reviews manually against it, or use `local-review review` to get an LLM pass against the same rules. Either path; both work.
+
+## Customise for your team
+
+Three knobs in `.local-review.yml` let you tune review tone, severity bar, or add house rules — **without forking the binary**:
+
+```yaml
+prompts:
+  pack_dir: .local-review/prompts   # per-language overrides; <language>.md replaces the embedded pack
+  prepend: |                        # spliced before every pack body
+    Additional house rules: ...
+  append: |                         # spliced after every pack body
+    Output language: English only.
+```
+
+All three apply to both the multi-LLM CLI path and the single-LLM fallback so customizations reach every reviewer. `--prompt-pack-dir <dir>` overrides for one-off runs. Full details in [Customise the review prompt](#customise-the-review-prompt-v08) below.
+
+---
+
+> ✨ **What's new in v0.8.** *Measure what you ship, customise what you check.* Two things teams asked for:
+>
+> - **`local-review bench`** — quality benchmark harness. Precision / recall / F1, noise rate, consistency, per-language splits, and (with `--uplift`) treatment-vs-baseline deltas. See [`bench/README.md`](bench/README.md) and [`bench/RESULTS.md`](bench/RESULTS.md).
+> - **Prompt customization (#55).** Override per-language packs, prepend house rules, append output-shape rules — without forking. Section above.
+>
+> Full notes in [CHANGELOG](CHANGELOG.md).
+
+---
+
+## Why local-review
+
+Reviewer tools today are mostly **SaaS** (your code leaves the building), **CI-only** (you find out about issues after pushing), **vendor-locked** (OpenAI-only or Anthropic-only), and **runtime-heavy** (Node/Python install required). local-review is the opposite: a single static binary that runs locally on a diff, sends that diff to whatever LLM(s) you've authenticated, and prints findings. Privacy posture depends on which LLM(s) you point it at — see [Privacy](#privacy) below. **Run with Ollama for fully-offline review.**
 
 ## What it is, what it isn't
 
@@ -44,57 +124,6 @@
 | BYOK — your API key, requests go direct to the vendor (no middleman server) | A SaaS — no hosted dashboard, no account, no team collaboration features |
 | A pre-commit gate — exits non-zero on `major` / `critical` findings so hooks can block the commit | A linter or static analyzer — it's LLM-based, with the heuristic tradeoffs that implies |
 | A single Go binary — no Node, no Python, no Docker, no telemetry | A chat interface — reads a diff, prints findings, exits |
-
-## Why
-
-Reviewer tools today are mostly:
-
-- **SaaS** — your code leaves the building. Hard sell for enterprise.
-- **CI-only** — you find out about issues after pushing the branch.
-- **Tied to a vendor** — single-provider lock-in (OpenAI-only or Anthropic-only).
-- **Runtime-heavy** — Node/Python/Java install required just to run the reviewer.
-
-local-review is the opposite: a single static binary that runs locally on a diff, sends that diff to whatever LLM(s) you've authenticated, and prints findings. Privacy posture depends on which LLM(s) you point it at — see the [Privacy](#privacy) section for the matrix. **Run with Ollama for fully-offline review.**
-
-## Install
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
-```
-
-Or grab a binary from [Releases](https://github.com/mshykov/local-review/releases).
-
-Or build from source:
-
-```sh
-go install github.com/mshykov/local-review/cmd/local-review@latest
-```
-
-## Quick start
-
-```sh
-# 1. Install one or more LLM CLIs (each one is a "team mate" reviewing your code)
-npm install -g @anthropic-ai/claude-code   # Claude   — free tier via `claude login`
-npm install -g @google/gemini-cli          # Gemini   — free key from Google AI Studio
-npm install -g @openai/codex               # Codex    — ChatGPT Plus or OPENAI_API_KEY
-
-# 2. Authenticate the ones you want
-claude login
-export GEMINI_API_KEY=...
-export OPENAI_API_KEY=...
-
-# 3. Check who's ready
-local-review doctor
-
-# 4. Review your branch — every authenticated CLI runs in parallel and findings get merged
-local-review review
-```
-
-That's it. `local-review review` is the canonical command — it runs every LLM CLI that's installed AND authenticated, in parallel, and prints a merged report.
-
-By default findings at `warning`+ are shown and `major`/`critical` exit non-zero (good for pre-commit hooks).
-
-If you don't have any LLM CLI installed, run `local-review init` to set up a single-LLM review against any OpenAI-compatible API instead.
 
 ## Multi-LLM is the default
 

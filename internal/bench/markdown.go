@@ -52,7 +52,77 @@ func WriteMarkdown(w io.Writer, rep Report) error {
 			return err
 		}
 	}
+	if hasUpliftMeasured(rep) {
+		if err := writeMarkdownUplift(w, rep); err != nil {
+			return err
+		}
+	}
 	return writeMarkdownPerCase(w, rep)
+}
+
+// writeMarkdownUplift mirrors writeUpliftBlock for the markdown
+// leaderboard. Treatment vs baseline plus the delta as a separate
+// "## Uplift over baseline" section so a committed RESULTS.md
+// preserves the same headline answer ("is local-review better than
+// the raw LLM?") as the text report.
+func writeMarkdownUplift(w io.Writer, rep Report) error {
+	if _, err := fmt.Fprintln(w, "## Uplift over baseline (raw LLM, generic prompt)"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "| LLM | F1 (Δ) | Precision (Δ) | Recall (Δ) | Noise (Δ) | Baseline errors |"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "| --- | --- | --- | --- | --- | --- |"); err != nil {
+		return err
+	}
+	for _, lr := range rep.LLMReports {
+		errs := countBaselineErrors(lr)
+		errLabel := "0"
+		if errs > 0 {
+			errLabel = fmt.Sprintf("%d ⚠", errs)
+		}
+		if !baselineHasAnyNumericData(lr.Baseline) {
+			// Same gating as the text renderer: a zero-coverage
+			// aggregate must not produce numeric delta cells. See
+			// baselineHasAnyNumericData for rationale.
+			if _, err := fmt.Fprintf(w, "| %s | — | — | — | — | %s |\n", lr.LLM, errLabel); err != nil {
+				return err
+			}
+			continue
+		}
+		b := lr.Baseline
+		// Per-bucket gating — see writeUpliftBlock for rationale.
+		// F1/Precision/Recall gate on non-clean coverage; Noise
+		// gates on clean coverage.
+		qualityMeasured := b.MeasuredNonCleanCases > 0
+		noiseMeasured := b.MeasuredCleanCases > 0
+		if _, err := fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s |\n",
+			lr.LLM,
+			markdownUpliftCell(lr.F1, b.F1, qualityMeasured),
+			markdownUpliftCell(lr.Precision, b.Precision, qualityMeasured),
+			markdownUpliftCell(lr.Recall, b.Recall, qualityMeasured),
+			markdownUpliftCell(lr.NoiseRate, b.NoiseRate, noiseMeasured),
+			errLabel,
+		); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintln(w)
+	return err
+}
+
+// markdownUpliftCell returns the standard "treatment (Δ)" cell
+// when measured, "—" otherwise. Markdown twin of
+// fmtUpliftCellOrDash; sized without the text renderer's column
+// padding so the table cells stay tight.
+func markdownUpliftCell(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return "—"
+	}
+	return fmtUpliftCell(treatment, baseline)
 }
 
 func writeMarkdownHeader(w io.Writer, rep Report) error {

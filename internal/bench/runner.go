@@ -59,6 +59,25 @@ type Options struct {
 	// quality scores comparable to single-run benches and avoids
 	// "did variance cause that regression?" ambiguity.
 	Repeat int
+
+	// Uplift, when true, runs each (case, LLM) pair TWICE: once
+	// with prompts.BaselinePrompt (a minimal generic system prompt
+	// that mirrors what a developer would type into Claude.app
+	// without specialised tooling), and once with the full
+	// local-review pipeline (language-specific pack via
+	// prompts.Resolve). The treatment scores fill the primary
+	// CaseScore fields; the baseline scores fill CaseScore.Baseline
+	// (and the LLM-level rollup fills LLMReport.Baseline). The
+	// leaderboard renders both plus the delta.
+	//
+	// Live-only by design: replay mode rejects --uplift outright.
+	// The whole point of uplift is to measure real LLM behaviour
+	// against the bare-prompt baseline; running cached fixtures
+	// for both sides would just measure how well the fixtures
+	// match each other, which is meaningless. Run rejects the
+	// combination loudly rather than producing a misleading
+	// number.
+	Uplift bool
 }
 
 // Run scores each case against each LLM and returns an aggregated
@@ -76,6 +95,9 @@ func Run(ctx context.Context, cases []Case, opts Options) (Report, error) {
 	}
 	if opts.Source == SourceReplay && opts.Repeat > 1 {
 		return Report{}, errors.New("--repeat > 1 is meaningless in replay mode (fixtures are deterministic; consistency would always score 1.0); re-run live, or drop --repeat")
+	}
+	if opts.Source == SourceReplay && opts.Uplift {
+		return Report{}, errors.New("--uplift is meaningless in replay mode (need live LLM calls to measure the baseline); re-run live, or drop --uplift")
 	}
 
 	rep := Report{
@@ -127,26 +149,7 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 
 	output, err := obtainReview(ctx, c, llm, opts)
 
-	if err != nil {
-		dur := time.Since(start)
-		return CaseScore{
-			CaseID:     c.ID,
-			LLM:        llm.Name,
-			Version:    llm.Version,
-			Language:   c.Language,
-			Duration:   dur,
-			DurationMs: dur.Milliseconds(),
-			Error:      err.Error(),
-			Mode:       mode,
-		}
-	}
-
-	produced := ParseFindings(output)
-	cs := Score(c, produced)
-	cs.LLM = llm.Name
-	cs.Version = llm.Version
-	cs.Language = c.Language
-	cs.Mode = mode
+	cs := buildBaseScore(c, llm, mode, output, err)
 
 	// Phase-2 consistency: re-sample the same (case, LLM) up to
 	// opts.Repeat times and record the Jaccard similarity. Each
@@ -158,7 +161,11 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	// implying every attempt agreed — codex caught this credibility
 	// hole in self-review. JSON consumers should treat any case
 	// with attempts > run_count with skepticism.
-	if opts.Repeat > 1 {
+	//
+	// Skipped on treatment-error frames: there's no first run to
+	// compare against, so consistency is undefined.
+	if opts.Repeat > 1 && err == nil {
+		produced := ParseFindings(output)
 		attempts, count, jac := sampleConsistency(ctx, c, llm, opts, produced)
 		cs.Attempts = attempts
 		cs.RunCount = count
@@ -167,9 +174,75 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 		}
 	}
 
+	// Phase-3 uplift: run the same case again with a minimal
+	// generic system prompt (prompts.BaselinePrompt) and record
+	// the resulting score. The bench then renders treatment vs
+	// baseline so users see whether local-review's pack pipeline
+	// actually adds value over a raw-LLM baseline. Live-only:
+	// replay rejects --uplift up in Run().
+	//
+	// Baseline runs even when the treatment pass errored — the
+	// uplift comparison should not be biased toward "treatment
+	// happened to succeed here". Iter-4 self-review (codex)
+	// flagged the prior shape (early-return on treatment error
+	// before scoreBaseline) as silently shrinking the baseline
+	// sample to the treatment-success subset, which inflates
+	// apparent uplift exactly when local-review is flakiest.
+	//
+	// Baseline errors are recorded explicitly on cs.BaselineError
+	// rather than silently dropped: a half-measured baseline
+	// (treatment for all N cases, baseline for only M < N) would
+	// inflate apparent uplift by comparing the full treatment
+	// against an unrepresentative baseline subset. Renderer
+	// surfaces the gap; strict mode treats it the same way it
+	// treats treatment-side errors.
+	if opts.Uplift {
+		b, berr := scoreBaseline(ctx, c, llm, opts)
+		if berr != nil {
+			cs.BaselineError = berr.Error()
+		} else if b != nil {
+			cs.Baseline = b
+		}
+	}
+
 	dur := time.Since(start)
 	cs.Duration = dur
 	cs.DurationMs = dur.Milliseconds()
+	return cs
+}
+
+// buildBaseScore returns a CaseScore for one (case, LLM) pair.
+// On treatment success it scores the produced findings; on
+// treatment error it returns the error-frame shape (zero TP/FP/
+// FN, Error set) but still carries the metadata fields so
+// downstream rollups (Language, Mode, etc.) see the same key on
+// every row regardless of treatment outcome. Pulled out of
+// scoreOne so the consistency / uplift extension points stay
+// readable instead of nested inside an err == nil branch.
+func buildBaseScore(c Case, llm cli.LLM, mode, output string, err error) CaseScore {
+	if err != nil {
+		return CaseScore{
+			CaseID:   c.ID,
+			LLM:      llm.Name,
+			Version:  llm.Version,
+			Language: c.Language,
+			// Carry Clean even on treatment errors so baseline-
+			// only frames still classify correctly into the
+			// noise vs. precision/recall buckets at aggregation
+			// time. Without this, a treatment-error case on a
+			// clean diff would land as "non-clean" in the
+			// baseline rollup and skew the metrics.
+			Clean: c.Clean || len(c.Expected) == 0,
+			Error: err.Error(),
+			Mode:  mode,
+		}
+	}
+	produced := ParseFindings(output)
+	cs := Score(c, produced)
+	cs.LLM = llm.Name
+	cs.Version = llm.Version
+	cs.Language = c.Language
+	cs.Mode = mode
 	return cs
 }
 
@@ -262,23 +335,25 @@ func validateIdentifier(kind, v string) error {
 // for a single agent, minus the on-disk save (the bench writes its
 // own report; per-case markdown is already persisted in the dataset).
 func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (string, error) {
-	invoker := cli.NewInvoker(llm)
-	if invoker == nil {
-		return "", fmt.Errorf("no invoker for llm %q", llm.Name)
-	}
-
 	pack, err := prompts.Get(c.Language)
 	if err != nil {
 		return "", fmt.Errorf("load prompt pack for language %q: %w", c.Language, err)
 	}
+	return runLiveWithPrompt(ctx, c, llm, timeout, pack)
+}
 
-	if timeout == 0 {
-		if llm.TimeoutSec > 0 {
-			timeout = time.Duration(llm.TimeoutSec) * time.Second
-		} else {
-			timeout = 120 * time.Second
-		}
+// runLiveWithPrompt is the lower-level helper used by both the
+// treatment path (runLive, which threads the language-specific
+// pack) and the --uplift baseline path (which threads
+// prompts.BaselinePrompt). Splitting on the system-prompt
+// argument is enough to express "same case, different prompt" —
+// no other code path differs.
+func runLiveWithPrompt(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration, systemPrompt string) (string, error) {
+	invoker := cli.NewInvoker(llm)
+	if invoker == nil {
+		return "", fmt.Errorf("no invoker for llm %q", llm.Name)
 	}
+	timeout = resolveTimeout(timeout, llm)
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// invoker.Review returns (output, tokenUsage, err) — bench
@@ -286,8 +361,51 @@ func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (s
 	// already tracked per-run in the live review path and the
 	// bench-aggregate timing/cost view is Phase 2 ("Cost / latency
 	// benchmark" in #56).
-	out, _, err := invoker.Review(cctx, pack, c.Diff)
+	out, _, err := invoker.Review(cctx, systemPrompt, c.Diff)
 	return out, err
+}
+
+// resolveTimeout picks the per-call wall-clock cap, in priority
+// order: caller-supplied opts.Timeout (when non-zero), the LLM's
+// configured TimeoutSec, then the 120-second built-in fallback.
+// Centralised so the treatment and --uplift baseline paths can't
+// drift in their idea of "how long is too long" — duplicate
+// inline copies were flagged in self-review iter 2.
+func resolveTimeout(provided time.Duration, llm cli.LLM) time.Duration {
+	if provided > 0 {
+		return provided
+	}
+	if llm.TimeoutSec > 0 {
+		return time.Duration(llm.TimeoutSec) * time.Second
+	}
+	return 120 * time.Second
+}
+
+// scoreBaseline runs the (case, LLM) once with prompts.BaselinePrompt
+// (a minimal generic system prompt) instead of the language-specific
+// pack, scores the output, and returns the BaselineScore.
+//
+// Returns (nil, err) when the baseline LLM invocation fails. The
+// caller records the error on CaseScore.BaselineError so the
+// renderer can flag the gap and strict mode can fail the run —
+// a silent skip would mean partial baseline coverage gets
+// compared against full treatment coverage, inflating uplift.
+func scoreBaseline(ctx context.Context, c Case, llm cli.LLM, opts Options) (*BaselineScore, error) {
+	start := time.Now()
+	out, err := runLiveWithPrompt(ctx, c, llm, opts.Timeout, prompts.BaselinePrompt)
+	dur := time.Since(start)
+	if err != nil {
+		return nil, err
+	}
+	produced := ParseFindings(out)
+	cs := Score(c, produced)
+	return &BaselineScore{
+		TruePositives:  cs.TruePositives,
+		FalsePositives: cs.FalsePositives,
+		FalseNegatives: cs.FalseNegatives,
+		Produced:       cs.Produced,
+		DurationMs:     dur.Milliseconds(),
+	}, nil
 }
 
 // fillAggregates computes precision/recall/F1/noise/timing over a
@@ -318,6 +436,75 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 	fillLanguageAggregates(lr)
 	fillConsistencyAggregate(lr)
 	fillTimingAggregates(lr, durations)
+	fillBaselineAggregate(lr)
+}
+
+// fillBaselineAggregate rolls up CaseScore.Baseline pointers into
+// LLMReport.Baseline. Mirrors qualityScores' shape so the leaderboard
+// can compute treatment-vs-baseline deltas using the same
+// micro-averaging across non-clean cases.
+//
+// Cleanness is read from the explicit CaseScore.Clean field, not
+// inferred from treatment-side TP/FN counts — see tallyCases for
+// the rationale.
+//
+// Sets lr.Baseline whenever --uplift was attempted: a populated
+// aggregate (any case has a non-nil Baseline) carries the real
+// numbers; an attempted-but-fully-failed pass (every case has
+// BaselineError, no Baseline) still sets a zero-valued aggregate
+// so JSON consumers can distinguish "uplift not run" (nil) from
+// "uplift attempted, every case errored" (present, all zeros +
+// per-case BaselineError surfaces the failures). Iter-2 self-
+// review flagged the prior nil-on-all-fail shape as
+// indistinguishable from "feature not used."
+func fillBaselineAggregate(lr *LLMReport) {
+	var tp, fp, fn int
+	cleanCases := 0
+	cleanFindings := 0
+	nonCleanScored := 0
+	measuredAny := false
+	attemptedAny := false
+	var totalDur int64
+	for _, cs := range lr.Cases {
+		if cs.BaselineError != "" {
+			attemptedAny = true
+		}
+		if cs.Baseline == nil {
+			continue
+		}
+		measuredAny = true
+		attemptedAny = true
+		b := cs.Baseline
+		totalDur += b.DurationMs
+		if cs.Clean {
+			cleanCases++
+			cleanFindings += b.Produced
+			continue
+		}
+		nonCleanScored++
+		tp += b.TruePositives
+		fp += b.FalsePositives
+		fn += b.FalseNegatives
+	}
+	if !attemptedAny {
+		return
+	}
+	agg := &LLMBaselineAggregate{
+		TotalDurationMs:       totalDur,
+		MeasuredNonCleanCases: nonCleanScored,
+		MeasuredCleanCases:    cleanCases,
+	}
+	if measuredAny && nonCleanScored > 0 {
+		agg.Precision = ratio(tp, tp+fp)
+		agg.Recall = ratio(tp, tp+fn)
+		if agg.Precision+agg.Recall > 0 {
+			agg.F1 = 2 * agg.Precision * agg.Recall / (agg.Precision + agg.Recall)
+		}
+	}
+	if cleanCases > 0 {
+		agg.NoiseRate = float64(cleanFindings) / float64(cleanCases)
+	}
+	lr.Baseline = agg
 }
 
 // fillLanguageAggregates groups CaseScore entries by their Language
@@ -411,18 +598,22 @@ type caseTally struct {
 // accumulates TP/FP/FN over the non-clean ones. Clean cases by
 // definition have zero expected findings, so they don't contribute
 // to precision/recall — only to the noise-rate denominator.
+//
+// The clean signal is the explicit CaseScore.Clean field (set by
+// Score from Case.Clean / len(Expected)==0), not derived from
+// treatment-side TP/FN/Matched counts. Iter-2 self-review (codex)
+// flagged the previous shape as coupling baseline aggregation to
+// treatment scoring internals; the explicit field also keeps the
+// classification correct on a noisy treatment run against a
+// truly-clean case (FP > 0 alone would have inferred "non-clean"
+// and routed the case into the precision bucket).
 func tallyCases(cases []CaseScore) caseTally {
 	var t caseTally
 	for _, cs := range cases {
 		if cs.Error != "" {
 			continue
 		}
-		// Distinguish clean cases by "zero expected findings AND zero
-		// matched/missed". A non-clean case where every expected was
-		// found has FN==0 too, but it still has TP>0 — the union check
-		// keeps the buckets disjoint.
-		isClean := cs.TruePositives == 0 && cs.FalseNegatives == 0 && len(cs.Matched) == 0 && len(cs.Missed) == 0
-		if isClean {
+		if cs.Clean {
 			t.cleanCases++
 			t.cleanFindings += cs.Produced
 			continue

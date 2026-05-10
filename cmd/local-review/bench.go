@@ -45,6 +45,15 @@ type benchFlags struct {
 	// of --out (JSON) — common workflow is `--markdown bench/RESULTS.md
 	// --out bench-results.json` to commit both.
 	markdownPath string
+
+	// uplift, when true, runs each (case, LLM) pair an additional
+	// time with a minimal generic system prompt and records the
+	// resulting score as the "baseline." The leaderboard then
+	// shows treatment-vs-baseline deltas — the headline answer to
+	// "is local-review actually better than running the raw LLM
+	// cold?" Live mode only; replay rejects --uplift up at the
+	// runner level.
+	uplift bool
 }
 
 // benchCmd wires the `local-review bench` subcommand. Phase 1 + 2 of
@@ -71,7 +80,7 @@ Two run modes:
                    calling the CLI. Used by CI for deterministic,
                    no-cost runs.
 
-Phase 2 additions:
+Phase 2 + 3 additions:
 
   --repeat N        sample each (case, LLM) N times in live mode and
                     report Jaccard consistency across runs. Replay
@@ -79,6 +88,13 @@ Phase 2 additions:
   --markdown <path> write a leaderboard-style report (overall +
                     per-language + per-case tables) to <path>,
                     suitable for committing as bench/RESULTS.md.
+  --uplift          run each (case, LLM) twice — once with a minimal
+                    generic system prompt (baseline) and once with
+                    the full local-review pipeline (treatment) — and
+                    report treatment-vs-baseline deltas. Live only;
+                    replay rejects this. Costs roughly 2× the tokens.
+                    Answers "is local-review actually better than
+                    running the raw LLM cold?".
 
 Examples:
 
@@ -87,6 +103,7 @@ Examples:
   local-review bench --only claude,gemini --json           # restrict + JSON
   local-review bench --out bench-results.json              # also save JSON to file
   local-review bench --repeat 5 --only claude              # consistency check
+  local-review bench --uplift --only claude                # treatment vs baseline
   local-review bench --replay bench/fixtures \
        --markdown bench/RESULTS.md                         # update the leaderboard
 
@@ -111,6 +128,7 @@ bench/README.md for how to add a new case.`,
 	cmd.Flags().BoolVar(&bf.strict, "strict", false, "exit non-zero on any per-case error; default ON in --replay (CI gate), OFF in live mode")
 	cmd.Flags().IntVar(&bf.repeat, "repeat", 1, "sample each (case, LLM) N times for Jaccard consistency (live mode only; replay rejects N>1)")
 	cmd.Flags().StringVar(&bf.markdownPath, "markdown", "", "also write a leaderboard markdown file to this path (overall + per-language + per-case tables)")
+	cmd.Flags().BoolVar(&bf.uplift, "uplift", false, "also run each (case, LLM) with a minimal generic system prompt and report treatment-vs-baseline deltas (live mode only; replay rejects --uplift). Costs roughly 2× the tokens; the answer is 'is local-review better than running the raw LLM cold?'")
 
 	return cmd
 }
@@ -177,6 +195,7 @@ func executeBench(ctx context.Context, bf benchFlags, cases []bench.Case, llms [
 		Source:    source,
 		ReplayDir: bf.replayDir,
 		Repeat:    bf.repeat,
+		Uplift:    bf.uplift,
 	})
 	if err != nil {
 		return bench.Report{}, err
@@ -214,12 +233,21 @@ func emitBenchReport(bf benchFlags, rep bench.Report) error {
 // checkStrictFailures collects any per-case errors and returns them
 // as one summarised error. Used by --strict (default ON in --replay)
 // to make CI fail on a missing fixture or a CLI invocation failure.
+//
+// Baseline-side failures (--uplift on, generic-prompt invocation
+// errored while the treatment pass succeeded) are caught here too:
+// without that, partial baseline coverage would slip past CI while
+// leaving the leaderboard quietly comparing treatment-of-N against
+// baseline-of-M-<-N, inflating apparent uplift.
 func checkStrictFailures(rep bench.Report) error {
 	var failures []string
 	for _, lr := range rep.LLMReports {
 		for _, cs := range lr.Cases {
 			if cs.Error != "" {
 				failures = append(failures, fmt.Sprintf("%s/%s: %s", lr.LLM, cs.CaseID, cs.Error))
+			}
+			if cs.BaselineError != "" {
+				failures = append(failures, fmt.Sprintf("%s/%s baseline: %s", lr.LLM, cs.CaseID, cs.BaselineError))
 			}
 		}
 	}

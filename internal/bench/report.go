@@ -45,6 +45,12 @@ func WriteText(w io.Writer, rep Report) error {
 		}
 	}
 
+	if hasUpliftMeasured(rep) {
+		if err := writeUpliftBlock(w, rep); err != nil {
+			return err
+		}
+	}
+
 	if _, err := fmt.Fprintln(w, "\nPer-case detail:"); err != nil {
 		return err
 	}
@@ -55,6 +61,145 @@ func WriteText(w io.Writer, rep Report) error {
 	}
 
 	return nil
+}
+
+// hasUpliftMeasured returns true when at least one LLM has a
+// non-nil Baseline aggregate OR at least one case recorded a
+// BaselineError (--uplift was active even if every baseline pass
+// errored). Used by both the text and markdown writers to gate
+// the uplift block — single-pass benches don't see this section
+// at all, keeping the default report terse, while a fully-failed
+// baseline still surfaces (otherwise users see "no uplift section"
+// and assume --uplift didn't run).
+func hasUpliftMeasured(rep Report) bool {
+	for _, lr := range rep.LLMReports {
+		if lr.Baseline != nil {
+			return true
+		}
+		for _, cs := range lr.Cases {
+			if cs.BaselineError != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// countBaselineErrors returns the number of cases for an LLM where
+// the --uplift baseline pass errored. Surfaced in the uplift block
+// so a "0.91 vs 0.42" headline doesn't hide that 3/10 baseline
+// passes failed and the comparison is over an unrepresentative
+// subset.
+func countBaselineErrors(lr LLMReport) int {
+	n := 0
+	for _, cs := range lr.Cases {
+		if cs.BaselineError != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// writeUpliftBlock renders the "Uplift over baseline" comparison:
+// per-LLM treatment vs baseline scores plus the delta. The block
+// is the headline answer to "is local-review better than running
+// the raw LLM cold?" — appears between the per-language F1 grid
+// (specific) and the per-case detail (debugging).
+//
+// Format mirrors writeOverallTable's spacing for visual consistency.
+// The delta column uses signed format ("+0.32") so a regression
+// (negative delta) is unambiguous at a glance.
+func writeUpliftBlock(w io.Writer, rep Report) error {
+	if _, err := fmt.Fprintln(w, "\nUplift over baseline (raw LLM, generic prompt):"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%-10s  %-13s  %-13s  %-13s  %-13s\n",
+		"LLM", "F1 (Δ)", "Precision (Δ)", "Recall (Δ)", "Noise (Δ)"); err != nil {
+		return err
+	}
+	for _, lr := range rep.LLMReports {
+		errs := countBaselineErrors(lr)
+		if !baselineHasAnyNumericData(lr.Baseline) {
+			// Either uplift wasn't run for this LLM, or every
+			// baseline pass errored. Render a single status line
+			// instead of numeric deltas — iter-3 self-review
+			// flagged that printing "0.91 (+0.91)" against a
+			// zero-baseline that nobody measured is a misleading
+			// headline. The aggregate may still be present in
+			// JSON for the "feature attempted" signal.
+			label := "(not measured)"
+			if errs > 0 {
+				label = fmt.Sprintf("(baseline failed on %d case(s))", errs)
+			}
+			if _, err := fmt.Fprintf(w, "%-10s  %s\n", lr.LLM, label); err != nil {
+				return err
+			}
+			continue
+		}
+		b := lr.Baseline
+		// Quality cells (F1 / precision / recall) gate on
+		// non-clean coverage; the noise cell gates on clean
+		// coverage. A baseline that succeeded only on clean
+		// cases has meaningful noise and meaningless F1, and
+		// vice versa. Iter-4 self-review (codex) caught the
+		// shape where both gated together let the unmeasured
+		// half show "0.00 (+X)" against a phantom value.
+		qualityMeasured := b.MeasuredNonCleanCases > 0
+		noiseMeasured := b.MeasuredCleanCases > 0
+		if _, err := fmt.Fprintf(w, "%-10s  %s  %s  %s  %s\n",
+			lr.LLM,
+			fmtUpliftCellOrDash(lr.F1, b.F1, qualityMeasured),
+			fmtUpliftCellOrDash(lr.Precision, b.Precision, qualityMeasured),
+			fmtUpliftCellOrDash(lr.Recall, b.Recall, qualityMeasured),
+			fmtUpliftCellOrDash(lr.NoiseRate, b.NoiseRate, noiseMeasured),
+		); err != nil {
+			return err
+		}
+		if errs > 0 {
+			// Even with a populated aggregate we want users to
+			// see "this comparison covers M of N cases" when the
+			// baseline partially failed — the aggregate itself
+			// micro-averages over only the survivors and would
+			// otherwise misleadingly look like full coverage.
+			if _, err := fmt.Fprintf(w, "%-10s  note: baseline failed on %d case(s); delta is over the surviving subset only\n", "", errs); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// baselineHasAnyNumericData returns true when the aggregate carries
+// at least one case worth of measured numbers — non-clean OR clean.
+// False when nil (uplift not run) OR present-but-zero-measurements
+// (uplift attempted, every baseline errored). Renderers use this as
+// the row-level gate; per-cell gating then uses the more granular
+// MeasuredNonCleanCases / MeasuredCleanCases fields so an asymmetric
+// failure (e.g., baseline succeeded on clean cases only) shows
+// noise but dashes out F1/precision/recall.
+func baselineHasAnyNumericData(b *LLMBaselineAggregate) bool {
+	return b != nil && (b.MeasuredNonCleanCases > 0 || b.MeasuredCleanCases > 0)
+}
+
+// fmtUpliftCellOrDash returns the standard "treatment (Δ)" cell
+// when the relevant baseline bucket actually produced numbers, and
+// "—" otherwise. The gate keeps the renderer from inventing a
+// numeric delta against a phantom-zero baseline.
+func fmtUpliftCellOrDash(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return fmt.Sprintf("%-13s", "—")
+	}
+	return fmtUpliftCell(treatment, baseline)
+}
+
+// fmtUpliftCell renders a single "treatment (Δsign)" cell —
+// e.g. "0.91 (+0.32)" or "0.47 (-0.05)". Width-padded to fit the
+// column header; signed delta makes the direction obvious at a
+// glance (the sign matters for noise rate, where lower is
+// better — a positive delta there is a regression).
+func fmtUpliftCell(treatment, baseline float64) string {
+	delta := treatment - baseline
+	return fmt.Sprintf("%4.2f (%+5.2f)", treatment, delta)
 }
 
 // writeOverallTable prints the top per-LLM aggregate row. Adds a

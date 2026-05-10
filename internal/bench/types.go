@@ -101,6 +101,48 @@ type ProducedFinding struct {
 	Snippet  string `json:"snippet,omitempty"`  // short context line for human reports
 }
 
+// BaselineScore is the score from the bench's --uplift baseline
+// pass: the SAME case run through the SAME LLM, but with a
+// minimal generic system prompt instead of local-review's
+// language-specific pack + multi-LLM merge pipeline. Gives the
+// "vs raw model" comparison the harness's primary numbers don't
+// answer on their own.
+//
+// Only populated when --uplift was active; nil/zero otherwise.
+type BaselineScore struct {
+	TruePositives  int   `json:"true_positives"`
+	FalsePositives int   `json:"false_positives"`
+	FalseNegatives int   `json:"false_negatives"`
+	Produced       int   `json:"produced"`
+	DurationMs     int64 `json:"duration_ms"`
+}
+
+// Precision = TP / (TP + FP). Returns 0 when no findings produced.
+func (b BaselineScore) Precision() float64 {
+	if b.TruePositives+b.FalsePositives == 0 {
+		return 0
+	}
+	return float64(b.TruePositives) / float64(b.TruePositives+b.FalsePositives)
+}
+
+// Recall = TP / (TP + FN). Returns 1 when no expected findings
+// (clean case), matching the CaseScore.Recall convention.
+func (b BaselineScore) Recall() float64 {
+	if b.TruePositives+b.FalseNegatives == 0 {
+		return 1
+	}
+	return float64(b.TruePositives) / float64(b.TruePositives+b.FalseNegatives)
+}
+
+// F1 = 2*P*R / (P+R). Returns 0 when both are zero.
+func (b BaselineScore) F1() float64 {
+	p, r := b.Precision(), b.Recall()
+	if p+r == 0 {
+		return 0
+	}
+	return 2 * p * r / (p + r)
+}
+
 // CaseScore is the per-case scoring outcome.
 type CaseScore struct {
 	CaseID  string `json:"case_id"`
@@ -119,6 +161,18 @@ type CaseScore struct {
 
 	// Total findings produced (TP + FP) for noise-rate calculation.
 	Produced int `json:"produced"`
+
+	// Clean mirrors Case.Clean ("this diff is supposed to produce
+	// zero findings"). Carried on the score so aggregate code paths
+	// — both the treatment side (tallyCases) and the --uplift
+	// baseline side (fillBaselineAggregate) — can route a case into
+	// the noise-rate bucket vs. the precision/recall bucket from a
+	// single explicit signal instead of inferring it from
+	// treatment-side TP/FN counts. The earlier heuristic conflated
+	// "case has no expected findings" with "treatment found zero
+	// matches", which would misclassify a noisy treatment run on a
+	// truly-clean case if the score fields ever drifted out of sync.
+	Clean bool `json:"clean,omitempty"`
 
 	// Match details for human reports.
 	Matched []MatchPair       `json:"matched,omitempty"`
@@ -162,6 +216,23 @@ type CaseScore struct {
 	Attempts int      `json:"attempts,omitempty"`
 	RunCount int      `json:"run_count,omitempty"`
 	Jaccard  *float64 `json:"jaccard,omitempty"`
+
+	// Baseline carries the --uplift baseline score (same case,
+	// same LLM, generic system prompt) so the report can render
+	// "treatment vs baseline" deltas. Pointer-typed: nil means
+	// "no baseline measured" (no --uplift, or the baseline pass
+	// errored). The CaseScore's primary fields hold the TREATMENT
+	// (full local-review) result.
+	Baseline *BaselineScore `json:"baseline,omitempty"`
+
+	// BaselineError is populated when --uplift was active but the
+	// baseline pass for this case errored. Without this field, a
+	// silent baseline failure would compute the uplift over only
+	// the cases that succeeded — comparing treatment-of-all-N
+	// against baseline-of-the-M-that-survived inflates apparent
+	// uplift. The renderer surfaces the count; strict mode treats
+	// it the same way it treats treatment-side errors.
+	BaselineError string `json:"baseline_error,omitempty"`
 
 	// Duration is the in-memory timing field used by the runner. Not
 	// serialised; DurationMs is what's emitted to JSON.
@@ -248,6 +319,45 @@ type LLMReport struct {
 	TotalDurationMs int64 `json:"total_duration_ms"`
 	MedianMs        int64 `json:"median_ms"`
 	P95Ms           int64 `json:"p95_ms"`
+
+	// Baseline is the per-LLM aggregate from the --uplift baseline
+	// pass — same cases, same LLM, generic system prompt instead
+	// of local-review's pack pipeline. Pointer-typed so JSON
+	// consumers can distinguish "no baseline measured" (nil) from
+	// "baseline measured, every case errored" (the inner zeros).
+	Baseline *LLMBaselineAggregate `json:"baseline,omitempty"`
+}
+
+// LLMBaselineAggregate is the per-LLM rollup of BaselineScore
+// values, mirroring the same primary fields LLMReport carries for
+// the treatment side. Used by the leaderboard to compute and show
+// "baseline → treatment" deltas.
+type LLMBaselineAggregate struct {
+	Precision       float64 `json:"precision"`
+	Recall          float64 `json:"recall"`
+	F1              float64 `json:"f1"`
+	NoiseRate       float64 `json:"noise_rate"`
+	TotalDurationMs int64   `json:"total_duration_ms"`
+
+	// MeasuredNonCleanCases counts baseline passes that scored on
+	// non-clean cases — the cases that contribute to F1 /
+	// precision / recall. When zero, those three deltas are
+	// undefined (no bug-bearing case had a baseline result), and
+	// renderers must dash them out to avoid the iter-3/4 misleading-
+	// headline shape ("baseline F1 = 0 → treatment F1 = 0.91" when
+	// no non-clean baseline was actually measured).
+	MeasuredNonCleanCases int `json:"measured_non_clean_cases"`
+
+	// MeasuredCleanCases counts baseline passes that scored on
+	// clean cases — the cases that contribute to NoiseRate. Gated
+	// independently of MeasuredNonCleanCases because a baseline
+	// that succeeded on every clean case but failed on every
+	// non-clean case has a meaningful noise number and a
+	// meaningless F1; the renderer should show the former and
+	// dash out the latter rather than dashing both or showing
+	// both. Iter-4 self-review caught this asymmetry; the
+	// per-bucket coverage closes it.
+	MeasuredCleanCases int `json:"measured_clean_cases"`
 }
 
 // Report is the top-level bench output.
