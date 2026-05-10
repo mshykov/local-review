@@ -112,6 +112,61 @@ func TestWriteMarkdown_RendersConsistencyWhenPresent(t *testing.T) {
 	}
 }
 
+// TestWriteMarkdown_RendersUpliftBlock verifies the --uplift
+// section appears with treatment / baseline / signed delta cells
+// when at least one LLM has a Baseline aggregate. Single-pass
+// benches (no Baseline) must omit the section entirely.
+func TestWriteMarkdown_RendersUpliftBlock(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:       "claude",
+				Precision: 0.83, Recall: 1.00, F1: 0.91, NoiseRate: 0.00,
+				Cases: []CaseScore{{CaseID: "x"}},
+				Baseline: &LLMBaselineAggregate{
+					Precision: 0.59, Recall: 0.70, F1: 0.64, NoiseRate: 0.30,
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"## Uplift over baseline",
+		"| LLM | F1 (Δ) | Precision (Δ) | Recall (Δ) | Noise (Δ) |",
+		"| claude |", // row exists
+		"+0.27",      // F1 delta = 0.91 - 0.64 = +0.27
+		"+0.30",      // Recall delta = 1.00 - 0.70 = +0.30
+		"-0.30",      // Noise delta = 0.00 - 0.30 = -0.30 (regression direction is good here)
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("uplift block missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+}
+
+func TestWriteMarkdown_OmitsUpliftWhenNotMeasured(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "replay",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{LLM: "claude", Cases: []CaseScore{{CaseID: "x"}}},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "Uplift over baseline") {
+		t.Errorf("uplift section should be omitted when no LLM has a Baseline; got:\n%s", buf.String())
+	}
+}
+
 // TestWriteMarkdown_RendersZeroConsistency: a measured-but-zero
 // consistency (every run produced totally different findings) must
 // render as "0.00" — not be collapsed to "—" alongside unmeasured.

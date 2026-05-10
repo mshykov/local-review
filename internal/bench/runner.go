@@ -59,6 +59,25 @@ type Options struct {
 	// quality scores comparable to single-run benches and avoids
 	// "did variance cause that regression?" ambiguity.
 	Repeat int
+
+	// Uplift, when true, runs each (case, LLM) pair TWICE: once
+	// with prompts.BaselinePrompt (a minimal generic system prompt
+	// that mirrors what a developer would type into Claude.app
+	// without specialised tooling), and once with the full
+	// local-review pipeline (language-specific pack via
+	// prompts.Resolve). The treatment scores fill the primary
+	// CaseScore fields; the baseline scores fill CaseScore.Baseline
+	// (and the LLM-level rollup fills LLMReport.Baseline). The
+	// leaderboard renders both plus the delta.
+	//
+	// Live-only by design: replay mode rejects --uplift outright.
+	// The whole point of uplift is to measure real LLM behaviour
+	// against the bare-prompt baseline; running cached fixtures
+	// for both sides would just measure how well the fixtures
+	// match each other, which is meaningless. Run rejects the
+	// combination loudly rather than producing a misleading
+	// number.
+	Uplift bool
 }
 
 // Run scores each case against each LLM and returns an aggregated
@@ -76,6 +95,9 @@ func Run(ctx context.Context, cases []Case, opts Options) (Report, error) {
 	}
 	if opts.Source == SourceReplay && opts.Repeat > 1 {
 		return Report{}, errors.New("--repeat > 1 is meaningless in replay mode (fixtures are deterministic; consistency would always score 1.0); re-run live, or drop --repeat")
+	}
+	if opts.Source == SourceReplay && opts.Uplift {
+		return Report{}, errors.New("--uplift is meaningless in replay mode (need live LLM calls to measure the baseline); re-run live, or drop --uplift")
 	}
 
 	rep := Report{
@@ -164,6 +186,18 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 		cs.RunCount = count
 		if count >= 2 {
 			cs.Jaccard = &jac
+		}
+	}
+
+	// Phase-3 uplift: run the same case again with a minimal
+	// generic system prompt (prompts.BaselinePrompt) and record
+	// the resulting score. The bench then renders treatment vs
+	// baseline so users see whether local-review's pack pipeline
+	// actually adds value over a raw-LLM baseline. Live-only:
+	// replay rejects --uplift up in Run().
+	if opts.Uplift {
+		if b := scoreBaseline(ctx, c, llm, opts); b != nil {
+			cs.Baseline = b
 		}
 	}
 
@@ -262,16 +296,24 @@ func validateIdentifier(kind, v string) error {
 // for a single agent, minus the on-disk save (the bench writes its
 // own report; per-case markdown is already persisted in the dataset).
 func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (string, error) {
-	invoker := cli.NewInvoker(llm)
-	if invoker == nil {
-		return "", fmt.Errorf("no invoker for llm %q", llm.Name)
-	}
-
 	pack, err := prompts.Get(c.Language)
 	if err != nil {
 		return "", fmt.Errorf("load prompt pack for language %q: %w", c.Language, err)
 	}
+	return runLiveWithPrompt(ctx, c, llm, timeout, pack)
+}
 
+// runLiveWithPrompt is the lower-level helper used by both the
+// treatment path (runLive, which threads the language-specific
+// pack) and the --uplift baseline path (which threads
+// prompts.BaselinePrompt). Splitting on the system-prompt
+// argument is enough to express "same case, different prompt" —
+// no other code path differs.
+func runLiveWithPrompt(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration, systemPrompt string) (string, error) {
+	invoker := cli.NewInvoker(llm)
+	if invoker == nil {
+		return "", fmt.Errorf("no invoker for llm %q", llm.Name)
+	}
 	if timeout == 0 {
 		if llm.TimeoutSec > 0 {
 			timeout = time.Duration(llm.TimeoutSec) * time.Second
@@ -286,8 +328,33 @@ func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (s
 	// already tracked per-run in the live review path and the
 	// bench-aggregate timing/cost view is Phase 2 ("Cost / latency
 	// benchmark" in #56).
-	out, _, err := invoker.Review(cctx, pack, c.Diff)
+	out, _, err := invoker.Review(cctx, systemPrompt, c.Diff)
 	return out, err
+}
+
+// scoreBaseline runs the (case, LLM) once with prompts.BaselinePrompt
+// (a minimal generic system prompt) instead of the language-specific
+// pack, scores the output, and returns the BaselineScore. Returns
+// nil on error: the baseline pass is best-effort, and a transient
+// failure shouldn't take down the whole bench. Renderer skips
+// delta computation when Baseline is nil; users see treatment
+// numbers and a "—" for the delta.
+func scoreBaseline(ctx context.Context, c Case, llm cli.LLM, opts Options) *BaselineScore {
+	start := time.Now()
+	out, err := runLiveWithPrompt(ctx, c, llm, opts.Timeout, prompts.BaselinePrompt)
+	dur := time.Since(start)
+	if err != nil {
+		return nil
+	}
+	produced := ParseFindings(out)
+	cs := Score(c, produced)
+	return &BaselineScore{
+		TruePositives:  cs.TruePositives,
+		FalsePositives: cs.FalsePositives,
+		FalseNegatives: cs.FalseNegatives,
+		Produced:       cs.Produced,
+		DurationMs:     dur.Milliseconds(),
+	}
 }
 
 // fillAggregates computes precision/recall/F1/noise/timing over a
@@ -318,6 +385,59 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 	fillLanguageAggregates(lr)
 	fillConsistencyAggregate(lr)
 	fillTimingAggregates(lr, durations)
+	fillBaselineAggregate(lr)
+}
+
+// fillBaselineAggregate rolls up CaseScore.Baseline pointers into
+// LLMReport.Baseline. Mirrors qualityScores' shape so the leaderboard
+// can compute treatment-vs-baseline deltas using the same
+// micro-averaging across non-clean cases.
+//
+// Sets lr.Baseline only when at least one case has a non-nil
+// Baseline — preserves the same "absent vs measured-zero" JSON
+// distinction LLMReport.Consistency uses.
+func fillBaselineAggregate(lr *LLMReport) {
+	var tp, fp, fn int
+	cleanCases := 0
+	cleanFindings := 0
+	nonCleanScored := 0
+	measuredAny := false
+	var totalDur int64
+	for _, cs := range lr.Cases {
+		if cs.Baseline == nil {
+			continue
+		}
+		measuredAny = true
+		b := cs.Baseline
+		totalDur += b.DurationMs
+		isClean := b.TruePositives == 0 && b.FalseNegatives == 0 &&
+			cs.TruePositives == 0 && cs.FalseNegatives == 0 &&
+			len(cs.Matched) == 0 && len(cs.Missed) == 0
+		if isClean {
+			cleanCases++
+			cleanFindings += b.Produced
+			continue
+		}
+		nonCleanScored++
+		tp += b.TruePositives
+		fp += b.FalsePositives
+		fn += b.FalseNegatives
+	}
+	if !measuredAny {
+		return
+	}
+	agg := &LLMBaselineAggregate{TotalDurationMs: totalDur}
+	if nonCleanScored > 0 {
+		agg.Precision = ratio(tp, tp+fp)
+		agg.Recall = ratio(tp, tp+fn)
+		if agg.Precision+agg.Recall > 0 {
+			agg.F1 = 2 * agg.Precision * agg.Recall / (agg.Precision + agg.Recall)
+		}
+	}
+	if cleanCases > 0 {
+		agg.NoiseRate = float64(cleanFindings) / float64(cleanCases)
+	}
+	lr.Baseline = agg
 }
 
 // fillLanguageAggregates groups CaseScore entries by their Language

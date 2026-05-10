@@ -55,6 +55,7 @@ Useful flags:
 | `--out <path>` | also write JSON to disk (text still goes to stdout) |
 | `--markdown <path>` | also write a leaderboard markdown table to disk (Phase 2) |
 | `--repeat N` | sample each (case, LLM) N times for Jaccard consistency (live mode only; Phase 2) |
+| `--uplift` | also run each (case, LLM) with a minimal generic system prompt and report treatment-vs-baseline deltas (live mode only; Phase 3) |
 | `--strict` | exit non-zero on any per-case error; default ON in `--replay` |
 
 ## Scoring rules
@@ -95,6 +96,24 @@ Aggregates across the dataset:
   mode rejects `--repeat > 1` (fixtures are deterministic; the
   number would always be 1.0 and tell you nothing about the
   underlying model).
+* **Uplift over baseline** (Phase 3, `--uplift`) answers the
+  question that drives adoption: *is local-review better than
+  running the raw LLM cold?* Runs each `(case, LLM)` pair twice:
+  - **Baseline**: minimal generic system prompt (`prompts.BaselinePrompt`)
+    — the kind of thing you'd type into Claude.app: "you are a
+    code reviewer, list bugs with file:line, be concise."
+  - **Treatment**: full local-review pipeline (language-specific
+    pack via `prompts.Resolve`).
+  The leaderboard adds a row per LLM showing
+  `treatment (Δ vs baseline)` for F1 / precision / recall / noise.
+  A positive Δ on F1 means local-review's pack adds value over a
+  generic prompt; a negative Δ means the pack is hurting.
+  **Why we don't tune the baseline**: the point is to measure
+  what no-effort produces, not to maximise apparent uplift.
+  Tuning the baseline would inflate the delta artificially.
+  Replay mode rejects `--uplift` (need real LLM calls to measure
+  the baseline; cached fixtures for both sides would just compare
+  the fixtures to themselves).
 * **Median / p95** wall-clock are computed from successful runs
   only. Errors don't pollute timing.
 

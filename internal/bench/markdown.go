@@ -52,7 +52,52 @@ func WriteMarkdown(w io.Writer, rep Report) error {
 			return err
 		}
 	}
+	if hasUpliftMeasured(rep) {
+		if err := writeMarkdownUplift(w, rep); err != nil {
+			return err
+		}
+	}
 	return writeMarkdownPerCase(w, rep)
+}
+
+// writeMarkdownUplift mirrors writeUpliftBlock for the markdown
+// leaderboard. Treatment vs baseline plus the delta as a separate
+// "## Uplift over baseline" section so a committed RESULTS.md
+// preserves the same headline answer ("is local-review better than
+// the raw LLM?") as the text report.
+func writeMarkdownUplift(w io.Writer, rep Report) error {
+	if _, err := fmt.Fprintln(w, "## Uplift over baseline (raw LLM, generic prompt)"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "| LLM | F1 (Δ) | Precision (Δ) | Recall (Δ) | Noise (Δ) |"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "| --- | --- | --- | --- | --- |"); err != nil {
+		return err
+	}
+	for _, lr := range rep.LLMReports {
+		if lr.Baseline == nil {
+			if _, err := fmt.Fprintf(w, "| %s | — | — | — | — |\n", lr.LLM); err != nil {
+				return err
+			}
+			continue
+		}
+		b := lr.Baseline
+		if _, err := fmt.Fprintf(w, "| %s | %s | %s | %s | %s |\n",
+			lr.LLM,
+			fmtUpliftCell(lr.F1, b.F1),
+			fmtUpliftCell(lr.Precision, b.Precision),
+			fmtUpliftCell(lr.Recall, b.Recall),
+			fmtUpliftCell(lr.NoiseRate, b.NoiseRate),
+		); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintln(w)
+	return err
 }
 
 func writeMarkdownHeader(w io.Writer, rep Report) error {

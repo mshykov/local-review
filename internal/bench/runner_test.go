@@ -261,6 +261,86 @@ expected:
 	}
 }
 
+func TestRun_ReplayWithUpliftIsError(t *testing.T) {
+	// --uplift is meaningless in replay mode (need real LLM calls
+	// to measure the baseline pass). Run must reject the
+	// combination so users don't ship a misleading "uplift = 0"
+	// to their leaderboard from cached fixtures.
+	_, err := Run(context.Background(), []Case{{ID: "x"}}, Options{
+		LLMs:      []cli.LLM{{Name: "claude"}},
+		Source:    SourceReplay,
+		ReplayDir: t.TempDir(),
+		Uplift:    true,
+	})
+	if err == nil {
+		t.Error("expected error when --uplift is used with replay mode")
+	}
+}
+
+// TestFillBaselineAggregate_MicroAveragesNonClean verifies the
+// baseline rollup uses the same "skip clean cases for P/R/F1,
+// count them for noise" rule the treatment side uses. Without
+// matching semantics, treatment-vs-baseline deltas become apples
+// to oranges.
+func TestFillBaselineAggregate_MicroAveragesNonClean(t *testing.T) {
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			// Non-clean case: bug at line 10, baseline missed it,
+			// treatment caught it.
+			{
+				CaseID:        "go-bug-1",
+				TruePositives: 1, FalsePositives: 0, FalseNegatives: 0,
+				Matched: []MatchPair{{}},
+				Baseline: &BaselineScore{
+					TruePositives: 0, FalsePositives: 0, FalseNegatives: 1,
+					DurationMs: 100,
+				},
+			},
+			// Clean case: treatment silent, baseline produced 2 noisy findings.
+			{
+				CaseID:   "clean-1",
+				Produced: 0,
+				Baseline: &BaselineScore{
+					Produced:   2,
+					DurationMs: 80,
+				},
+			},
+		},
+	}
+	fillBaselineAggregate(lr)
+	if lr.Baseline == nil {
+		t.Fatal("expected Baseline to be non-nil after fillBaselineAggregate")
+	}
+	// Baseline P/R/F1 over the single non-clean case: TP=0, FN=1
+	// → recall=0, precision=0, F1=0.
+	if lr.Baseline.F1 != 0 {
+		t.Errorf("baseline F1 = %v, want 0 (1/1 missed)", lr.Baseline.F1)
+	}
+	// Baseline noise: 2 findings on 1 clean case → 2.0
+	if lr.Baseline.NoiseRate != 2.0 {
+		t.Errorf("baseline noise = %v, want 2.0", lr.Baseline.NoiseRate)
+	}
+	// Total duration sums both passes.
+	if lr.Baseline.TotalDurationMs != 180 {
+		t.Errorf("baseline total duration = %v, want 180", lr.Baseline.TotalDurationMs)
+	}
+}
+
+func TestFillBaselineAggregate_NilWhenNoCaseMeasured(t *testing.T) {
+	// Single-pass benches (no --uplift) must have a nil Baseline
+	// on the LLMReport so JSON consumers can distinguish "not
+	// measured" (absent) from "measured-zero" (present, all zeros).
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			{CaseID: "x", TruePositives: 1, Matched: []MatchPair{{}}},
+		},
+	}
+	fillBaselineAggregate(lr)
+	if lr.Baseline != nil {
+		t.Errorf("Baseline should be nil when no case was measured, got %+v", lr.Baseline)
+	}
+}
+
 func TestRun_ReplayWithRepeatIsError(t *testing.T) {
 	// --repeat > 1 is meaningless in replay (fixtures are
 	// deterministic; Jaccard would always be 1.0). Run must reject

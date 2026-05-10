@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-05-09
+### Added
+- **`local-review bench --uplift`** — measure treatment vs baseline on the same labelled dataset. Each `(case, LLM)` pair runs twice: once with `prompts.BaselinePrompt` (a deliberately minimal generic system prompt — the kind of thing a developer would type into Claude.app without specialised tooling) and once with the full local-review pipeline (language-specific pack via `prompts.Resolve` plus the multi-LLM merge surface). The leaderboard adds an "Uplift over baseline (raw LLM, generic prompt)" block per LLM showing `treatment (Δ vs baseline)` for F1 / precision / recall / noise, with signed deltas so a regression (negative Δ on F1, or positive Δ on noise) is unambiguous at a glance. Live mode only; replay rejects `--uplift` outright (cached fixtures for both sides would just measure the fixtures' similarity to themselves). Costs roughly 2× the tokens of a normal bench run. The headline answer to "is local-review actually better than running the raw LLM cold?" — closes the gap between "the harness is real" and "the marketing claim is real" identified in friend-review feedback.
+- **Baseline JSON fields** in the bench `Report`: `LLMReport.Baseline` (per-LLM aggregate of treatment-side fields) and `CaseScore.Baseline` (per-case TP/FP/FN/Produced/DurationMs from the baseline pass). Both pointer-typed so JSON consumers can distinguish "not measured" (absent) from "measured-zero" (present with zeros) — same shape as `Consistency` and `Jaccard`.
+
+### Changed
+- **README restructured for action-first onboarding.** The top of the file now leads with a 5-step "Get started" block (install → authenticate → optional YAML → review → see bench), followed by quick "Just want the checklist?" and "Customise for your team" entry points. The "Why" / "What it is, what it isn't" / multi-LLM / configuration sections moved below — visible to readers who want them, no longer the first thing a casual visitor reads. v0.8 banner condensed and repositioned. Old `## Install` and `## Quick start` sections folded into the new `## Get started` to remove duplication.
 
 **Theme: measure what you ship, customise what you check.**
 

@@ -45,6 +45,12 @@ func WriteText(w io.Writer, rep Report) error {
 		}
 	}
 
+	if hasUpliftMeasured(rep) {
+		if err := writeUpliftBlock(w, rep); err != nil {
+			return err
+		}
+	}
+
 	if _, err := fmt.Fprintln(w, "\nPer-case detail:"); err != nil {
 		return err
 	}
@@ -55,6 +61,68 @@ func WriteText(w io.Writer, rep Report) error {
 	}
 
 	return nil
+}
+
+// hasUpliftMeasured returns true when at least one LLM has a
+// non-nil Baseline aggregate, indicating --uplift produced a
+// measurement. Used by both the text and markdown writers to
+// gate the uplift block — single-pass benches don't see this
+// section at all, keeping the default report terse.
+func hasUpliftMeasured(rep Report) bool {
+	for _, lr := range rep.LLMReports {
+		if lr.Baseline != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// writeUpliftBlock renders the "Uplift over baseline" comparison:
+// per-LLM treatment vs baseline scores plus the delta. The block
+// is the headline answer to "is local-review better than running
+// the raw LLM cold?" — appears between the per-language F1 grid
+// (specific) and the per-case detail (debugging).
+//
+// Format mirrors writeOverallTable's spacing for visual consistency.
+// The delta column uses signed format ("+0.32") so a regression
+// (negative delta) is unambiguous at a glance.
+func writeUpliftBlock(w io.Writer, rep Report) error {
+	if _, err := fmt.Fprintln(w, "\nUplift over baseline (raw LLM, generic prompt):"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%-10s  %-13s  %-13s  %-13s  %-13s\n",
+		"LLM", "F1 (Δ)", "Precision (Δ)", "Recall (Δ)", "Noise (Δ)"); err != nil {
+		return err
+	}
+	for _, lr := range rep.LLMReports {
+		if lr.Baseline == nil {
+			if _, err := fmt.Fprintf(w, "%-10s  (not measured)\n", lr.LLM); err != nil {
+				return err
+			}
+			continue
+		}
+		b := lr.Baseline
+		if _, err := fmt.Fprintf(w, "%-10s  %s  %s  %s  %s\n",
+			lr.LLM,
+			fmtUpliftCell(lr.F1, b.F1),
+			fmtUpliftCell(lr.Precision, b.Precision),
+			fmtUpliftCell(lr.Recall, b.Recall),
+			fmtUpliftCell(lr.NoiseRate, b.NoiseRate),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fmtUpliftCell renders a single "treatment (Δsign)" cell —
+// e.g. "0.91 (+0.32)" or "0.47 (-0.05)". Width-padded to fit the
+// column header; signed delta makes the direction obvious at a
+// glance (the sign matters for noise rate, where lower is
+// better — a positive delta there is a regression).
+func fmtUpliftCell(treatment, baseline float64) string {
+	delta := treatment - baseline
+	return fmt.Sprintf("%4.2f (%+5.2f)", treatment, delta)
 }
 
 // writeOverallTable prints the top per-LLM aggregate row. Adds a
