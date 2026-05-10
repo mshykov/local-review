@@ -149,26 +149,7 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 
 	output, err := obtainReview(ctx, c, llm, opts)
 
-	if err != nil {
-		dur := time.Since(start)
-		return CaseScore{
-			CaseID:     c.ID,
-			LLM:        llm.Name,
-			Version:    llm.Version,
-			Language:   c.Language,
-			Duration:   dur,
-			DurationMs: dur.Milliseconds(),
-			Error:      err.Error(),
-			Mode:       mode,
-		}
-	}
-
-	produced := ParseFindings(output)
-	cs := Score(c, produced)
-	cs.LLM = llm.Name
-	cs.Version = llm.Version
-	cs.Language = c.Language
-	cs.Mode = mode
+	cs := buildBaseScore(c, llm, mode, output, err)
 
 	// Phase-2 consistency: re-sample the same (case, LLM) up to
 	// opts.Repeat times and record the Jaccard similarity. Each
@@ -180,7 +161,11 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	// implying every attempt agreed — codex caught this credibility
 	// hole in self-review. JSON consumers should treat any case
 	// with attempts > run_count with skepticism.
-	if opts.Repeat > 1 {
+	//
+	// Skipped on treatment-error frames: there's no first run to
+	// compare against, so consistency is undefined.
+	if opts.Repeat > 1 && err == nil {
+		produced := ParseFindings(output)
 		attempts, count, jac := sampleConsistency(ctx, c, llm, opts, produced)
 		cs.Attempts = attempts
 		cs.RunCount = count
@@ -196,6 +181,14 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	// actually adds value over a raw-LLM baseline. Live-only:
 	// replay rejects --uplift up in Run().
 	//
+	// Baseline runs even when the treatment pass errored — the
+	// uplift comparison should not be biased toward "treatment
+	// happened to succeed here". Iter-4 self-review (codex)
+	// flagged the prior shape (early-return on treatment error
+	// before scoreBaseline) as silently shrinking the baseline
+	// sample to the treatment-success subset, which inflates
+	// apparent uplift exactly when local-review is flakiest.
+	//
 	// Baseline errors are recorded explicitly on cs.BaselineError
 	// rather than silently dropped: a half-measured baseline
 	// (treatment for all N cases, baseline for only M < N) would
@@ -204,9 +197,9 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	// surfaces the gap; strict mode treats it the same way it
 	// treats treatment-side errors.
 	if opts.Uplift {
-		b, err := scoreBaseline(ctx, c, llm, opts)
-		if err != nil {
-			cs.BaselineError = err.Error()
+		b, berr := scoreBaseline(ctx, c, llm, opts)
+		if berr != nil {
+			cs.BaselineError = berr.Error()
 		} else if b != nil {
 			cs.Baseline = b
 		}
@@ -215,6 +208,41 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	dur := time.Since(start)
 	cs.Duration = dur
 	cs.DurationMs = dur.Milliseconds()
+	return cs
+}
+
+// buildBaseScore returns a CaseScore for one (case, LLM) pair.
+// On treatment success it scores the produced findings; on
+// treatment error it returns the error-frame shape (zero TP/FP/
+// FN, Error set) but still carries the metadata fields so
+// downstream rollups (Language, Mode, etc.) see the same key on
+// every row regardless of treatment outcome. Pulled out of
+// scoreOne so the consistency / uplift extension points stay
+// readable instead of nested inside an err == nil branch.
+func buildBaseScore(c Case, llm cli.LLM, mode, output string, err error) CaseScore {
+	if err != nil {
+		return CaseScore{
+			CaseID:   c.ID,
+			LLM:      llm.Name,
+			Version:  llm.Version,
+			Language: c.Language,
+			// Carry Clean even on treatment errors so baseline-
+			// only frames still classify correctly into the
+			// noise vs. precision/recall buckets at aggregation
+			// time. Without this, a treatment-error case on a
+			// clean diff would land as "non-clean" in the
+			// baseline rollup and skew the metrics.
+			Clean: c.Clean || len(c.Expected) == 0,
+			Error: err.Error(),
+			Mode:  mode,
+		}
+	}
+	produced := ParseFindings(output)
+	cs := Score(c, produced)
+	cs.LLM = llm.Name
+	cs.Version = llm.Version
+	cs.Language = c.Language
+	cs.Mode = mode
 	return cs
 }
 
@@ -462,8 +490,9 @@ func fillBaselineAggregate(lr *LLMReport) {
 		return
 	}
 	agg := &LLMBaselineAggregate{
-		TotalDurationMs: totalDur,
-		MeasuredCases:   nonCleanScored + cleanCases,
+		TotalDurationMs:       totalDur,
+		MeasuredNonCleanCases: nonCleanScored,
+		MeasuredCleanCases:    cleanCases,
 	}
 	if measuredAny && nonCleanScored > 0 {
 		agg.Precision = ratio(tp, tp+fp)

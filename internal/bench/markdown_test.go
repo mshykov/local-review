@@ -127,7 +127,7 @@ func TestWriteMarkdown_RendersUpliftBlock(t *testing.T) {
 				Cases: []CaseScore{{CaseID: "x"}},
 				Baseline: &LLMBaselineAggregate{
 					Precision: 0.59, Recall: 0.70, F1: 0.64, NoiseRate: 0.30,
-					MeasuredCases: 1,
+					MeasuredNonCleanCases: 1, MeasuredCleanCases: 1,
 				},
 			},
 		},
@@ -213,7 +213,7 @@ func TestWriteMarkdown_DashesOutZeroMeasuredCases(t *testing.T) {
 				Cases: []CaseScore{
 					{CaseID: "x", BaselineError: "timeout"},
 				},
-				Baseline: &LLMBaselineAggregate{MeasuredCases: 0},
+				Baseline: &LLMBaselineAggregate{MeasuredNonCleanCases: 0, MeasuredCleanCases: 0},
 			},
 		},
 	}
@@ -232,6 +232,51 @@ func TestWriteMarkdown_DashesOutZeroMeasuredCases(t *testing.T) {
 	}
 	if !strings.Contains(out, "| claude | — | — | — | — |") {
 		t.Errorf("expected dashed-out row for claude, got:\n%s", out)
+	}
+}
+
+// TestWriteMarkdown_AsymmetricCoverageDashesUnmeasuredHalf verifies
+// that when baseline succeeded only on clean cases (or only on
+// non-clean cases), the renderer shows the half it has data for
+// and dashes out the other half. Iter-4 self-review flagged the
+// previous all-or-nothing gate as letting a "baseline succeeded
+// 0/3 non-clean cases" run still print "F1 0.91 (+0.91)" against
+// the phantom zero baseline.
+func TestWriteMarkdown_AsymmetricCoverageDashesUnmeasuredHalf(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 2, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:       "claude",
+				Precision: 0.83, Recall: 1.00, F1: 0.91, NoiseRate: 0.0,
+				Cases: []CaseScore{
+					{CaseID: "x"},
+					{CaseID: "clean", Clean: true},
+				},
+				// Baseline: only clean coverage measured; non-clean
+				// pass errored on every case it touched.
+				Baseline: &LLMBaselineAggregate{
+					NoiseRate:             0.30,
+					MeasuredNonCleanCases: 0,
+					MeasuredCleanCases:    1,
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	// Noise must render numerically (-0.30 delta).
+	if !strings.Contains(out, "-0.30") {
+		t.Errorf("expected noise delta to render numerically; got:\n%s", out)
+	}
+	// F1 / Precision / Recall must dash out — no non-clean baseline
+	// ever scored. The row shape is "| claude | — | — | — | 0.00 (-0.30) | 0 |".
+	if !strings.Contains(out, "| claude | — | — | — |") {
+		t.Errorf("expected F1/Precision/Recall to dash out for zero non-clean coverage; got:\n%s", out)
 	}
 }
 

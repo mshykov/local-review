@@ -84,22 +84,27 @@ func writeMarkdownUplift(w io.Writer, rep Report) error {
 		if errs > 0 {
 			errLabel = fmt.Sprintf("%d ⚠", errs)
 		}
-		if !baselineHasNumericData(lr.Baseline) {
-			// Same gating as the text renderer: a zero-cases
+		if !baselineHasAnyNumericData(lr.Baseline) {
+			// Same gating as the text renderer: a zero-coverage
 			// aggregate must not produce numeric delta cells. See
-			// baselineHasNumericData for rationale.
+			// baselineHasAnyNumericData for rationale.
 			if _, err := fmt.Fprintf(w, "| %s | — | — | — | — | %s |\n", lr.LLM, errLabel); err != nil {
 				return err
 			}
 			continue
 		}
 		b := lr.Baseline
+		// Per-bucket gating — see writeUpliftBlock for rationale.
+		// F1/Precision/Recall gate on non-clean coverage; Noise
+		// gates on clean coverage.
+		qualityMeasured := b.MeasuredNonCleanCases > 0
+		noiseMeasured := b.MeasuredCleanCases > 0
 		if _, err := fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s |\n",
 			lr.LLM,
-			fmtUpliftCell(lr.F1, b.F1),
-			fmtUpliftCell(lr.Precision, b.Precision),
-			fmtUpliftCell(lr.Recall, b.Recall),
-			fmtUpliftCell(lr.NoiseRate, b.NoiseRate),
+			markdownUpliftCell(lr.F1, b.F1, qualityMeasured),
+			markdownUpliftCell(lr.Precision, b.Precision, qualityMeasured),
+			markdownUpliftCell(lr.Recall, b.Recall, qualityMeasured),
+			markdownUpliftCell(lr.NoiseRate, b.NoiseRate, noiseMeasured),
 			errLabel,
 		); err != nil {
 			return err
@@ -107,6 +112,17 @@ func writeMarkdownUplift(w io.Writer, rep Report) error {
 	}
 	_, err := fmt.Fprintln(w)
 	return err
+}
+
+// markdownUpliftCell returns the standard "treatment (Δ)" cell
+// when measured, "—" otherwise. Markdown twin of
+// fmtUpliftCellOrDash; sized without the text renderer's column
+// padding so the table cells stay tight.
+func markdownUpliftCell(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return "—"
+	}
+	return fmtUpliftCell(treatment, baseline)
 }
 
 func writeMarkdownHeader(w io.Writer, rep Report) error {

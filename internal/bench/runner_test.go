@@ -325,12 +325,16 @@ func TestFillBaselineAggregate_MicroAveragesNonClean(t *testing.T) {
 	if lr.Baseline.TotalDurationMs != 180 {
 		t.Errorf("baseline total duration = %v, want 180", lr.Baseline.TotalDurationMs)
 	}
-	// MeasuredCases tracks how many cases produced numeric data
-	// (one non-clean + one clean = 2). Renderers gate numeric
-	// delta cells on this, so a regression here would silently
-	// re-introduce the iter-3 misleading-headline bug.
-	if lr.Baseline.MeasuredCases != 2 {
-		t.Errorf("baseline measured cases = %d, want 2", lr.Baseline.MeasuredCases)
+	// MeasuredNonCleanCases / MeasuredCleanCases are the per-bucket
+	// coverage counts. Renderers gate F1/Precision/Recall on the
+	// non-clean count and Noise on the clean count — splitting the
+	// gates is what stops a "baseline succeeded only on clean
+	// cases" run from rendering a phantom F1 delta against zero.
+	if lr.Baseline.MeasuredNonCleanCases != 1 {
+		t.Errorf("MeasuredNonCleanCases = %d, want 1", lr.Baseline.MeasuredNonCleanCases)
+	}
+	if lr.Baseline.MeasuredCleanCases != 1 {
+		t.Errorf("MeasuredCleanCases = %d, want 1", lr.Baseline.MeasuredCleanCases)
 	}
 }
 
@@ -371,11 +375,13 @@ func TestFillBaselineAggregate_ZeroAggregateWhenAllBaselinesErrored(t *testing.T
 	if lr.Baseline.F1 != 0 || lr.Baseline.Precision != 0 || lr.Baseline.Recall != 0 || lr.Baseline.NoiseRate != 0 {
 		t.Errorf("aggregate should be zero-valued when every baseline errored, got %+v", lr.Baseline)
 	}
-	// MeasuredCases==0 is the renderer's signal to render "—"
-	// instead of numeric delta cells. Without it, the report
-	// would print "0.91 (+0.91)" against an unmeasured baseline.
-	if lr.Baseline.MeasuredCases != 0 {
-		t.Errorf("MeasuredCases must be 0 when every baseline errored, got %d", lr.Baseline.MeasuredCases)
+	// Both per-bucket counts must be zero when every baseline
+	// errored — that's the renderer's signal to render "—" in
+	// every delta cell. Without these, the report would print
+	// "0.91 (+0.91)" against an unmeasured baseline.
+	if lr.Baseline.MeasuredNonCleanCases != 0 || lr.Baseline.MeasuredCleanCases != 0 {
+		t.Errorf("Measured*Cases must be 0 when every baseline errored, got non-clean=%d clean=%d",
+			lr.Baseline.MeasuredNonCleanCases, lr.Baseline.MeasuredCleanCases)
 	}
 }
 

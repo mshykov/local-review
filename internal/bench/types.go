@@ -339,19 +339,25 @@ type LLMBaselineAggregate struct {
 	NoiseRate       float64 `json:"noise_rate"`
 	TotalDurationMs int64   `json:"total_duration_ms"`
 
-	// MeasuredCases is the number of cases that actually
-	// contributed numeric data to this aggregate (i.e., the
-	// baseline pass returned output and was scored). Distinct
-	// from the LLM's total case count: zero means "uplift was
-	// attempted but every baseline pass errored." Renderers
-	// gate numeric delta cells on this — without it, an
-	// attempted-but-fully-failed run looks like "baseline F1 =
-	// 0.00, treatment F1 = 0.91, uplift = +0.91" which the
-	// iter-3 self-review flagged as a misleading headline. The
-	// JSON aggregate stays present (the "feature attempted"
-	// signal) but the rendered delta now says "—" with a
-	// "baseline failed on N case(s)" note.
-	MeasuredCases int `json:"measured_cases"`
+	// MeasuredNonCleanCases counts baseline passes that scored on
+	// non-clean cases — the cases that contribute to F1 /
+	// precision / recall. When zero, those three deltas are
+	// undefined (no bug-bearing case had a baseline result), and
+	// renderers must dash them out to avoid the iter-3/4 misleading-
+	// headline shape ("baseline F1 = 0 → treatment F1 = 0.91" when
+	// no non-clean baseline was actually measured).
+	MeasuredNonCleanCases int `json:"measured_non_clean_cases"`
+
+	// MeasuredCleanCases counts baseline passes that scored on
+	// clean cases — the cases that contribute to NoiseRate. Gated
+	// independently of MeasuredNonCleanCases because a baseline
+	// that succeeded on every clean case but failed on every
+	// non-clean case has a meaningful noise number and a
+	// meaningless F1; the renderer should show the former and
+	// dash out the latter rather than dashing both or showing
+	// both. Iter-4 self-review caught this asymmetry; the
+	// per-bucket coverage closes it.
+	MeasuredCleanCases int `json:"measured_clean_cases"`
 }
 
 // Report is the top-level bench output.

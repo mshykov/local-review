@@ -119,7 +119,7 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 	}
 	for _, lr := range rep.LLMReports {
 		errs := countBaselineErrors(lr)
-		if !baselineHasNumericData(lr.Baseline) {
+		if !baselineHasAnyNumericData(lr.Baseline) {
 			// Either uplift wasn't run for this LLM, or every
 			// baseline pass errored. Render a single status line
 			// instead of numeric deltas — iter-3 self-review
@@ -137,12 +137,21 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 			continue
 		}
 		b := lr.Baseline
+		// Quality cells (F1 / precision / recall) gate on
+		// non-clean coverage; the noise cell gates on clean
+		// coverage. A baseline that succeeded only on clean
+		// cases has meaningful noise and meaningless F1, and
+		// vice versa. Iter-4 self-review (codex) caught the
+		// shape where both gated together let the unmeasured
+		// half show "0.00 (+X)" against a phantom value.
+		qualityMeasured := b.MeasuredNonCleanCases > 0
+		noiseMeasured := b.MeasuredCleanCases > 0
 		if _, err := fmt.Fprintf(w, "%-10s  %s  %s  %s  %s\n",
 			lr.LLM,
-			fmtUpliftCell(lr.F1, b.F1),
-			fmtUpliftCell(lr.Precision, b.Precision),
-			fmtUpliftCell(lr.Recall, b.Recall),
-			fmtUpliftCell(lr.NoiseRate, b.NoiseRate),
+			fmtUpliftCellOrDash(lr.F1, b.F1, qualityMeasured),
+			fmtUpliftCellOrDash(lr.Precision, b.Precision, qualityMeasured),
+			fmtUpliftCellOrDash(lr.Recall, b.Recall, qualityMeasured),
+			fmtUpliftCellOrDash(lr.NoiseRate, b.NoiseRate, noiseMeasured),
 		); err != nil {
 			return err
 		}
@@ -160,15 +169,27 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 	return nil
 }
 
-// baselineHasNumericData returns true when the aggregate carries
-// at least one case worth of measured numbers. False when nil
-// (uplift not run) OR present-but-MeasuredCases==0 (uplift
-// attempted, every baseline errored). Renderers gate the numeric
-// delta cells on this so an attempted-but-fully-failed run never
-// shows up as "treatment 0.91 (+0.91)" — that would imply the
-// raw model scored 0 when in fact it was never scored at all.
-func baselineHasNumericData(b *LLMBaselineAggregate) bool {
-	return b != nil && b.MeasuredCases > 0
+// baselineHasAnyNumericData returns true when the aggregate carries
+// at least one case worth of measured numbers — non-clean OR clean.
+// False when nil (uplift not run) OR present-but-zero-measurements
+// (uplift attempted, every baseline errored). Renderers use this as
+// the row-level gate; per-cell gating then uses the more granular
+// MeasuredNonCleanCases / MeasuredCleanCases fields so an asymmetric
+// failure (e.g., baseline succeeded on clean cases only) shows
+// noise but dashes out F1/precision/recall.
+func baselineHasAnyNumericData(b *LLMBaselineAggregate) bool {
+	return b != nil && (b.MeasuredNonCleanCases > 0 || b.MeasuredCleanCases > 0)
+}
+
+// fmtUpliftCellOrDash returns the standard "treatment (Δ)" cell
+// when the relevant baseline bucket actually produced numbers, and
+// "—" otherwise. The gate keeps the renderer from inventing a
+// numeric delta against a phantom-zero baseline.
+func fmtUpliftCellOrDash(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return fmt.Sprintf("%-13s", "—")
+	}
+	return fmtUpliftCell(treatment, baseline)
 }
 
 // fmtUpliftCell renders a single "treatment (Δsign)" cell —
