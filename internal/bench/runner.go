@@ -325,13 +325,7 @@ func runLiveWithPrompt(ctx context.Context, c Case, llm cli.LLM, timeout time.Du
 	if invoker == nil {
 		return "", fmt.Errorf("no invoker for llm %q", llm.Name)
 	}
-	if timeout == 0 {
-		if llm.TimeoutSec > 0 {
-			timeout = time.Duration(llm.TimeoutSec) * time.Second
-		} else {
-			timeout = 120 * time.Second
-		}
-	}
+	timeout = resolveTimeout(timeout, llm)
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// invoker.Review returns (output, tokenUsage, err) — bench
@@ -341,6 +335,22 @@ func runLiveWithPrompt(ctx context.Context, c Case, llm cli.LLM, timeout time.Du
 	// benchmark" in #56).
 	out, _, err := invoker.Review(cctx, systemPrompt, c.Diff)
 	return out, err
+}
+
+// resolveTimeout picks the per-call wall-clock cap, in priority
+// order: caller-supplied opts.Timeout (when non-zero), the LLM's
+// configured TimeoutSec, then the 120-second built-in fallback.
+// Centralised so the treatment and --uplift baseline paths can't
+// drift in their idea of "how long is too long" — duplicate
+// inline copies were flagged in self-review iter 2.
+func resolveTimeout(provided time.Duration, llm cli.LLM) time.Duration {
+	if provided > 0 {
+		return provided
+	}
+	if llm.TimeoutSec > 0 {
+		return time.Duration(llm.TimeoutSec) * time.Second
+	}
+	return 120 * time.Second
 }
 
 // scoreBaseline runs the (case, LLM) once with prompts.BaselinePrompt
@@ -406,27 +416,39 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 // can compute treatment-vs-baseline deltas using the same
 // micro-averaging across non-clean cases.
 //
-// Sets lr.Baseline only when at least one case has a non-nil
-// Baseline — preserves the same "absent vs measured-zero" JSON
-// distinction LLMReport.Consistency uses.
+// Cleanness is read from the explicit CaseScore.Clean field, not
+// inferred from treatment-side TP/FN counts — see tallyCases for
+// the rationale.
+//
+// Sets lr.Baseline whenever --uplift was attempted: a populated
+// aggregate (any case has a non-nil Baseline) carries the real
+// numbers; an attempted-but-fully-failed pass (every case has
+// BaselineError, no Baseline) still sets a zero-valued aggregate
+// so JSON consumers can distinguish "uplift not run" (nil) from
+// "uplift attempted, every case errored" (present, all zeros +
+// per-case BaselineError surfaces the failures). Iter-2 self-
+// review flagged the prior nil-on-all-fail shape as
+// indistinguishable from "feature not used."
 func fillBaselineAggregate(lr *LLMReport) {
 	var tp, fp, fn int
 	cleanCases := 0
 	cleanFindings := 0
 	nonCleanScored := 0
 	measuredAny := false
+	attemptedAny := false
 	var totalDur int64
 	for _, cs := range lr.Cases {
+		if cs.BaselineError != "" {
+			attemptedAny = true
+		}
 		if cs.Baseline == nil {
 			continue
 		}
 		measuredAny = true
+		attemptedAny = true
 		b := cs.Baseline
 		totalDur += b.DurationMs
-		isClean := b.TruePositives == 0 && b.FalseNegatives == 0 &&
-			cs.TruePositives == 0 && cs.FalseNegatives == 0 &&
-			len(cs.Matched) == 0 && len(cs.Missed) == 0
-		if isClean {
+		if cs.Clean {
 			cleanCases++
 			cleanFindings += b.Produced
 			continue
@@ -436,11 +458,11 @@ func fillBaselineAggregate(lr *LLMReport) {
 		fp += b.FalsePositives
 		fn += b.FalseNegatives
 	}
-	if !measuredAny {
+	if !attemptedAny {
 		return
 	}
 	agg := &LLMBaselineAggregate{TotalDurationMs: totalDur}
-	if nonCleanScored > 0 {
+	if measuredAny && nonCleanScored > 0 {
 		agg.Precision = ratio(tp, tp+fp)
 		agg.Recall = ratio(tp, tp+fn)
 		if agg.Precision+agg.Recall > 0 {
@@ -544,18 +566,22 @@ type caseTally struct {
 // accumulates TP/FP/FN over the non-clean ones. Clean cases by
 // definition have zero expected findings, so they don't contribute
 // to precision/recall — only to the noise-rate denominator.
+//
+// The clean signal is the explicit CaseScore.Clean field (set by
+// Score from Case.Clean / len(Expected)==0), not derived from
+// treatment-side TP/FN/Matched counts. Iter-2 self-review (codex)
+// flagged the previous shape as coupling baseline aggregation to
+// treatment scoring internals; the explicit field also keeps the
+// classification correct on a noisy treatment run against a
+// truly-clean case (FP > 0 alone would have inferred "non-clean"
+// and routed the case into the precision bucket).
 func tallyCases(cases []CaseScore) caseTally {
 	var t caseTally
 	for _, cs := range cases {
 		if cs.Error != "" {
 			continue
 		}
-		// Distinguish clean cases by "zero expected findings AND zero
-		// matched/missed". A non-clean case where every expected was
-		// found has FN==0 too, but it still has TP>0 — the union check
-		// keeps the buckets disjoint.
-		isClean := cs.TruePositives == 0 && cs.FalseNegatives == 0 && len(cs.Matched) == 0 && len(cs.Missed) == 0
-		if isClean {
+		if cs.Clean {
 			t.cleanCases++
 			t.cleanFindings += cs.Produced
 			continue

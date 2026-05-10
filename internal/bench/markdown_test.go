@@ -169,9 +169,13 @@ func TestWriteMarkdown_FlagsBaselineErrors(t *testing.T) {
 					{CaseID: "x", BaselineError: "timeout after 120s"},
 					{CaseID: "y"},
 				},
-				// Baseline aggregate may legitimately be nil if every
-				// case errored; the runner still records BaselineError
-				// per case and we want to surface the count regardless.
+				// Direct-renderer test: simulate an older Report (pre
+				// iter-2 fix) or a hand-constructed one where Baseline
+				// is nil but BaselineError is set on a case. The
+				// renderer must still surface the failure count
+				// regardless of how the aggregate got there — robust
+				// to both runner-produced and externally-constructed
+				// reports.
 				Baseline: nil,
 			},
 		},

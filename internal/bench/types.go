@@ -162,6 +162,18 @@ type CaseScore struct {
 	// Total findings produced (TP + FP) for noise-rate calculation.
 	Produced int `json:"produced"`
 
+	// Clean mirrors Case.Clean ("this diff is supposed to produce
+	// zero findings"). Carried on the score so aggregate code paths
+	// — both the treatment side (tallyCases) and the --uplift
+	// baseline side (fillBaselineAggregate) — can route a case into
+	// the noise-rate bucket vs. the precision/recall bucket from a
+	// single explicit signal instead of inferring it from
+	// treatment-side TP/FN counts. The earlier heuristic conflated
+	// "case has no expected findings" with "treatment found zero
+	// matches", which would misclassify a noisy treatment run on a
+	// truly-clean case if the score fields ever drifted out of sync.
+	Clean bool `json:"clean,omitempty"`
+
 	// Match details for human reports.
 	Matched []MatchPair       `json:"matched,omitempty"`
 	Missed  []ExpectedFinding `json:"missed,omitempty"`

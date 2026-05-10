@@ -299,6 +299,7 @@ func TestFillBaselineAggregate_MicroAveragesNonClean(t *testing.T) {
 			// Clean case: treatment silent, baseline produced 2 noisy findings.
 			{
 				CaseID:   "clean-1",
+				Clean:    true,
 				Produced: 0,
 				Baseline: &BaselineScore{
 					Produced:   2,
@@ -338,6 +339,30 @@ func TestFillBaselineAggregate_NilWhenNoCaseMeasured(t *testing.T) {
 	fillBaselineAggregate(lr)
 	if lr.Baseline != nil {
 		t.Errorf("Baseline should be nil when no case was measured, got %+v", lr.Baseline)
+	}
+}
+
+// TestFillBaselineAggregate_ZeroAggregateWhenAllBaselinesErrored
+// covers the "uplift attempted, every baseline pass errored" gap.
+// Without an explicit zero-valued aggregate in this case, JSON
+// consumers can't distinguish "uplift not run" (Baseline absent)
+// from "uplift run, every baseline crashed" — the latter is
+// actionable signal (re-record fixtures, raise the timeout) the
+// former isn't. Iter-2 self-review (codex consensus) called this
+// out as a major aggregate-contract bug.
+func TestFillBaselineAggregate_ZeroAggregateWhenAllBaselinesErrored(t *testing.T) {
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			{CaseID: "x", TruePositives: 1, Matched: []MatchPair{{}}, BaselineError: "timeout"},
+			{CaseID: "y", TruePositives: 0, BaselineError: "exit 1"},
+		},
+	}
+	fillBaselineAggregate(lr)
+	if lr.Baseline == nil {
+		t.Fatal("Baseline must be a (zero-valued) aggregate when --uplift was attempted; got nil")
+	}
+	if lr.Baseline.F1 != 0 || lr.Baseline.Precision != 0 || lr.Baseline.Recall != 0 || lr.Baseline.NoiseRate != 0 {
+		t.Errorf("aggregate should be zero-valued when every baseline errored, got %+v", lr.Baseline)
 	}
 }
 
