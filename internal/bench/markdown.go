@@ -72,26 +72,32 @@ func writeMarkdownUplift(w io.Writer, rep Report) error {
 	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "| LLM | F1 (Δ) | Precision (Δ) | Recall (Δ) | Noise (Δ) |"); err != nil {
+	if _, err := fmt.Fprintln(w, "| LLM | F1 (Δ) | Precision (Δ) | Recall (Δ) | Noise (Δ) | Baseline errors |"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, "| --- | --- | --- | --- | --- |"); err != nil {
+	if _, err := fmt.Fprintln(w, "| --- | --- | --- | --- | --- | --- |"); err != nil {
 		return err
 	}
 	for _, lr := range rep.LLMReports {
+		errs := countBaselineErrors(lr)
+		errLabel := "0"
+		if errs > 0 {
+			errLabel = fmt.Sprintf("%d ⚠", errs)
+		}
 		if lr.Baseline == nil {
-			if _, err := fmt.Fprintf(w, "| %s | — | — | — | — |\n", lr.LLM); err != nil {
+			if _, err := fmt.Fprintf(w, "| %s | — | — | — | — | %s |\n", lr.LLM, errLabel); err != nil {
 				return err
 			}
 			continue
 		}
 		b := lr.Baseline
-		if _, err := fmt.Fprintf(w, "| %s | %s | %s | %s | %s |\n",
+		if _, err := fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s |\n",
 			lr.LLM,
 			fmtUpliftCell(lr.F1, b.F1),
 			fmtUpliftCell(lr.Precision, b.Precision),
 			fmtUpliftCell(lr.Recall, b.Recall),
 			fmtUpliftCell(lr.NoiseRate, b.NoiseRate),
+			errLabel,
 		); err != nil {
 			return err
 		}

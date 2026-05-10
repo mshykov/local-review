@@ -233,12 +233,21 @@ func emitBenchReport(bf benchFlags, rep bench.Report) error {
 // checkStrictFailures collects any per-case errors and returns them
 // as one summarised error. Used by --strict (default ON in --replay)
 // to make CI fail on a missing fixture or a CLI invocation failure.
+//
+// Baseline-side failures (--uplift on, generic-prompt invocation
+// errored while the treatment pass succeeded) are caught here too:
+// without that, partial baseline coverage would slip past CI while
+// leaving the leaderboard quietly comparing treatment-of-N against
+// baseline-of-M-<-N, inflating apparent uplift.
 func checkStrictFailures(rep bench.Report) error {
 	var failures []string
 	for _, lr := range rep.LLMReports {
 		for _, cs := range lr.Cases {
 			if cs.Error != "" {
 				failures = append(failures, fmt.Sprintf("%s/%s: %s", lr.LLM, cs.CaseID, cs.Error))
+			}
+			if cs.BaselineError != "" {
+				failures = append(failures, fmt.Sprintf("%s/%s baseline: %s", lr.LLM, cs.CaseID, cs.BaselineError))
 			}
 		}
 	}

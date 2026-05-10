@@ -64,17 +64,40 @@ func WriteText(w io.Writer, rep Report) error {
 }
 
 // hasUpliftMeasured returns true when at least one LLM has a
-// non-nil Baseline aggregate, indicating --uplift produced a
-// measurement. Used by both the text and markdown writers to
-// gate the uplift block — single-pass benches don't see this
-// section at all, keeping the default report terse.
+// non-nil Baseline aggregate OR at least one case recorded a
+// BaselineError (--uplift was active even if every baseline pass
+// errored). Used by both the text and markdown writers to gate
+// the uplift block — single-pass benches don't see this section
+// at all, keeping the default report terse, while a fully-failed
+// baseline still surfaces (otherwise users see "no uplift section"
+// and assume --uplift didn't run).
 func hasUpliftMeasured(rep Report) bool {
 	for _, lr := range rep.LLMReports {
 		if lr.Baseline != nil {
 			return true
 		}
+		for _, cs := range lr.Cases {
+			if cs.BaselineError != "" {
+				return true
+			}
+		}
 	}
 	return false
+}
+
+// countBaselineErrors returns the number of cases for an LLM where
+// the --uplift baseline pass errored. Surfaced in the uplift block
+// so a "0.91 vs 0.42" headline doesn't hide that 3/10 baseline
+// passes failed and the comparison is over an unrepresentative
+// subset.
+func countBaselineErrors(lr LLMReport) int {
+	n := 0
+	for _, cs := range lr.Cases {
+		if cs.BaselineError != "" {
+			n++
+		}
+	}
+	return n
 }
 
 // writeUpliftBlock renders the "Uplift over baseline" comparison:
@@ -95,8 +118,13 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 		return err
 	}
 	for _, lr := range rep.LLMReports {
+		errs := countBaselineErrors(lr)
 		if lr.Baseline == nil {
-			if _, err := fmt.Fprintf(w, "%-10s  (not measured)\n", lr.LLM); err != nil {
+			label := "(not measured)"
+			if errs > 0 {
+				label = fmt.Sprintf("(baseline failed on %d case(s))", errs)
+			}
+			if _, err := fmt.Fprintf(w, "%-10s  %s\n", lr.LLM, label); err != nil {
 				return err
 			}
 			continue
@@ -110,6 +138,16 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 			fmtUpliftCell(lr.NoiseRate, b.NoiseRate),
 		); err != nil {
 			return err
+		}
+		if errs > 0 {
+			// Even with a populated aggregate we want users to
+			// see "this comparison covers M of N cases" when the
+			// baseline partially failed — the aggregate itself
+			// micro-averages over only the survivors and would
+			// otherwise misleadingly look like full coverage.
+			if _, err := fmt.Fprintf(w, "%-10s  note: baseline failed on %d case(s); delta is over the surviving subset only\n", "", errs); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

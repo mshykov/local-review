@@ -213,6 +213,15 @@ type CaseScore struct {
 	// (full local-review) result.
 	Baseline *BaselineScore `json:"baseline,omitempty"`
 
+	// BaselineError is populated when --uplift was active but the
+	// baseline pass for this case errored. Without this field, a
+	// silent baseline failure would compute the uplift over only
+	// the cases that succeeded — comparing treatment-of-all-N
+	// against baseline-of-the-M-that-survived inflates apparent
+	// uplift. The renderer surfaces the count; strict mode treats
+	// it the same way it treats treatment-side errors.
+	BaselineError string `json:"baseline_error,omitempty"`
+
 	// Duration is the in-memory timing field used by the runner. Not
 	// serialised; DurationMs is what's emitted to JSON.
 	Duration time.Duration `json:"-"`

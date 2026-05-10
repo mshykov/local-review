@@ -435,6 +435,28 @@ func isWindows() bool {
 	return os.PathSeparator == '\\'
 }
 
+// TestCheckPromptOverride_FlagsEmptyFile verifies the probe treats
+// an empty / whitespace-only override file as unreadable. The
+// resolver's TrimSpace check at internal/prompts/prompts.go falls
+// through silently on those files (defending against an
+// accidentally-truncated pack neutering the entire system prompt);
+// the pre-fix doctor probe used os.Open + Close which considered
+// a zero-byte file "readable" and reported ✓ — so the user saw
+// "everything good" while reviews silently used the embedded pack.
+func TestCheckPromptOverride_FlagsEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "default.md"), []byte("   \n\t\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	cfg := config.Config{Prompts: config.PromptsConfig{PackDir: dir}}
+	checkPromptOverride(&buf, cfg)
+	out := buf.String()
+	if !strings.Contains(out, "unreadable") || !strings.Contains(out, "default.md") || !strings.Contains(out, "empty") {
+		t.Errorf("expected empty-file warning naming default.md, got: %q", out)
+	}
+}
+
 func TestCheckPromptOverride_StrayMarkdownDoesNotCount(t *testing.T) {
 	// Codex caught this in self-review: pre-fix, ANY *.md file
 	// counted as an override, so a stray README.md silenced the

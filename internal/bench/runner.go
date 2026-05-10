@@ -195,8 +195,19 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	// baseline so users see whether local-review's pack pipeline
 	// actually adds value over a raw-LLM baseline. Live-only:
 	// replay rejects --uplift up in Run().
+	//
+	// Baseline errors are recorded explicitly on cs.BaselineError
+	// rather than silently dropped: a half-measured baseline
+	// (treatment for all N cases, baseline for only M < N) would
+	// inflate apparent uplift by comparing the full treatment
+	// against an unrepresentative baseline subset. Renderer
+	// surfaces the gap; strict mode treats it the same way it
+	// treats treatment-side errors.
 	if opts.Uplift {
-		if b := scoreBaseline(ctx, c, llm, opts); b != nil {
+		b, err := scoreBaseline(ctx, c, llm, opts)
+		if err != nil {
+			cs.BaselineError = err.Error()
+		} else if b != nil {
 			cs.Baseline = b
 		}
 	}
@@ -334,17 +345,19 @@ func runLiveWithPrompt(ctx context.Context, c Case, llm cli.LLM, timeout time.Du
 
 // scoreBaseline runs the (case, LLM) once with prompts.BaselinePrompt
 // (a minimal generic system prompt) instead of the language-specific
-// pack, scores the output, and returns the BaselineScore. Returns
-// nil on error: the baseline pass is best-effort, and a transient
-// failure shouldn't take down the whole bench. Renderer skips
-// delta computation when Baseline is nil; users see treatment
-// numbers and a "—" for the delta.
-func scoreBaseline(ctx context.Context, c Case, llm cli.LLM, opts Options) *BaselineScore {
+// pack, scores the output, and returns the BaselineScore.
+//
+// Returns (nil, err) when the baseline LLM invocation fails. The
+// caller records the error on CaseScore.BaselineError so the
+// renderer can flag the gap and strict mode can fail the run —
+// a silent skip would mean partial baseline coverage gets
+// compared against full treatment coverage, inflating uplift.
+func scoreBaseline(ctx context.Context, c Case, llm cli.LLM, opts Options) (*BaselineScore, error) {
 	start := time.Now()
 	out, err := runLiveWithPrompt(ctx, c, llm, opts.Timeout, prompts.BaselinePrompt)
 	dur := time.Since(start)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	produced := ParseFindings(out)
 	cs := Score(c, produced)
@@ -354,7 +367,7 @@ func scoreBaseline(ctx context.Context, c Case, llm cli.LLM, opts Options) *Base
 		FalseNegatives: cs.FalseNegatives,
 		Produced:       cs.Produced,
 		DurationMs:     dur.Milliseconds(),
-	}
+	}, nil
 }
 
 // fillAggregates computes precision/recall/F1/noise/timing over a

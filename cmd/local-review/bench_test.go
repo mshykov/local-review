@@ -161,6 +161,34 @@ func assertAtLeastOnePerfectCase(t *testing.T, rep bench.Report, dumpOnFail stri
 	t.Errorf("expected at least one (LLM, case) pair with perfect TP+0FP+0FN; got %s", dumpOnFail)
 }
 
+// TestCheckStrictFailures_CatchesBaselineErrors ensures that a
+// --uplift run where the baseline pass errored on some cases is
+// caught by strict mode, not silently included in a "successful"
+// run. Without this, partial baseline coverage (treatment ran on
+// all N cases, baseline only on M < N) would slip past CI while
+// leaving the leaderboard quietly comparing treatment-of-N
+// against baseline-of-M, inflating apparent uplift.
+func TestCheckStrictFailures_CatchesBaselineErrors(t *testing.T) {
+	rep := bench.Report{
+		LLMReports: []bench.LLMReport{
+			{
+				LLM: "claude",
+				Cases: []bench.CaseScore{
+					{CaseID: "ok"},
+					{CaseID: "broken-baseline", BaselineError: "timeout after 120s"},
+				},
+			},
+		},
+	}
+	err := checkStrictFailures(rep)
+	if err == nil {
+		t.Fatal("expected strict-mode error when a case has BaselineError set")
+	}
+	if !strings.Contains(err.Error(), "broken-baseline") || !strings.Contains(err.Error(), "baseline:") {
+		t.Errorf("strict-mode error should name the case and tag it as baseline; got: %v", err)
+	}
+}
+
 // findRepoRoot walks up from the test binary's CWD until it finds a
 // go.mod file. Necessary because `go test ./cmd/local-review/...`
 // runs with CWD set to the package directory, not the repo root.

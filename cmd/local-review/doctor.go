@@ -182,18 +182,25 @@ func checkPromptOverride(w io.Writer, cfg config.Config) {
 		}
 		overrideCount++
 		path := filepath.Join(dir, name)
-		f, err := os.Open(path)
+		// Use os.ReadFile (matching the resolver's Resolve path
+		// in internal/prompts/prompts.go) so this probe agrees
+		// with what review-time actually does. The pre-fix
+		// `os.Open + Close` shape passed on edge cases the
+		// resolver fails on — most notably a symlink whose
+		// target is a directory, where Open(O_RDONLY) succeeds
+		// but ReadFile errors out — letting doctor report ✓ on
+		// an override the runtime would silently fall through.
+		// Empty / whitespace-only files also fall through at
+		// review time (resolver's TrimSpace check defends
+		// against an accidentally-truncated pack neutering the
+		// system prompt), so we mirror that here.
+		b, err := os.ReadFile(path)
 		if err != nil {
 			unreadable = append(unreadable, fmt.Sprintf("%s (%v)", name, err))
 			continue
 		}
-		// Close error here is informational only — Open succeeded
-		// so the file is readable; a Close-time I/O hiccup
-		// (typically on networked filesystems) doesn't change the
-		// "is this override usable?" answer. Surface it for
-		// debugging anyway so users on flaky FS get the breadcrumb.
-		if cerr := f.Close(); cerr != nil {
-			unreadable = append(unreadable, fmt.Sprintf("%s (close: %v)", name, cerr))
+		if strings.TrimSpace(string(b)) == "" {
+			unreadable = append(unreadable, fmt.Sprintf("%s (empty)", name))
 		}
 	}
 	if overrideCount == 0 {

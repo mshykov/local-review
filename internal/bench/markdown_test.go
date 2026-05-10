@@ -138,15 +138,54 @@ func TestWriteMarkdown_RendersUpliftBlock(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"## Uplift over baseline",
-		"| LLM | F1 (Δ) | Precision (Δ) | Recall (Δ) | Noise (Δ) |",
+		"| LLM | F1 (Δ) | Precision (Δ) | Recall (Δ) | Noise (Δ) | Baseline errors |",
 		"| claude |", // row exists
 		"+0.27",      // F1 delta = 0.91 - 0.64 = +0.27
 		"+0.30",      // Recall delta = 1.00 - 0.70 = +0.30
 		"-0.30",      // Noise delta = 0.00 - 0.30 = -0.30 (regression direction is good here)
+		"| 0 |",      // no baseline errors → "0" in the rightmost cell
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("uplift block missing %q\n--- output ---\n%s", want, out)
 		}
+	}
+}
+
+// TestWriteMarkdown_FlagsBaselineErrors verifies that when --uplift
+// recorded baseline failures, the uplift section is shown (so users
+// see the partial-coverage warning rather than seeing nothing) and
+// the per-LLM row carries a baseline-error count. Without the flag,
+// a leaderboard could quietly compare treatment-of-N against
+// baseline-of-M-<-N and inflate apparent uplift.
+func TestWriteMarkdown_FlagsBaselineErrors(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 2, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:       "claude",
+				Precision: 0.83, Recall: 1.00, F1: 0.91, NoiseRate: 0.0,
+				Cases: []CaseScore{
+					{CaseID: "x", BaselineError: "timeout after 120s"},
+					{CaseID: "y"},
+				},
+				// Baseline aggregate may legitimately be nil if every
+				// case errored; the runner still records BaselineError
+				// per case and we want to surface the count regardless.
+				Baseline: nil,
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "## Uplift over baseline") {
+		t.Errorf("uplift block must appear when any case has BaselineError; got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 ⚠") {
+		t.Errorf("expected baseline-error count cell to render '1 ⚠'; got:\n%s", out)
 	}
 }
 
