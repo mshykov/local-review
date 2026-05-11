@@ -66,6 +66,15 @@ func benchCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "bench",
 		Short: "Run the review-quality benchmark suite",
+		// Hidden from `local-review --help` and shell-completion as of
+		// v0.9.0. Bench is a project-team / contributor surface (CI
+		// gate, prompt-pack regression checks, release-time leaderboard
+		// regen); end users want to read the *results* in
+		// bench/RESULTS.md, not run the harness themselves. Keeping it
+		// in main help bloated the user-facing API surface and the
+		// support volume that comes with it. The command still works
+		// when invoked by name; only the discoverability changes.
+		Hidden: true,
 		Long: `Run the local-review benchmark suite against a labelled dataset
 of diffs. For each diff, every active LLM produces a review; findings
 are scored against the labels (precision / recall / F1 + noise rate on

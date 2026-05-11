@@ -280,6 +280,180 @@ func TestWriteMarkdown_AsymmetricCoverageDashesUnmeasuredHalf(t *testing.T) {
 	}
 }
 
+// TestWriteMarkdown_RendersOverheadBlock verifies the new v0.9.0
+// "Overhead vs raw model" sub-table appears alongside the quality
+// uplift block, with treatment mean / signed delta cells for both
+// per-case time and per-case tokens. The customer-facing question
+// answered here is "for the quality uplift the tool gives me, how
+// much extra time and how many extra tokens am I paying per
+// review?" — both columns must show real numbers when both sides
+// were measured.
+func TestWriteMarkdown_RendersOverheadBlock(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 2, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:   "claude",
+				Cases: []CaseScore{{CaseID: "a"}, {CaseID: "b"}},
+				// Paired aggregate is what the overhead block reads.
+				// Time means: treatment 10000/2 = 5s, baseline 4000/2 = 2s, Δ = +3.00s.
+				// Token means: treatment 24k/2 = 12k, baseline 7k/2 = 3.5k, Δ = +8.5k.
+				Overhead: &OverheadAggregate{
+					PairedCases:           2,
+					TreatmentDurationMs:   10000,
+					BaselineDurationMs:    4000,
+					TokenMeasuredCases:    2,
+					TreatmentInputTokens:  20000,
+					TreatmentOutputTokens: 4000,
+					BaselineInputTokens:   6000,
+					BaselineOutputTokens:  1000,
+				},
+				// LLMBaselineAggregate must be present for hasUpliftMeasured
+				// to surface the overhead block — the gate is at the call
+				// site in WriteMarkdown, not in writeMarkdownOverhead itself.
+				Baseline: &LLMBaselineAggregate{
+					MeasuredNonCleanCases: 1, MeasuredCleanCases: 1,
+					TotalDurationMs: 4000,
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"## Overhead vs raw model",
+		"| LLM | Time/case (Δ) | Tokens/case (Δ) |",
+		"| claude |",
+		"+3.00s",
+		"+8.5k",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("overhead block missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+	// Full coverage → no italic note line.
+	if strings.Contains(out, "tokens measured on") {
+		t.Errorf("coverage note should be omitted when TokenMeasuredCases == PairedCases\n--- output ---\n%s", out)
+	}
+}
+
+// TestWriteMarkdown_OverheadEmitsCoverageNoteOnPartialTokens covers
+// the partial-coverage path from the v0.9.0 PR review (CodeRabbit +
+// Copilot warning): when some paired cases reported zero tokens
+// from the CLI parser, the token mean is honestly computed over
+// only the cases that did, but the leaderboard surfaces the gap
+// via an italic note line under the table.
+func TestWriteMarkdown_OverheadEmitsCoverageNoteOnPartialTokens(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 3, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:   "claude",
+				Cases: []CaseScore{{CaseID: "a"}, {CaseID: "b"}, {CaseID: "c"}},
+				Overhead: &OverheadAggregate{
+					PairedCases:           3,
+					TreatmentDurationMs:   15000,
+					BaselineDurationMs:    6000,
+					TokenMeasuredCases:    2, // 2 of 3 had tokens from both sides
+					TreatmentInputTokens:  20000,
+					TreatmentOutputTokens: 4000,
+					BaselineInputTokens:   6000,
+					BaselineOutputTokens:  1000,
+				},
+				Baseline: &LLMBaselineAggregate{
+					MeasuredNonCleanCases: 2, MeasuredCleanCases: 1,
+					TotalDurationMs: 6000,
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "_claude: tokens measured on 2 of 3 paired cases") {
+		t.Errorf("expected partial-coverage note for claude (2 of 3); got:\n%s", out)
+	}
+}
+
+// TestWriteMarkdown_OverheadDashesWhenTokensUnmeasured covers the
+// gemini-stdout edge case: CLI parser returns zero tokens (no
+// structured-output flag). We must dash the tokens cell rather
+// than render "0 (+0)", which would mislead readers into thinking
+// the call cost no tokens. The time cell still renders — duration
+// is measured by the runner regardless of CLI metadata shape.
+func TestWriteMarkdown_OverheadDashesWhenTokensUnmeasured(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:   "gemini",
+				Cases: []CaseScore{{CaseID: "a"}},
+				// One paired case but no tokens from either side
+				// (TokenMeasuredCases stays 0). Time still measured.
+				Overhead: &OverheadAggregate{
+					PairedCases:         1,
+					TreatmentDurationMs: 3000,
+					BaselineDurationMs:  1000,
+				},
+				Baseline: &LLMBaselineAggregate{
+					MeasuredNonCleanCases: 1,
+					TotalDurationMs:       1000,
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	// Locate the gemini row inside the Overhead section so we
+	// assert against that row specifically — checking strings.Contains
+	// for "| — |" anywhere in the document would false-pass on a
+	// dash that legitimately appears in the per-language F1 grid,
+	// the per-case ERR row, or the consistency column. Pinning the
+	// assertion to the row text is the v0.9.0 dogfood fix.
+	geminiRow := findRowContaining(t, out, "| gemini |", "## Overhead vs raw model")
+	if !strings.Contains(geminiRow, "+2.00s") {
+		t.Errorf("overhead row missing time delta +2.00s; got:\n%s", geminiRow)
+	}
+	// Two cells should each be "—": the tokens column. Time column
+	// has the +2.00s number. Header has "—" in neither cell. We
+	// assert the row ENDS in " — |" (cell-anchored) so a stray
+	// dash earlier in the row doesn't satisfy the check.
+	if !strings.HasSuffix(strings.TrimSpace(geminiRow), "— |") {
+		t.Errorf("expected gemini overhead row to end with tokens dashed out; got:\n%s", geminiRow)
+	}
+}
+
+// findRowContaining locates a markdown table row that contains
+// rowMarker AND appears after sectionHeader. Fatals the test when
+// the row can't be found so the caller doesn't have to defend
+// against the not-found case at every assertion site.
+func findRowContaining(t *testing.T, doc, rowMarker, sectionHeader string) string {
+	t.Helper()
+	sectionIdx := strings.Index(doc, sectionHeader)
+	if sectionIdx < 0 {
+		t.Fatalf("section %q not found in document", sectionHeader)
+	}
+	section := doc[sectionIdx:]
+	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(line, "|") && strings.Contains(line, rowMarker) {
+			return line
+		}
+	}
+	t.Fatalf("row containing %q not found under section %q", rowMarker, sectionHeader)
+	return ""
+}
+
 func TestWriteMarkdown_OmitsUpliftWhenNotMeasured(t *testing.T) {
 	rep := Report{
 		Dataset: "x", CaseCount: 1, Mode: "replay",

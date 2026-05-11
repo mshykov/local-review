@@ -144,12 +144,29 @@ func Run(ctx context.Context, cases []Case, opts Options) (Report, error) {
 // total per-case wall-clock, which is what a user comparing latency
 // between runs actually wants.
 func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore {
+	// `start` is the treatment-pass anchor: nothing else runs between
+	// it and obtainReview so the "Overhead vs raw model" leaderboard
+	// (v0.9.0) gets a treatment duration measured at the same
+	// granularity as the baseline pass's single-call duration in
+	// scoreBaseline. modeName() is deferred to the buildBaseScore
+	// call site instead of running here so even its sub-microsecond
+	// cost can't be lumped into the treatment span — Copilot caught
+	// the prior shape on PR #68 as "comment claims obtainReview is
+	// the first thing scoreOne does, but modeName ran first." Same
+	// timestamp also serves the full-scoreOne span (cs.DurationMs
+	// further down) — the Overall median/p95 view should reflect
+	// total per-case spend including --repeat samples and the
+	// --uplift baseline.
 	start := time.Now()
-	mode := modeName(opts.Source)
+	output, usage, err := obtainReview(ctx, c, llm, opts)
+	treatmentDur := time.Since(start)
 
-	output, err := obtainReview(ctx, c, llm, opts)
-
-	cs := buildBaseScore(c, llm, mode, output, err)
+	cs := buildBaseScore(c, llm, modeName(opts.Source), output, err)
+	if err == nil {
+		cs.InputTokens = usage.InputTokens
+		cs.OutputTokens = usage.OutputTokens
+		cs.TreatmentDurationMs = treatmentDur.Milliseconds()
+	}
 
 	// Phase-2 consistency: re-sample the same (case, LLM) up to
 	// opts.Repeat times and record the Jaccard similarity. Each
@@ -265,7 +282,11 @@ func sampleConsistency(ctx context.Context, c Case, llm cli.LLM, opts Options, f
 	attempts = opts.Repeat
 	runs := [][]ProducedFinding{firstRun}
 	for i := 1; i < opts.Repeat; i++ {
-		out, err := obtainReview(ctx, c, llm, opts)
+		// Consistency cares about the produced finding sets only;
+		// token usage from the extra repeats isn't summed into the
+		// uplift aggregates (those measure the primary treatment
+		// pass per case, mirroring the baseline pass's single call).
+		out, _, err := obtainReview(ctx, c, llm, opts)
 		if err != nil {
 			continue
 		}
@@ -278,15 +299,20 @@ func sampleConsistency(ctx context.Context, c Case, llm cli.LLM, opts Options, f
 }
 
 // obtainReview returns the LLM's review markdown for one case, either
-// by invoking the CLI or reading a fixture.
-func obtainReview(ctx context.Context, c Case, llm cli.LLM, opts Options) (string, error) {
+// by invoking the CLI or reading a fixture. The TokenUsage is zero in
+// replay mode (fixtures don't carry token counts) and from any live
+// call where the source CLI didn't expose structured token metadata;
+// callers should treat the zero value as "unknown", not "no tokens
+// used."
+func obtainReview(ctx context.Context, c Case, llm cli.LLM, opts Options) (string, cli.TokenUsage, error) {
 	switch opts.Source {
 	case SourceReplay:
-		return readFixture(opts.ReplayDir, c.ID, llm.Name)
+		out, err := readFixture(opts.ReplayDir, c.ID, llm.Name)
+		return out, cli.TokenUsage{}, err
 	case SourceLive:
 		return runLive(ctx, c, llm, opts.Timeout)
 	default:
-		return "", fmt.Errorf("unknown bench source %d", opts.Source)
+		return "", cli.TokenUsage{}, fmt.Errorf("unknown bench source %d", opts.Source)
 	}
 }
 
@@ -331,13 +357,14 @@ func validateIdentifier(kind, v string) error {
 }
 
 // runLive invokes the LLM CLI with the case's diff and returns the
-// markdown output. Mirrors what internal/multi/orchestrator.go does
-// for a single agent, minus the on-disk save (the bench writes its
-// own report; per-case markdown is already persisted in the dataset).
-func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (string, error) {
+// markdown output plus the per-call TokenUsage. Mirrors what
+// internal/multi/orchestrator.go does for a single agent, minus the
+// on-disk save (the bench writes its own report; per-case markdown
+// is already persisted in the dataset).
+func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (string, cli.TokenUsage, error) {
 	pack, err := prompts.Get(c.Language)
 	if err != nil {
-		return "", fmt.Errorf("load prompt pack for language %q: %w", c.Language, err)
+		return "", cli.TokenUsage{}, fmt.Errorf("load prompt pack for language %q: %w", c.Language, err)
 	}
 	return runLiveWithPrompt(ctx, c, llm, timeout, pack)
 }
@@ -348,21 +375,20 @@ func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (s
 // prompts.BaselinePrompt). Splitting on the system-prompt
 // argument is enough to express "same case, different prompt" —
 // no other code path differs.
-func runLiveWithPrompt(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration, systemPrompt string) (string, error) {
+func runLiveWithPrompt(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration, systemPrompt string) (string, cli.TokenUsage, error) {
 	invoker := cli.NewInvoker(llm)
 	if invoker == nil {
-		return "", fmt.Errorf("no invoker for llm %q", llm.Name)
+		return "", cli.TokenUsage{}, fmt.Errorf("no invoker for llm %q", llm.Name)
 	}
 	timeout = resolveTimeout(timeout, llm)
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	// invoker.Review returns (output, tokenUsage, err) — bench
-	// scoring works against the markdown only; token totals are
-	// already tracked per-run in the live review path and the
-	// bench-aggregate timing/cost view is Phase 2 ("Cost / latency
-	// benchmark" in #56).
-	out, _, err := invoker.Review(cctx, systemPrompt, c.Diff)
-	return out, err
+	// invoker.Review returns (output, tokenUsage, err); bench scoring
+	// works against the markdown only, but the tokenUsage threads
+	// upward into CaseScore.Input/OutputTokens and feeds the v0.9.0
+	// "Overhead vs raw model" leaderboard (treatment vs --uplift
+	// baseline token cost per case).
+	return invoker.Review(cctx, systemPrompt, c.Diff)
 }
 
 // resolveTimeout picks the per-call wall-clock cap, in priority
@@ -392,7 +418,7 @@ func resolveTimeout(provided time.Duration, llm cli.LLM) time.Duration {
 // compared against full treatment coverage, inflating uplift.
 func scoreBaseline(ctx context.Context, c Case, llm cli.LLM, opts Options) (*BaselineScore, error) {
 	start := time.Now()
-	out, err := runLiveWithPrompt(ctx, c, llm, opts.Timeout, prompts.BaselinePrompt)
+	out, usage, err := runLiveWithPrompt(ctx, c, llm, opts.Timeout, prompts.BaselinePrompt)
 	dur := time.Since(start)
 	if err != nil {
 		return nil, err
@@ -405,6 +431,8 @@ func scoreBaseline(ctx context.Context, c Case, llm cli.LLM, opts Options) (*Bas
 		FalseNegatives: cs.FalseNegatives,
 		Produced:       cs.Produced,
 		DurationMs:     dur.Milliseconds(),
+		InputTokens:    usage.InputTokens,
+		OutputTokens:   usage.OutputTokens,
 	}, nil
 }
 
@@ -437,6 +465,59 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 	fillConsistencyAggregate(lr)
 	fillTimingAggregates(lr, durations)
 	fillBaselineAggregate(lr)
+	fillOverheadAggregate(lr)
+}
+
+// fillOverheadAggregate builds the paired view that backs the
+// "Overhead vs raw model" leaderboard. Walks lr.Cases and, for
+// every case where treatment.Error == "" AND cs.Baseline != nil,
+// adds the treatment-pass duration and the baseline-pass duration
+// to the matching paired-sums. Token sums are only added when BOTH
+// sides reported non-zero TokenUsage, keeping the per-case token
+// mean honest under partial CLI-parser coverage.
+//
+// The first cut of v0.9.0 used two independent denominators —
+// treatment-side averaged over every cs.Error == "" case, baseline-
+// side averaged over MeasuredNonCleanCases + MeasuredCleanCases on
+// LLMBaselineAggregate. Whenever treatment and baseline succeeded
+// on different subsets (a treatment-error case where baseline
+// still ran is the canonical example), the two denominators
+// diverged and the rendered Δ stopped meaning "extra cost for the
+// same review." Reviewers (claude self-review + CodeRabbit +
+// Copilot) flagged it on PR #68; pairing case-by-case before
+// summing fixes it.
+//
+// Sets lr.Overhead only when at least one case paired; nil
+// otherwise so the renderer can skip the block.
+func fillOverheadAggregate(lr *LLMReport) {
+	var agg OverheadAggregate
+	for _, cs := range lr.Cases {
+		if cs.Error != "" || cs.Baseline == nil {
+			continue
+		}
+		agg.PairedCases++
+		agg.TreatmentDurationMs += cs.TreatmentDurationMs
+		agg.BaselineDurationMs += cs.Baseline.DurationMs
+
+		// Token sums only over cases where BOTH sides reported
+		// non-zero TokenUsage. cli.TokenUsage uses zero values to
+		// mean "unknown" (gemini stdout on older versions is the
+		// canonical case); adding partial data here and dividing
+		// by PairedCases would understate the per-case mean
+		// exactly when CLI parsers drift.
+		tTok := cs.InputTokens + cs.OutputTokens
+		bTok := cs.Baseline.InputTokens + cs.Baseline.OutputTokens
+		if tTok > 0 && bTok > 0 {
+			agg.TokenMeasuredCases++
+			agg.TreatmentInputTokens += cs.InputTokens
+			agg.TreatmentOutputTokens += cs.OutputTokens
+			agg.BaselineInputTokens += cs.Baseline.InputTokens
+			agg.BaselineOutputTokens += cs.Baseline.OutputTokens
+		}
+	}
+	if agg.PairedCases > 0 {
+		lr.Overhead = &agg
+	}
 }
 
 // fillBaselineAggregate rolls up CaseScore.Baseline pointers into

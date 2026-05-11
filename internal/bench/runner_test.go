@@ -385,6 +385,164 @@ func TestFillBaselineAggregate_ZeroAggregateWhenAllBaselinesErrored(t *testing.T
 	}
 }
 
+// TestFillOverheadAggregate_PairsTreatmentAndBaseline verifies the
+// paired aggregate that backs the "Overhead vs raw model"
+// leaderboard. The headline invariant: every metric on
+// OverheadAggregate is summed over the SAME case set — cases
+// where treatment succeeded AND baseline succeeded. Reviewers on
+// the v0.9.0 PR (claude self-review + CodeRabbit + Copilot)
+// independently flagged the prior shape as comparing different
+// populations.
+func TestFillOverheadAggregate_PairsTreatmentAndBaseline(t *testing.T) {
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			// Paired success: both sides count.
+			{
+				CaseID:              "paired-1",
+				TreatmentDurationMs: 5000,
+				InputTokens:         1000,
+				OutputTokens:        200,
+				Baseline: &BaselineScore{
+					DurationMs: 2000, InputTokens: 600, OutputTokens: 100,
+				},
+			},
+			// Treatment errored but baseline succeeded: must NOT
+			// contribute to either side's sum or to PairedCases —
+			// the pre-fix bug was that baseline duration here
+			// silently inflated the baseline denominator while
+			// treatment skipped the case.
+			{
+				CaseID: "treatment-err-baseline-ok", Error: "timeout",
+				Baseline: &BaselineScore{
+					DurationMs: 1500, InputTokens: 500, OutputTokens: 80,
+				},
+			},
+			// Treatment succeeded but baseline didn't (Baseline nil):
+			// no pair, skip.
+			{
+				CaseID:              "treatment-ok-baseline-missing",
+				TreatmentDurationMs: 4000,
+				InputTokens:         900,
+				OutputTokens:        180,
+				Baseline:            nil,
+			},
+		},
+	}
+	fillOverheadAggregate(lr)
+	if lr.Overhead == nil {
+		t.Fatal("expected non-nil Overhead aggregate (one case paired)")
+	}
+	if lr.Overhead.PairedCases != 1 {
+		t.Errorf("PairedCases = %d, want 1 (only paired-1 contributes)", lr.Overhead.PairedCases)
+	}
+	if lr.Overhead.TreatmentDurationMs != 5000 {
+		t.Errorf("TreatmentDurationMs = %d, want 5000", lr.Overhead.TreatmentDurationMs)
+	}
+	if lr.Overhead.BaselineDurationMs != 2000 {
+		t.Errorf("BaselineDurationMs = %d, want 2000 (must NOT include treatment-err-baseline-ok's 1500ms)", lr.Overhead.BaselineDurationMs)
+	}
+}
+
+// TestFillOverheadAggregate_TokenMeasuredCasesOnlyCountsBothSidesNonZero
+// covers the partial-coverage path. cli.TokenUsage uses zero to
+// mean "unknown" (gemini stdout on older versions is the canonical
+// case); a paired case where one side has tokens and the other
+// doesn't must NOT contribute to TokenMeasuredCases or to the
+// token sums — averaging partial data over the full paired count
+// would understate per-case mean exactly when CLI parsers drift.
+func TestFillOverheadAggregate_TokenMeasuredCasesOnlyCountsBothSidesNonZero(t *testing.T) {
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			// Both sides have tokens: counted.
+			{
+				CaseID:              "both-tokens",
+				TreatmentDurationMs: 5000,
+				InputTokens:         1000,
+				OutputTokens:        200,
+				Baseline: &BaselineScore{
+					DurationMs: 2000, InputTokens: 600, OutputTokens: 100,
+				},
+			},
+			// Treatment has tokens, baseline doesn't: tokens NOT counted.
+			// Time still counted (the runner clock is always real).
+			{
+				CaseID:              "treatment-tokens-only",
+				TreatmentDurationMs: 6000,
+				InputTokens:         1200,
+				OutputTokens:        250,
+				Baseline: &BaselineScore{
+					DurationMs: 2500, InputTokens: 0, OutputTokens: 0,
+				},
+			},
+		},
+	}
+	fillOverheadAggregate(lr)
+	if lr.Overhead == nil {
+		t.Fatal("expected non-nil Overhead aggregate")
+	}
+	if lr.Overhead.PairedCases != 2 {
+		t.Errorf("PairedCases = %d, want 2 (both paired regardless of token coverage)", lr.Overhead.PairedCases)
+	}
+	if lr.Overhead.TokenMeasuredCases != 1 {
+		t.Errorf("TokenMeasuredCases = %d, want 1 (only both-tokens contributes)", lr.Overhead.TokenMeasuredCases)
+	}
+	// Token sums must include only the "both-tokens" case.
+	if lr.Overhead.TreatmentInputTokens != 1000 {
+		t.Errorf("TreatmentInputTokens = %d, want 1000 (only both-tokens contributes)", lr.Overhead.TreatmentInputTokens)
+	}
+	if lr.Overhead.TreatmentOutputTokens != 200 {
+		t.Errorf("TreatmentOutputTokens = %d, want 200", lr.Overhead.TreatmentOutputTokens)
+	}
+	if lr.Overhead.BaselineInputTokens != 600 {
+		t.Errorf("BaselineInputTokens = %d, want 600", lr.Overhead.BaselineInputTokens)
+	}
+	if lr.Overhead.BaselineOutputTokens != 100 {
+		t.Errorf("BaselineOutputTokens = %d, want 100", lr.Overhead.BaselineOutputTokens)
+	}
+}
+
+// TestFmtTokensSigned_NoNegativeZero covers the v0.9.0 PR #68
+// finding (Copilot): a small negative delta like -0.4 tokens
+// rounds to 0 under %.0f but still picked up the "-" sign,
+// printing the misleading "-0". The fix rounds first, then
+// decides the sign — so anything that rounds to zero renders
+// as "+0" regardless of original sign.
+func TestFmtTokensSigned_NoNegativeZero(t *testing.T) {
+	for _, tc := range []struct {
+		in   float64
+		want string
+	}{
+		{0, "+0"},
+		{-0.4, "+0"}, // would have been "-0" pre-fix
+		{0.4, "+0"},  // ditto on the positive side
+		{-50, "-50"}, // real negative still surfaces
+		{1234, "+1.2k"},
+		{-12345, "-12k"},
+	} {
+		got := fmtTokensSigned(tc.in)
+		if got != tc.want {
+			t.Errorf("fmtTokensSigned(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestFillOverheadAggregate_NilWhenNoPairs verifies that single-pass
+// benches (no --uplift) leave LLMReport.Overhead nil so the renderer
+// skips the block. The renderer's hasUpliftMeasured gate handles
+// the broader "did --uplift run at all" question; this guards the
+// finer "did any case actually pair" case.
+func TestFillOverheadAggregate_NilWhenNoPairs(t *testing.T) {
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			{CaseID: "x", TreatmentDurationMs: 5000, InputTokens: 1000, Baseline: nil},
+		},
+	}
+	fillOverheadAggregate(lr)
+	if lr.Overhead != nil {
+		t.Errorf("Overhead should be nil when no case paired, got %+v", lr.Overhead)
+	}
+}
+
 func TestRun_ReplayWithRepeatIsError(t *testing.T) {
 	// --repeat > 1 is meaningless in replay (fixtures are
 	// deterministic; Jaccard would always be 1.0). Run must reject

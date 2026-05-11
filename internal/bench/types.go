@@ -109,12 +109,32 @@ type ProducedFinding struct {
 // answer on their own.
 //
 // Only populated when --uplift was active; nil/zero otherwise.
+//
+// InputTokens / OutputTokens carry the same `size of prompt /
+// size of response` semantics as `cli.TokenUsage` (see
+// internal/cli/usage.go). They feed the leaderboard's "Overhead
+// vs raw model" table — the customer-facing answer to "how many
+// extra tokens does the tool cost me?" Both-zero means the CLI's
+// structured-output parser didn't recognise the response shape;
+// treat as "unknown", not "no tokens used."
+//
+// TotalOnly handling: codex's pre-v0.128 stdout reports a single
+// combined total without an input/output split. cli.TokenUsage
+// folds that into InputTokens with OutputTokens=0 (see
+// internal/cli/usage.go TotalOnly field). The bench copies the
+// values verbatim, so a BaselineScore from codex may carry the
+// run total in InputTokens; OutputTokens=0 there is not
+// "unknown" but "vendor didn't split." OverheadAggregate's
+// token sums consume InputTokens+OutputTokens together, so the
+// difference is invisible at the leaderboard level.
 type BaselineScore struct {
 	TruePositives  int   `json:"true_positives"`
 	FalsePositives int   `json:"false_positives"`
 	FalseNegatives int   `json:"false_negatives"`
 	Produced       int   `json:"produced"`
 	DurationMs     int64 `json:"duration_ms"`
+	InputTokens    int   `json:"input_tokens,omitempty"`
+	OutputTokens   int   `json:"output_tokens,omitempty"`
 }
 
 // Precision = TP / (TP + FP). Returns 0 when no findings produced.
@@ -182,8 +202,42 @@ type CaseScore struct {
 	// Timing + status. Duration is serialised in milliseconds rather
 	// than nanoseconds for cross-language consumer ergonomics — the
 	// JSON shape mirrors metadata.json's *_ms fields.
-	DurationMs int64  `json:"duration_ms"`
-	Error      string `json:"error,omitempty"`
+	//
+	// DurationMs is the FULL per-case wall-clock — treatment pass
+	// PLUS any --repeat samples PLUS the --uplift baseline pass.
+	// Codex flagged the older "treatment-only" shape as
+	// understating real wall-clock for --repeat runs, and the
+	// median/p95 in the per-LLM aggregate should reflect total
+	// per-case spend (what a user comparing latency between runs
+	// actually wants).
+	//
+	// TreatmentDurationMs is the ISOLATED treatment-pass wall-clock
+	// (single obtainReview call, no repeats, no baseline). Added in
+	// v0.9.0 for the "Overhead vs raw model" leaderboard, which
+	// needs apples-to-apples comparison against the baseline pass's
+	// single-call duration. Using DurationMs there would have
+	// labelled "treatment + baseline + repeats" wall-clock as
+	// "treatment time/case" and inflated the treatment side by the
+	// baseline + repeat cost.
+	DurationMs          int64  `json:"duration_ms"`
+	TreatmentDurationMs int64  `json:"treatment_duration_ms,omitempty"`
+	Error               string `json:"error,omitempty"`
+
+	// InputTokens / OutputTokens are the size of the treatment-side
+	// prompt and response from this case's LLM call. Same semantics
+	// as cli.TokenUsage (see internal/cli/usage.go: prompt-cache
+	// reads included for Anthropic, vendor-normalised across the
+	// three providers). Used by fillAggregates to compute the
+	// per-LLM mean and feed the "Overhead vs raw model" leaderboard
+	// table. Both-zero is the "unknown" signal — source CLI didn't
+	// expose structured token metadata, or running in replay mode
+	// (fixtures don't carry token counts). For codex's pre-v0.128
+	// TotalOnly shape, InputTokens carries the combined run total
+	// and OutputTokens stays 0 (not unknown — see cli.TokenUsage
+	// doc); fillOverheadAggregate sums Input+Output so leaderboard
+	// arithmetic is identical either way.
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 
 	// Mode is "cli" or "replay" — recorded in JSON output so consumers
 	// can tell live runs from cached ones.
@@ -320,6 +374,26 @@ type LLMReport struct {
 	MedianMs        int64 `json:"median_ms"`
 	P95Ms           int64 `json:"p95_ms"`
 
+	// Overhead is the paired aggregate that backs the "Overhead vs
+	// raw model" leaderboard. Walks cases where BOTH treatment and
+	// baseline succeeded and sums treatment + baseline metrics
+	// side-by-side, so the per-case means the renderer compares are
+	// taken over the SAME case set.
+	//
+	// The first cut of v0.9.0 instead averaged treatment-side per-
+	// case totals across every cs.Error == "" case and baseline-side
+	// totals across (MeasuredNonCleanCases + MeasuredCleanCases) on
+	// LLMBaselineAggregate — two independent denominators that
+	// diverged whenever treatment and baseline succeeded on
+	// different subsets of cases. Reviewers (claude self-review +
+	// CodeRabbit + Copilot) flagged it; the paired aggregate
+	// replaced both denominators with PairedCases.
+	//
+	// Pointer-typed: nil when --uplift wasn't run, or when no case
+	// had both sides succeed (renderer dashes the entire block in
+	// either case). Set whenever PairedCases > 0.
+	Overhead *OverheadAggregate `json:"overhead,omitempty"`
+
 	// Baseline is the per-LLM aggregate from the --uplift baseline
 	// pass — same cases, same LLM, generic system prompt instead
 	// of local-review's pack pipeline. Pointer-typed so JSON
@@ -358,6 +432,57 @@ type LLMBaselineAggregate struct {
 	// both. Iter-4 self-review caught this asymmetry; the
 	// per-bucket coverage closes it.
 	MeasuredCleanCases int `json:"measured_clean_cases"`
+}
+
+// OverheadAggregate is the paired view of treatment-vs-baseline
+// per-case overhead, backing the "Overhead vs raw model" section
+// of the leaderboard. Every field on this struct is summed over
+// the SAME case set — cases where treatment.Error == "" AND
+// CaseScore.Baseline != nil — so the means the renderer computes
+// from these totals are directly comparable.
+//
+// Time numbers are accumulated for every paired case (the
+// runner's wall-clock is always available regardless of CLI
+// metadata shape). Token numbers are accumulated only over the
+// sub-set of paired cases where BOTH sides produced non-zero
+// TokenUsage from their CLI parser — the rest contribute nothing
+// to the token sums, and TokenMeasuredCases tracks how many they
+// were. The renderer dashes the tokens cell when TokenMeasuredCases
+// is zero and emits an inline coverage note when it is positive
+// but less than PairedCases. cli.TokenUsage uses zero values to
+// mean "unknown" (gemini stdout on older versions is the canonical
+// case), so averaging over all paired cases would have
+// understated the per-case mean exactly when CLI parsers drift.
+type OverheadAggregate struct {
+	// PairedCases is the count of cases where treatment.Error == ""
+	// AND cs.Baseline != nil. Used as the denominator for the
+	// duration means on both sides.
+	PairedCases int `json:"paired_cases"`
+
+	// Treatment- and baseline-side duration sums over PairedCases.
+	// Treatment is the isolated treatment-pass wall-clock
+	// (CaseScore.TreatmentDurationMs); baseline is the baseline
+	// pass's own wall-clock (BaselineScore.DurationMs). One pass
+	// per side, apples-to-apples.
+	TreatmentDurationMs int64 `json:"treatment_duration_ms"`
+	BaselineDurationMs  int64 `json:"baseline_duration_ms"`
+
+	// TokenMeasuredCases counts paired cases where BOTH sides
+	// produced non-zero TokenUsage from their CLI parser. Used as
+	// the denominator for the token means so partial coverage
+	// (e.g., gemini stdout on older versions, parser regression on
+	// a new model release) doesn't divide a real total by an
+	// inflated case count.
+	TokenMeasuredCases int `json:"token_measured_cases,omitempty"`
+
+	// Token sums accumulated over TokenMeasuredCases (not PairedCases).
+	// A case contributes to these sums only if both sides reported
+	// non-zero tokens — adding partial data here and dividing by
+	// TokenMeasuredCases keeps the arithmetic honest.
+	TreatmentInputTokens  int `json:"treatment_input_tokens,omitempty"`
+	TreatmentOutputTokens int `json:"treatment_output_tokens,omitempty"`
+	BaselineInputTokens   int `json:"baseline_input_tokens,omitempty"`
+	BaselineOutputTokens  int `json:"baseline_output_tokens,omitempty"`
 }
 
 // Report is the top-level bench output.

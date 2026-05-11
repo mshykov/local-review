@@ -56,8 +56,86 @@ func WriteMarkdown(w io.Writer, rep Report) error {
 		if err := writeMarkdownUplift(w, rep); err != nil {
 			return err
 		}
+		if err := writeMarkdownOverhead(w, rep); err != nil {
+			return err
+		}
 	}
 	return writeMarkdownPerCase(w, rep)
+}
+
+// writeMarkdownOverhead is the markdown twin of writeOverheadBlock.
+// Mirrors the "Overhead vs raw model" sub-table so a committed
+// bench/RESULTS.md preserves the same paired-mean view as the text
+// report. Partial token coverage is surfaced as a separate italic
+// note line under the table (markdown tables can't carry inline
+// per-row footnotes cleanly).
+func writeMarkdownOverhead(w io.Writer, rep Report) error {
+	if _, err := fmt.Fprintln(w, "## Overhead vs raw model (lower is better)"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "| LLM | Time/case (Δ) | Tokens/case (Δ) |"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, "| --- | --- | --- |"); err != nil {
+		return err
+	}
+	var coverageNotes []string
+	for _, lr := range rep.LLMReports {
+		o := lr.Overhead
+		tMean, tHave := treatmentMeanDurationMs(o)
+		bMean, bHave := baselineMeanDurationMs(o)
+		timeCell := markdownOverheadDurationCell(tMean, bMean, tHave && bHave)
+
+		tTok, tTokHave := treatmentMeanTokens(o)
+		bTok, bTokHave := baselineMeanTokens(o)
+		tokenCell := markdownOverheadTokenCell(tTok, bTok, tTokHave && bTokHave)
+
+		if _, err := fmt.Fprintf(w, "| %s | %s | %s |\n",
+			lr.LLM, timeCell, tokenCell); err != nil {
+			return err
+		}
+		if note := overheadCoverageNote(o); note != "" {
+			coverageNotes = append(coverageNotes, fmt.Sprintf("_%s: %s._", lr.LLM, note))
+		}
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	for _, n := range coverageNotes {
+		if _, err := fmt.Fprintln(w, n); err != nil {
+			return err
+		}
+	}
+	if len(coverageNotes) > 0 {
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// markdownOverheadDurationCell renders one "treatment (Δ)" time
+// cell without the text renderer's column padding. Returns "—"
+// when the row wasn't measured.
+func markdownOverheadDurationCell(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return "—"
+	}
+	delta := treatment - baseline
+	return fmt.Sprintf("%s (%+.2fs)", fmtMs(int64(treatment)), delta/1000.0)
+}
+
+// markdownOverheadTokenCell renders one "treatment (Δ)" token cell
+// without column padding.
+func markdownOverheadTokenCell(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return "—"
+	}
+	delta := treatment - baseline
+	return fmt.Sprintf("%s (%s)", fmtTokens(treatment), fmtTokensSigned(delta))
 }
 
 // writeMarkdownUplift mirrors writeUpliftBlock for the markdown

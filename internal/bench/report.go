@@ -49,6 +49,9 @@ func WriteText(w io.Writer, rep Report) error {
 		if err := writeUpliftBlock(w, rep); err != nil {
 			return err
 		}
+		if err := writeOverheadBlock(w, rep); err != nil {
+			return err
+		}
 	}
 
 	if _, err := fmt.Fprintln(w, "\nPer-case detail:"); err != nil {
@@ -167,6 +170,202 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 		}
 	}
 	return nil
+}
+
+// writeOverheadBlock renders "Overhead vs raw model" — the
+// customer-facing answer to "how much extra time and how many extra
+// tokens does the tool cost me per review?" Sibling section to
+// writeUpliftBlock: quality wins live there, costs live here.
+//
+// Means are taken from LLMReport.Overhead, the paired aggregate
+// (cases where BOTH treatment and baseline succeeded). Time uses
+// PairedCases as denominator; tokens use TokenMeasuredCases —
+// see OverheadAggregate doc for the partial-coverage rationale.
+//
+// A signed Δ keeps the direction unambiguous: positive Δ on either
+// column = treatment costs more than baseline (the expected
+// outcome — the table tells you how much more).
+//
+// When token coverage was partial (some paired cases reported zero
+// tokens from the CLI parser), an inline note is emitted under the
+// row so readers see "mean is over the token-known subset only"
+// rather than silently consuming a number computed over fewer
+// cases than the rest of the row.
+func writeOverheadBlock(w io.Writer, rep Report) error {
+	if _, err := fmt.Fprintln(w, "\nOverhead vs raw model (lower is better):"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%-10s  %-16s  %-16s\n",
+		"LLM", "Time/case (Δ)", "Tokens/case (Δ)"); err != nil {
+		return err
+	}
+	for _, lr := range rep.LLMReports {
+		o := lr.Overhead
+		tMean, tHave := treatmentMeanDurationMs(o)
+		bMean, bHave := baselineMeanDurationMs(o)
+		timeCell := fmtOverheadDurationCellOrDash(tMean, bMean, tHave && bHave)
+
+		tTok, tTokHave := treatmentMeanTokens(o)
+		bTok, bTokHave := baselineMeanTokens(o)
+		tokenCell := fmtOverheadTokenCellOrDash(tTok, bTok, tTokHave && bTokHave)
+
+		if _, err := fmt.Fprintf(w, "%-10s  %s  %s\n",
+			lr.LLM, timeCell, tokenCell); err != nil {
+			return err
+		}
+		if note := overheadCoverageNote(o); note != "" {
+			if _, err := fmt.Fprintf(w, "%-10s  note: %s\n", "", note); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// overheadCoverageNote returns a non-empty note when token coverage
+// was partial — TokenMeasuredCases > 0 but < PairedCases. Used by
+// both the text and markdown renderers so the partial-coverage
+// signal lands the same way the baseline-errors warning does.
+// Returns empty when coverage was full, zero (cell will be dashed),
+// or the aggregate is nil.
+func overheadCoverageNote(o *OverheadAggregate) string {
+	if o == nil || o.TokenMeasuredCases == 0 || o.TokenMeasuredCases >= o.PairedCases {
+		return ""
+	}
+	return fmt.Sprintf("tokens measured on %d of %d paired cases; mean is over the token-known subset only",
+		o.TokenMeasuredCases, o.PairedCases)
+}
+
+// treatmentMeanDurationMs returns (mean-ms, true) when at least one
+// case paired (treatment + baseline both succeeded). Returns
+// (0, false) otherwise so renderers know to dash the cell instead
+// of showing a phantom zero.
+//
+// Both treatment and baseline duration sums on OverheadAggregate
+// are accumulated over the SAME PairedCases set — that's the whole
+// point of the paired aggregate, and what closes the v0.9.0
+// numerator/denominator-mismatch finding the dogfood pass + CodeRabbit
+// + Copilot all flagged.
+func treatmentMeanDurationMs(o *OverheadAggregate) (float64, bool) {
+	if o == nil || o.PairedCases == 0 {
+		return 0, false
+	}
+	return float64(o.TreatmentDurationMs) / float64(o.PairedCases), true
+}
+
+// baselineMeanDurationMs is the baseline-side counterpart, divided
+// by the SAME PairedCases denominator.
+func baselineMeanDurationMs(o *OverheadAggregate) (float64, bool) {
+	if o == nil || o.PairedCases == 0 {
+		return 0, false
+	}
+	return float64(o.BaselineDurationMs) / float64(o.PairedCases), true
+}
+
+// treatmentMeanTokens returns (mean-tokens, true) when at least one
+// paired case had BOTH sides report non-zero TokenUsage from their
+// CLI parser. Returns (0, false) otherwise — including the partial
+// case where some paired cases lacked tokens but others had them;
+// the renderer surfaces that case via overheadCoverageNote rather
+// than letting the helper average a real sum over fewer cases than
+// the row implies.
+//
+// Closes the v0.9.0 PR warning (CodeRabbit + Copilot + claude
+// self-review): TokenUsage uses zero to mean "unknown", not
+// "0 tokens spent", and the prior helper divided rolled-up totals
+// by all measured cases — understating mean tokens/case under
+// partial coverage.
+func treatmentMeanTokens(o *OverheadAggregate) (float64, bool) {
+	if o == nil || o.TokenMeasuredCases == 0 {
+		return 0, false
+	}
+	total := o.TreatmentInputTokens + o.TreatmentOutputTokens
+	return float64(total) / float64(o.TokenMeasuredCases), true
+}
+
+// baselineMeanTokens is the baseline-side counterpart.
+func baselineMeanTokens(o *OverheadAggregate) (float64, bool) {
+	if o == nil || o.TokenMeasuredCases == 0 {
+		return 0, false
+	}
+	total := o.BaselineInputTokens + o.BaselineOutputTokens
+	return float64(total) / float64(o.TokenMeasuredCases), true
+}
+
+// fmtOverheadDurationCellOrDash renders one "treatment (Δ)" cell in
+// time units, or "—" when either side wasn't measured. Padded to
+// the same width as the dash variant so columns line up regardless
+// of measurement state — the v0.9.0 self-review nit was that the
+// numeric variant rendered at width 15 and the dash variant at
+// width 16, leaving a one-char shimmy when rows mixed.
+func fmtOverheadDurationCellOrDash(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return fmt.Sprintf("%-16s", "—")
+	}
+	delta := treatment - baseline
+	cell := fmt.Sprintf("%s (%+.2fs)", fmtMs(int64(treatment)), delta/1000.0)
+	return fmt.Sprintf("%-16s", cell)
+}
+
+// fmtOverheadTokenCellOrDash renders one "treatment (Δ)" cell in
+// tokens (k-notation for readability). Same dash-on-unmeasured
+// semantics as fmtOverheadDurationCellOrDash, same column width.
+func fmtOverheadTokenCellOrDash(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return fmt.Sprintf("%-16s", "—")
+	}
+	delta := treatment - baseline
+	cell := fmt.Sprintf("%s (%s)", fmtTokens(treatment), fmtTokensSigned(delta))
+	return fmt.Sprintf("%-16s", cell)
+}
+
+// fmtTokens formats a token count as "Nk" once it crosses 1000,
+// or "N" below. Matches the per-LLM completion-line shape so a
+// user comparing the bench overhead to a live review's footer
+// gets numbers in the same units.
+func fmtTokens(n float64) string {
+	if n >= 10000 {
+		return fmt.Sprintf("%.0fk", n/1000.0)
+	}
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", n/1000.0)
+	}
+	return fmt.Sprintf("%.0f", n)
+}
+
+// fmtTokensSigned formats a signed token delta with explicit sign,
+// using the same k-notation as fmtTokens. Positive Δ on the tokens
+// column means treatment uses more tokens than baseline — the
+// expected direction; large positives still flag a regression
+// (the pack is paying for itself only when the quality uplift
+// justifies the token cost).
+//
+// Rounds the absolute value FIRST, then decides the sign — so a
+// near-zero negative delta (e.g. -0.4 tokens, which rounds to 0
+// under %.0f) renders as "+0" rather than the misleading "-0"
+// Copilot flagged on PR #68. A literal +0 delta lands in the same
+// branch, so the overhead column reads consistently.
+func fmtTokensSigned(n float64) string {
+	abs := n
+	if abs < 0 {
+		abs = -abs
+	}
+	var s string
+	switch {
+	case abs >= 10000:
+		s = fmt.Sprintf("%.0fk", abs/1000.0)
+	case abs >= 1000:
+		s = fmt.Sprintf("%.1fk", abs/1000.0)
+	default:
+		s = fmt.Sprintf("%.0f", abs)
+	}
+	if s == "0" {
+		return "+0"
+	}
+	if n < 0 {
+		return "-" + s
+	}
+	return "+" + s
 }
 
 // baselineHasAnyNumericData returns true when the aggregate carries
