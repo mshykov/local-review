@@ -68,14 +68,7 @@ local-review review
 
 Findings print to your terminal. The tool exits non-zero on `major` / `critical`, so it slots straight into a pre-commit hook.
 
-**5. (Optional) See how the LLMs scored on a labelled benchmark.** The repo ships with [`bench/RESULTS.md`](bench/RESULTS.md) — a leaderboard generated from a 10-case dataset spanning Go / TS / Python / Rust:
-
-```sh
-local-review bench --replay bench/fixtures   # read pre-recorded fixtures, free
-local-review bench --uplift --only claude    # measure vs raw-LLM baseline (live, costs tokens)
-```
-
-See [`bench/README.md`](bench/README.md) for the methodology.
+**5. (Optional) Check how the LLMs score on a labelled benchmark.** The repo ships with [`bench/RESULTS.md`](bench/RESULTS.md) — a leaderboard (precision / recall / F1 / noise, plus uplift-over-raw-LLM and overhead-vs-raw-LLM tables) generated from a 10-case dataset spanning Go / TS / Python / Rust. CI keeps it current; you don't need to run anything locally. See [`bench/README.md`](bench/README.md) for methodology.
 
 ---
 
@@ -102,7 +95,7 @@ All three apply to both the multi-LLM CLI path and the single-LLM fallback so cu
 
 > ✨ **What's new in v0.8.** *Measure what you ship, customise what you check.* Two things teams asked for:
 >
-> - **`local-review bench`** — quality benchmark harness. Precision / recall / F1, noise rate, consistency, per-language splits, and (with `--uplift`) treatment-vs-baseline deltas. See [`bench/README.md`](bench/README.md) and [`bench/RESULTS.md`](bench/RESULTS.md).
+> - **Published benchmark results.** [`bench/RESULTS.md`](bench/RESULTS.md) tracks precision / recall / F1, noise rate, consistency, per-language splits, uplift over a raw-LLM baseline, and the time + token overhead the tool adds per review. CI regenerates it; you read the numbers, you don't run the harness. See [`bench/README.md`](bench/README.md) for methodology.
 > - **Prompt customization (#55).** Override per-language packs, prepend house rules, append output-shape rules — without forking. Section above.
 >
 > Full notes in [CHANGELOG](CHANGELOG.md).
@@ -250,7 +243,6 @@ local-review init                    # interactive setup (writes .local-review.y
 local-review doctor                  # check LLM installations + auth state
 local-review config                  # print resolved config (API keys masked)
 local-review version                 # print version
-local-review bench                   # run the review-quality benchmark suite (see bench/README.md)
 ```
 
 Common flags:
