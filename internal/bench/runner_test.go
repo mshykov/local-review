@@ -513,9 +513,9 @@ func TestFmtTokensSigned_NoNegativeZero(t *testing.T) {
 		want string
 	}{
 		{0, "+0"},
-		{-0.4, "+0"},  // would have been "-0" pre-fix
-		{0.4, "+0"},   // ditto on the positive side
-		{-50, "-50"},  // real negative still surfaces
+		{-0.4, "+0"}, // would have been "-0" pre-fix
+		{0.4, "+0"},  // ditto on the positive side
+		{-50, "-50"}, // real negative still surfaces
 		{1234, "+1.2k"},
 		{-12345, "-12k"},
 	} {
