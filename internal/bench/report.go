@@ -220,11 +220,20 @@ func writeOverheadBlock(w io.Writer, rep Report) error {
 // treatmentMeanDurationMs returns (mean-ms, true) when MeasuredCases > 0
 // for the treatment side. Returns (0, false) otherwise so renderers
 // know to dash the cell instead of showing a phantom zero.
+//
+// Uses TotalTreatmentDurationMs (treatment-only wall-clock) rather
+// than TotalDurationMs (full per-case wall-clock including baseline
+// + repeats). The overhead leaderboard compares ONE treatment pass
+// against ONE baseline pass; using full per-case wall-clock here
+// would have lumped in the baseline pass's own time and double-
+// counted it against the same baseline that defines the
+// denominator — the v0.9.0 dogfood pass caught this as a
+// numerator/denominator mismatch.
 func treatmentMeanDurationMs(lr LLMReport) (float64, bool) {
 	if lr.MeasuredCases == 0 {
 		return 0, false
 	}
-	return float64(lr.TotalDurationMs) / float64(lr.MeasuredCases), true
+	return float64(lr.TotalTreatmentDurationMs) / float64(lr.MeasuredCases), true
 }
 
 // baselineMeanDurationMs is the baseline-side counterpart. The

@@ -192,8 +192,26 @@ type CaseScore struct {
 	// Timing + status. Duration is serialised in milliseconds rather
 	// than nanoseconds for cross-language consumer ergonomics — the
 	// JSON shape mirrors metadata.json's *_ms fields.
-	DurationMs int64  `json:"duration_ms"`
-	Error      string `json:"error,omitempty"`
+	//
+	// DurationMs is the FULL per-case wall-clock — treatment pass
+	// PLUS any --repeat samples PLUS the --uplift baseline pass.
+	// Codex flagged the older "treatment-only" shape as
+	// understating real wall-clock for --repeat runs, and the
+	// median/p95 in the per-LLM aggregate should reflect total
+	// per-case spend (what a user comparing latency between runs
+	// actually wants).
+	//
+	// TreatmentDurationMs is the ISOLATED treatment-pass wall-clock
+	// (single obtainReview call, no repeats, no baseline). Added in
+	// v0.9.0 for the "Overhead vs raw model" leaderboard, which
+	// needs apples-to-apples comparison against the baseline pass's
+	// single-call duration. Using DurationMs there would have
+	// labelled "treatment + baseline + repeats" wall-clock as
+	// "treatment time/case" and inflated the treatment side by the
+	// baseline + repeat cost.
+	DurationMs          int64  `json:"duration_ms"`
+	TreatmentDurationMs int64  `json:"treatment_duration_ms,omitempty"`
+	Error               string `json:"error,omitempty"`
 
 	// InputTokens / OutputTokens are the size of the treatment-side
 	// prompt and response from this case's LLM call. Same semantics
@@ -357,6 +375,14 @@ type LLMReport struct {
 	// computes the mean on the fly.
 	TotalInputTokens  int `json:"total_input_tokens,omitempty"`
 	TotalOutputTokens int `json:"total_output_tokens,omitempty"`
+
+	// TotalTreatmentDurationMs is the sum of CaseScore.TreatmentDurationMs
+	// across MeasuredCases — treatment-pass wall-clock ONLY, no repeats
+	// or baseline. Used by the "Overhead vs raw model" leaderboard to
+	// compute mean treatment time/case; using TotalDurationMs there
+	// would have lumped baseline + repeat time into the treatment
+	// number and inflated the apparent overhead.
+	TotalTreatmentDurationMs int64 `json:"total_treatment_duration_ms,omitempty"`
 
 	// Baseline is the per-LLM aggregate from the --uplift baseline
 	// pass — same cases, same LLM, generic system prompt instead

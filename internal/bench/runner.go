@@ -147,12 +147,21 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	start := time.Now()
 	mode := modeName(opts.Source)
 
+	// Treatment-pass wall-clock captured separately from the full
+	// scoreOne span so the "Overhead vs raw model" leaderboard
+	// (v0.9.0) gets an apples-to-apples comparison against the
+	// baseline pass's single-call duration. cs.DurationMs further
+	// down still measures the full per-case spend (treatment +
+	// repeats + baseline) for the Overall median/p95 view.
+	treatmentStart := time.Now()
 	output, usage, err := obtainReview(ctx, c, llm, opts)
+	treatmentDur := time.Since(treatmentStart)
 
 	cs := buildBaseScore(c, llm, mode, output, err)
 	if err == nil {
 		cs.InputTokens = usage.InputTokens
 		cs.OutputTokens = usage.OutputTokens
+		cs.TreatmentDurationMs = treatmentDur.Milliseconds()
 	}
 
 	// Phase-2 consistency: re-sample the same (case, LLM) up to
@@ -456,11 +465,21 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 }
 
 // fillTreatmentTokenAggregate sums per-case treatment token counts
-// into LLMReport.TotalInput/OutputTokens and records the number of
-// non-error cases as MeasuredCases. The leaderboard uses the latter
-// as the denominator when rendering "tokens per case" in the
-// overhead block — averaging over len(lr.Cases) would skew the mean
-// downward whenever any case errored (its token count is zero).
+// into LLMReport.TotalInput/OutputTokens, the per-case treatment-
+// pass duration into LLMReport.TotalTreatmentDurationMs, and records
+// the number of non-error cases as MeasuredCases. The leaderboard
+// uses MeasuredCases as the denominator when rendering "tokens per
+// case" / "treatment time per case" in the overhead block —
+// averaging over len(lr.Cases) would skew the mean downward whenever
+// any case errored (its token / duration contributions are zero).
+//
+// Treatment duration is accumulated here (not in fillTimingAggregates)
+// because it is a treatment-only number — fillTimingAggregates' input
+// already lumps in baseline + repeat wall-clock for the Overall
+// median/p95 view, which is the right denominator for "did the run
+// get slower?" but the wrong one for "what does the tool cost on top
+// of a raw-LLM call?". Keeping the two duration aggregates in
+// separate functions makes the contract explicit.
 func fillTreatmentTokenAggregate(lr *LLMReport) {
 	for _, cs := range lr.Cases {
 		if cs.Error != "" {
@@ -469,6 +488,7 @@ func fillTreatmentTokenAggregate(lr *LLMReport) {
 		lr.MeasuredCases++
 		lr.TotalInputTokens += cs.InputTokens
 		lr.TotalOutputTokens += cs.OutputTokens
+		lr.TotalTreatmentDurationMs += cs.TreatmentDurationMs
 	}
 }
 

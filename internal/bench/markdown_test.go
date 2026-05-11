@@ -294,12 +294,13 @@ func TestWriteMarkdown_RendersOverheadBlock(t *testing.T) {
 		Generated: time.Now(),
 		LLMReports: []LLMReport{
 			{
-				LLM:               "claude",
-				Cases:             []CaseScore{{CaseID: "a"}, {CaseID: "b"}},
-				MeasuredCases:     2,
-				TotalDurationMs:   10000, // 5s mean
-				TotalInputTokens:  20000,
-				TotalOutputTokens: 4000, // 12k mean total
+				LLM:                      "claude",
+				Cases:                    []CaseScore{{CaseID: "a"}, {CaseID: "b"}},
+				MeasuredCases:            2,
+				TotalDurationMs:          14000, // full wall-clock (incl baseline+repeats); deliberately != TotalTreatmentDurationMs
+				TotalTreatmentDurationMs: 10000, // 5s mean — overhead block uses this
+				TotalInputTokens:         20000,
+				TotalOutputTokens:        4000, // 12k mean total
 				Baseline: &LLMBaselineAggregate{
 					MeasuredNonCleanCases: 1, MeasuredCleanCases: 1,
 					TotalDurationMs:   4000, // 2s mean
@@ -339,10 +340,11 @@ func TestWriteMarkdown_OverheadDashesWhenTokensUnmeasured(t *testing.T) {
 		Generated: time.Now(),
 		LLMReports: []LLMReport{
 			{
-				LLM:             "gemini",
-				Cases:           []CaseScore{{CaseID: "a"}},
-				MeasuredCases:   1,
-				TotalDurationMs: 3000,
+				LLM:                      "gemini",
+				Cases:                    []CaseScore{{CaseID: "a"}},
+				MeasuredCases:            1,
+				TotalDurationMs:          3000,
+				TotalTreatmentDurationMs: 3000,
 				// Tokens deliberately zero — CLI parser couldn't extract them.
 				Baseline: &LLMBaselineAggregate{
 					MeasuredNonCleanCases: 1,
@@ -357,16 +359,43 @@ func TestWriteMarkdown_OverheadDashesWhenTokensUnmeasured(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "+2.00s") {
-		t.Errorf("expected time cell to render +2.00s delta when only tokens are unmeasured\n--- output ---\n%s", out)
+	// Locate the gemini row inside the Overhead section so we
+	// assert against that row specifically — checking strings.Contains
+	// for "| — |" anywhere in the document would false-pass on a
+	// dash that legitimately appears in the per-language F1 grid,
+	// the per-case ERR row, or the consistency column. Pinning the
+	// assertion to the row text is the v0.9.0 dogfood fix.
+	geminiRow := findRowContaining(t, out, "| gemini |", "## Overhead vs raw model")
+	if !strings.Contains(geminiRow, "+2.00s") {
+		t.Errorf("overhead row missing time delta +2.00s; got:\n%s", geminiRow)
 	}
-	// Tokens column should contain "—" for this row. We anchor the
-	// assertion on "| gemini |" + " — |" co-occurrence so the test
-	// doesn't false-pass on the dash that appears in headers/case
-	// rows elsewhere.
-	if !strings.Contains(out, "| gemini |") || !strings.Contains(out, "| — |") {
-		t.Errorf("expected gemini row with tokens dashed out\n--- output ---\n%s", out)
+	// Two cells should each be "—": the tokens column. Time column
+	// has the +2.00s number. Header has "—" in neither cell. We
+	// assert the row ENDS in " — |" (cell-anchored) so a stray
+	// dash earlier in the row doesn't satisfy the check.
+	if !strings.HasSuffix(strings.TrimSpace(geminiRow), "— |") {
+		t.Errorf("expected gemini overhead row to end with tokens dashed out; got:\n%s", geminiRow)
 	}
+}
+
+// findRowContaining locates a markdown table row that contains
+// rowMarker AND appears after sectionHeader. Fatals the test when
+// the row can't be found so the caller doesn't have to defend
+// against the not-found case at every assertion site.
+func findRowContaining(t *testing.T, doc, rowMarker, sectionHeader string) string {
+	t.Helper()
+	sectionIdx := strings.Index(doc, sectionHeader)
+	if sectionIdx < 0 {
+		t.Fatalf("section %q not found in document", sectionHeader)
+	}
+	section := doc[sectionIdx:]
+	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(line, "|") && strings.Contains(line, rowMarker) {
+			return line
+		}
+	}
+	t.Fatalf("row containing %q not found under section %q", rowMarker, sectionHeader)
+	return ""
 }
 
 func TestWriteMarkdown_OmitsUpliftWhenNotMeasured(t *testing.T) {

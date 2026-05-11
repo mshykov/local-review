@@ -396,9 +396,9 @@ func TestFillBaselineAggregate_ZeroAggregateWhenAllBaselinesErrored(t *testing.T
 func TestFillTreatmentTokenAggregate_SumsAcrossSuccessfulCases(t *testing.T) {
 	lr := &LLMReport{
 		Cases: []CaseScore{
-			{CaseID: "ok-1", InputTokens: 1000, OutputTokens: 200},
-			{CaseID: "ok-2", InputTokens: 1500, OutputTokens: 300},
-			{CaseID: "err-1", Error: "timeout"}, // must not be counted
+			{CaseID: "ok-1", InputTokens: 1000, OutputTokens: 200, TreatmentDurationMs: 3000},
+			{CaseID: "ok-2", InputTokens: 1500, OutputTokens: 300, TreatmentDurationMs: 5000},
+			{CaseID: "err-1", Error: "timeout", TreatmentDurationMs: 100}, // must not be counted
 		},
 	}
 	fillTreatmentTokenAggregate(lr)
@@ -410,6 +410,16 @@ func TestFillTreatmentTokenAggregate_SumsAcrossSuccessfulCases(t *testing.T) {
 	}
 	if lr.TotalOutputTokens != 500 {
 		t.Errorf("TotalOutputTokens = %d, want 500", lr.TotalOutputTokens)
+	}
+	// TotalTreatmentDurationMs sums treatment-only wall-clock from
+	// non-error cases. The "err-1" frame contributes its 100ms field
+	// only because we set it for the test — in production it would
+	// be zero (TreatmentDurationMs is only assigned in the err==nil
+	// path of scoreOne) — but the aggregator must filter on Error
+	// regardless so that error frames with stale or non-zero timing
+	// can't leak into the denominator-matched sum.
+	if lr.TotalTreatmentDurationMs != 8000 {
+		t.Errorf("TotalTreatmentDurationMs = %d, want 8000 (3000+5000, error frame excluded)", lr.TotalTreatmentDurationMs)
 	}
 }
 
