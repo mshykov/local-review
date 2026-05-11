@@ -501,6 +501,31 @@ func TestFillOverheadAggregate_TokenMeasuredCasesOnlyCountsBothSidesNonZero(t *t
 	}
 }
 
+// TestFmtTokensSigned_NoNegativeZero covers the v0.9.0 PR #68
+// finding (Copilot): a small negative delta like -0.4 tokens
+// rounds to 0 under %.0f but still picked up the "-" sign,
+// printing the misleading "-0". The fix rounds first, then
+// decides the sign — so anything that rounds to zero renders
+// as "+0" regardless of original sign.
+func TestFmtTokensSigned_NoNegativeZero(t *testing.T) {
+	for _, tc := range []struct {
+		in   float64
+		want string
+	}{
+		{0, "+0"},
+		{-0.4, "+0"},  // would have been "-0" pre-fix
+		{0.4, "+0"},   // ditto on the positive side
+		{-50, "-50"},  // real negative still surfaces
+		{1234, "+1.2k"},
+		{-12345, "-12k"},
+	} {
+		got := fmtTokensSigned(tc.in)
+		if got != tc.want {
+			t.Errorf("fmtTokensSigned(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // TestFillOverheadAggregate_NilWhenNoPairs verifies that single-pass
 // benches (no --uplift) leave LLMReport.Overhead nil so the renderer
 // skips the block. The renderer's hasUpliftMeasured gate handles

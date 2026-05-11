@@ -339,20 +339,33 @@ func fmtTokens(n float64) string {
 // expected direction; large positives still flag a regression
 // (the pack is paying for itself only when the quality uplift
 // justifies the token cost).
+//
+// Rounds the absolute value FIRST, then decides the sign — so a
+// near-zero negative delta (e.g. -0.4 tokens, which rounds to 0
+// under %.0f) renders as "+0" rather than the misleading "-0"
+// Copilot flagged on PR #68. A literal +0 delta lands in the same
+// branch, so the overhead column reads consistently.
 func fmtTokensSigned(n float64) string {
-	sign := "+"
-	v := n
-	if v < 0 {
-		sign = "-"
-		v = -v
+	abs := n
+	if abs < 0 {
+		abs = -abs
 	}
-	if v >= 10000 {
-		return fmt.Sprintf("%s%.0fk", sign, v/1000.0)
+	var s string
+	switch {
+	case abs >= 10000:
+		s = fmt.Sprintf("%.0fk", abs/1000.0)
+	case abs >= 1000:
+		s = fmt.Sprintf("%.1fk", abs/1000.0)
+	default:
+		s = fmt.Sprintf("%.0f", abs)
 	}
-	if v >= 1000 {
-		return fmt.Sprintf("%s%.1fk", sign, v/1000.0)
+	if s == "0" {
+		return "+0"
 	}
-	return fmt.Sprintf("%s%.0f", sign, v)
+	if n < 0 {
+		return "-" + s
+	}
+	return "+" + s
 }
 
 // baselineHasAnyNumericData returns true when the aggregate carries

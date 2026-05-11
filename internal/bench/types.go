@@ -114,9 +114,19 @@ type ProducedFinding struct {
 // size of response` semantics as `cli.TokenUsage` (see
 // internal/cli/usage.go). They feed the leaderboard's "Overhead
 // vs raw model" table — the customer-facing answer to "how many
-// extra tokens does the tool cost me?" Zero when the CLI's
+// extra tokens does the tool cost me?" Both-zero means the CLI's
 // structured-output parser didn't recognise the response shape;
 // treat as "unknown", not "no tokens used."
+//
+// TotalOnly handling: codex's pre-v0.128 stdout reports a single
+// combined total without an input/output split. cli.TokenUsage
+// folds that into InputTokens with OutputTokens=0 (see
+// internal/cli/usage.go TotalOnly field). The bench copies the
+// values verbatim, so a BaselineScore from codex may carry the
+// run total in InputTokens; OutputTokens=0 there is not
+// "unknown" but "vendor didn't split." OverheadAggregate's
+// token sums consume InputTokens+OutputTokens together, so the
+// difference is invisible at the leaderboard level.
 type BaselineScore struct {
 	TruePositives  int   `json:"true_positives"`
 	FalsePositives int   `json:"false_positives"`
@@ -219,9 +229,13 @@ type CaseScore struct {
 	// reads included for Anthropic, vendor-normalised across the
 	// three providers). Used by fillAggregates to compute the
 	// per-LLM mean and feed the "Overhead vs raw model" leaderboard
-	// table. Zero when the source CLI didn't expose structured token
-	// metadata or when running in replay mode (fixtures don't carry
-	// token counts).
+	// table. Both-zero is the "unknown" signal — source CLI didn't
+	// expose structured token metadata, or running in replay mode
+	// (fixtures don't carry token counts). For codex's pre-v0.128
+	// TotalOnly shape, InputTokens carries the combined run total
+	// and OutputTokens stays 0 (not unknown — see cli.TokenUsage
+	// doc); fillOverheadAggregate sums Input+Output so leaderboard
+	// arithmetic is identical either way.
 	InputTokens  int `json:"input_tokens,omitempty"`
 	OutputTokens int `json:"output_tokens,omitempty"`
 
