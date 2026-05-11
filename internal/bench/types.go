@@ -378,14 +378,16 @@ type LLMReport struct {
 	// raw model" leaderboard. Walks cases where BOTH treatment and
 	// baseline succeeded and sums treatment + baseline metrics
 	// side-by-side, so the per-case means the renderer compares are
-	// taken over the SAME case set. The pre-fix shape (independent
-	// MeasuredCases on the treatment side, MeasuredNonClean +
-	// MeasuredClean on the baseline side) was flagged by claude
-	// self-review, CodeRabbit, and Copilot as comparing different
-	// populations — a treatment-error case where baseline still
-	// succeeded contributed to one mean's denominator but not the
-	// other, and the Δ stopped meaning "extra cost for the same
-	// review."
+	// taken over the SAME case set.
+	//
+	// The first cut of v0.9.0 instead averaged treatment-side per-
+	// case totals across every cs.Error == "" case and baseline-side
+	// totals across (MeasuredNonCleanCases + MeasuredCleanCases) on
+	// LLMBaselineAggregate — two independent denominators that
+	// diverged whenever treatment and baseline succeeded on
+	// different subsets of cases. Reviewers (claude self-review +
+	// CodeRabbit + Copilot) flagged it; the paired aggregate
+	// replaced both denominators with PairedCases.
 	//
 	// Pointer-typed: nil when --uplift wasn't run, or when no case
 	// had both sides succeed (renderer dashes the entire block in

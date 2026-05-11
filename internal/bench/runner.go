@@ -144,23 +144,24 @@ func Run(ctx context.Context, cases []Case, opts Options) (Report, error) {
 // total per-case wall-clock, which is what a user comparing latency
 // between runs actually wants.
 func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore {
+	// `start` is the treatment-pass anchor: nothing else runs between
+	// it and obtainReview so the "Overhead vs raw model" leaderboard
+	// (v0.9.0) gets a treatment duration measured at the same
+	// granularity as the baseline pass's single-call duration in
+	// scoreBaseline. modeName() is deferred to the buildBaseScore
+	// call site instead of running here so even its sub-microsecond
+	// cost can't be lumped into the treatment span — Copilot caught
+	// the prior shape on PR #68 as "comment claims obtainReview is
+	// the first thing scoreOne does, but modeName ran first." Same
+	// timestamp also serves the full-scoreOne span (cs.DurationMs
+	// further down) — the Overall median/p95 view should reflect
+	// total per-case spend including --repeat samples and the
+	// --uplift baseline.
 	start := time.Now()
-	mode := modeName(opts.Source)
-
-	// Treatment-pass wall-clock captured separately from the full
-	// scoreOne span so the "Overhead vs raw model" leaderboard
-	// (v0.9.0) gets an apples-to-apples comparison against the
-	// baseline pass's single-call duration. We reuse `start` as
-	// the treatment-start anchor (obtainReview is the first thing
-	// scoreOne does) — the v0.9.0 self-review flagged the prior
-	// shape's back-to-back time.Now() calls as two clock reads
-	// where one suffices. cs.DurationMs further down still measures
-	// the full per-case spend (treatment + repeats + baseline) for
-	// the Overall median/p95 view.
 	output, usage, err := obtainReview(ctx, c, llm, opts)
 	treatmentDur := time.Since(start)
 
-	cs := buildBaseScore(c, llm, mode, output, err)
+	cs := buildBaseScore(c, llm, modeName(opts.Source), output, err)
 	if err == nil {
 		cs.InputTokens = usage.InputTokens
 		cs.OutputTokens = usage.OutputTokens
@@ -475,15 +476,16 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 // sides reported non-zero TokenUsage, keeping the per-case token
 // mean honest under partial CLI-parser coverage.
 //
-// Reviewers (claude self-review + CodeRabbit + Copilot, on the
-// v0.9.0 PR) flagged the pre-fix shape — independent
-// LLMReport.MeasuredCases (treatment-side) vs
-// MeasuredNonCleanCases + MeasuredCleanCases (baseline-side) — as
-// comparing different populations. A treatment-error case where
-// baseline succeeded contributed to one mean's denominator but not
-// the other, and the Δ stopped meaning "extra cost for the same
-// review." fillOverheadAggregate fixes that by pairing case-by-case
-// before summing.
+// The first cut of v0.9.0 used two independent denominators —
+// treatment-side averaged over every cs.Error == "" case, baseline-
+// side averaged over MeasuredNonCleanCases + MeasuredCleanCases on
+// LLMBaselineAggregate. Whenever treatment and baseline succeeded
+// on different subsets (a treatment-error case where baseline
+// still ran is the canonical example), the two denominators
+// diverged and the rendered Δ stopped meaning "extra cost for the
+// same review." Reviewers (claude self-review + CodeRabbit +
+// Copilot) flagged it on PR #68; pairing case-by-case before
+// summing fixes it.
 //
 // Sets lr.Overhead only when at least one case paired; nil
 // otherwise so the renderer can skip the block.
