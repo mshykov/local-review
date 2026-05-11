@@ -486,13 +486,7 @@ func TestFillOverheadAggregate_TokenMeasuredCasesOnlyCountsBothSidesNonZero(t *t
 	if lr.Overhead.TokenMeasuredCases != 1 {
 		t.Errorf("TokenMeasuredCases = %d, want 1 (only both-tokens contributes)", lr.Overhead.TokenMeasuredCases)
 	}
-	// Token sums must only include the case where BOTH sides had
-	// tokens. The "treatment-tokens-only" case contributes 1450
-	// tokens to its own side — but if those leak into the paired
-	// sum and we divide by TokenMeasuredCases=1, the renderer
-	// would report 2650 mean tokens (1200+250+1000+200=2650 wrong)
-	// instead of the honest 1200+200=1400 — wait, that's input+output
-	// of just the both-tokens case: 1000+200 = 1200 (treatment).
+	// Token sums must include only the "both-tokens" case.
 	if lr.Overhead.TreatmentInputTokens != 1000 {
 		t.Errorf("TreatmentInputTokens = %d, want 1000 (only both-tokens contributes)", lr.Overhead.TreatmentInputTokens)
 	}
