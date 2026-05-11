@@ -109,12 +109,22 @@ type ProducedFinding struct {
 // answer on their own.
 //
 // Only populated when --uplift was active; nil/zero otherwise.
+//
+// InputTokens / OutputTokens carry the same `size of prompt /
+// size of response` semantics as `cli.TokenUsage` (see
+// internal/cli/usage.go). They feed the leaderboard's "Overhead
+// vs raw model" table — the customer-facing answer to "how many
+// extra tokens does the tool cost me?" Zero when the CLI's
+// structured-output parser didn't recognise the response shape;
+// treat as "unknown", not "no tokens used."
 type BaselineScore struct {
 	TruePositives  int   `json:"true_positives"`
 	FalsePositives int   `json:"false_positives"`
 	FalseNegatives int   `json:"false_negatives"`
 	Produced       int   `json:"produced"`
 	DurationMs     int64 `json:"duration_ms"`
+	InputTokens    int   `json:"input_tokens,omitempty"`
+	OutputTokens   int   `json:"output_tokens,omitempty"`
 }
 
 // Precision = TP / (TP + FP). Returns 0 when no findings produced.
@@ -184,6 +194,18 @@ type CaseScore struct {
 	// JSON shape mirrors metadata.json's *_ms fields.
 	DurationMs int64  `json:"duration_ms"`
 	Error      string `json:"error,omitempty"`
+
+	// InputTokens / OutputTokens are the size of the treatment-side
+	// prompt and response from this case's LLM call. Same semantics
+	// as cli.TokenUsage (see internal/cli/usage.go: prompt-cache
+	// reads included for Anthropic, vendor-normalised across the
+	// three providers). Used by fillAggregates to compute the
+	// per-LLM mean and feed the "Overhead vs raw model" leaderboard
+	// table. Zero when the source CLI didn't expose structured token
+	// metadata or when running in replay mode (fixtures don't carry
+	// token counts).
+	InputTokens  int `json:"input_tokens,omitempty"`
+	OutputTokens int `json:"output_tokens,omitempty"`
 
 	// Mode is "cli" or "replay" — recorded in JSON output so consumers
 	// can tell live runs from cached ones.
@@ -320,6 +342,22 @@ type LLMReport struct {
 	MedianMs        int64 `json:"median_ms"`
 	P95Ms           int64 `json:"p95_ms"`
 
+	// MeasuredCases is the number of cases that produced a non-error
+	// CaseScore for this LLM. Used as the denominator when computing
+	// per-case means for the "Overhead vs raw model" leaderboard
+	// (mean duration, mean tokens). Tracked here rather than
+	// recomputed from len(Cases) because Cases includes error frames
+	// which carry zero timings/tokens and would skew the mean.
+	MeasuredCases int `json:"measured_cases,omitempty"`
+
+	// Token totals across MeasuredCases. Mean per case is what users
+	// actually want to read ("the tool costs me +X tokens per
+	// review"); the totals are kept here because dividing later is
+	// trivial but reconstructing totals from a mean isn't. Renderer
+	// computes the mean on the fly.
+	TotalInputTokens  int `json:"total_input_tokens,omitempty"`
+	TotalOutputTokens int `json:"total_output_tokens,omitempty"`
+
 	// Baseline is the per-LLM aggregate from the --uplift baseline
 	// pass — same cases, same LLM, generic system prompt instead
 	// of local-review's pack pipeline. Pointer-typed so JSON
@@ -338,6 +376,16 @@ type LLMBaselineAggregate struct {
 	F1              float64 `json:"f1"`
 	NoiseRate       float64 `json:"noise_rate"`
 	TotalDurationMs int64   `json:"total_duration_ms"`
+
+	// Token totals across the baseline pass, mirroring the
+	// treatment-side fields on LLMReport. Mean per case feeds the
+	// "Overhead vs raw model" leaderboard so a `treatment-mean (Δ vs
+	// baseline-mean)` cell answers the customer-facing "how many
+	// extra tokens am I paying per review?" The denominator is the
+	// sum of MeasuredNonCleanCases + MeasuredCleanCases (every
+	// baseline pass that returned scoreable output, both buckets).
+	TotalInputTokens  int `json:"total_input_tokens,omitempty"`
+	TotalOutputTokens int `json:"total_output_tokens,omitempty"`
 
 	// MeasuredNonCleanCases counts baseline passes that scored on
 	// non-clean cases — the cases that contribute to F1 /

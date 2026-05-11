@@ -280,6 +280,95 @@ func TestWriteMarkdown_AsymmetricCoverageDashesUnmeasuredHalf(t *testing.T) {
 	}
 }
 
+// TestWriteMarkdown_RendersOverheadBlock verifies the new v0.9.0
+// "Overhead vs raw model" sub-table appears alongside the quality
+// uplift block, with treatment mean / signed delta cells for both
+// per-case time and per-case tokens. The customer-facing question
+// answered here is "for the quality uplift the tool gives me, how
+// much extra time and how many extra tokens am I paying per
+// review?" — both columns must show real numbers when both sides
+// were measured.
+func TestWriteMarkdown_RendersOverheadBlock(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 2, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:               "claude",
+				Cases:             []CaseScore{{CaseID: "a"}, {CaseID: "b"}},
+				MeasuredCases:     2,
+				TotalDurationMs:   10000, // 5s mean
+				TotalInputTokens:  20000,
+				TotalOutputTokens: 4000, // 12k mean total
+				Baseline: &LLMBaselineAggregate{
+					MeasuredNonCleanCases: 1, MeasuredCleanCases: 1,
+					TotalDurationMs:   4000, // 2s mean
+					TotalInputTokens:  6000,
+					TotalOutputTokens: 1000, // 3.5k mean total
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"## Overhead vs raw model",
+		"| LLM | Time/case (Δ) | Tokens/case (Δ) |",
+		"| claude |",
+		"+3.00s", // 5.0s - 2.0s = +3.00s
+		"+8.5k",  // 12.0k - 3.5k = +8.5k
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("overhead block missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+}
+
+// TestWriteMarkdown_OverheadDashesWhenTokensUnmeasured covers the
+// gemini-stdout edge case: CLI parser returns zero tokens (no
+// structured-output flag). We must dash the tokens cell rather
+// than render "0 (+0)", which would mislead readers into thinking
+// the call cost no tokens. The time cell still renders — duration
+// is measured by the runner regardless of CLI metadata shape.
+func TestWriteMarkdown_OverheadDashesWhenTokensUnmeasured(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 1, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:             "gemini",
+				Cases:           []CaseScore{{CaseID: "a"}},
+				MeasuredCases:   1,
+				TotalDurationMs: 3000,
+				// Tokens deliberately zero — CLI parser couldn't extract them.
+				Baseline: &LLMBaselineAggregate{
+					MeasuredNonCleanCases: 1,
+					TotalDurationMs:       1000,
+					// Baseline tokens also zero.
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "+2.00s") {
+		t.Errorf("expected time cell to render +2.00s delta when only tokens are unmeasured\n--- output ---\n%s", out)
+	}
+	// Tokens column should contain "—" for this row. We anchor the
+	// assertion on "| gemini |" + " — |" co-occurrence so the test
+	// doesn't false-pass on the dash that appears in headers/case
+	// rows elsewhere.
+	if !strings.Contains(out, "| gemini |") || !strings.Contains(out, "| — |") {
+		t.Errorf("expected gemini row with tokens dashed out\n--- output ---\n%s", out)
+	}
+}
+
 func TestWriteMarkdown_OmitsUpliftWhenNotMeasured(t *testing.T) {
 	rep := Report{
 		Dataset: "x", CaseCount: 1, Mode: "replay",

@@ -385,6 +385,71 @@ func TestFillBaselineAggregate_ZeroAggregateWhenAllBaselinesErrored(t *testing.T
 	}
 }
 
+// TestFillTreatmentTokenAggregate_SumsAcrossSuccessfulCases verifies
+// that the new v0.9.0 token rollup on LLMReport sums tokens only
+// from non-error case frames and uses MeasuredCases as the
+// denominator. Error frames carry zero tokens by construction
+// (buildBaseScore on err path); averaging over len(Cases) would
+// have understated mean-per-case whenever any case errored, which
+// is exactly the noise the "Overhead vs raw model" leaderboard is
+// supposed to surface honestly.
+func TestFillTreatmentTokenAggregate_SumsAcrossSuccessfulCases(t *testing.T) {
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			{CaseID: "ok-1", InputTokens: 1000, OutputTokens: 200},
+			{CaseID: "ok-2", InputTokens: 1500, OutputTokens: 300},
+			{CaseID: "err-1", Error: "timeout"}, // must not be counted
+		},
+	}
+	fillTreatmentTokenAggregate(lr)
+	if lr.MeasuredCases != 2 {
+		t.Errorf("MeasuredCases = %d, want 2 (errored case excluded)", lr.MeasuredCases)
+	}
+	if lr.TotalInputTokens != 2500 {
+		t.Errorf("TotalInputTokens = %d, want 2500", lr.TotalInputTokens)
+	}
+	if lr.TotalOutputTokens != 500 {
+		t.Errorf("TotalOutputTokens = %d, want 500", lr.TotalOutputTokens)
+	}
+}
+
+// TestFillBaselineAggregate_SumsTokens covers the baseline-side
+// counterpart: the rolled-up LLMBaselineAggregate must carry
+// TotalInputTokens / TotalOutputTokens so the leaderboard can
+// compute the per-case baseline mean against which the treatment
+// mean is compared in the "Overhead vs raw model" table.
+func TestFillBaselineAggregate_SumsTokens(t *testing.T) {
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			{
+				CaseID:        "a",
+				TruePositives: 1, Matched: []MatchPair{{}},
+				Baseline: &BaselineScore{
+					TruePositives: 1, DurationMs: 100,
+					InputTokens: 800, OutputTokens: 120,
+				},
+			},
+			{
+				CaseID: "b", Clean: true,
+				Baseline: &BaselineScore{
+					Produced: 1, DurationMs: 80,
+					InputTokens: 600, OutputTokens: 60,
+				},
+			},
+		},
+	}
+	fillBaselineAggregate(lr)
+	if lr.Baseline == nil {
+		t.Fatal("expected non-nil Baseline aggregate")
+	}
+	if lr.Baseline.TotalInputTokens != 1400 {
+		t.Errorf("baseline TotalInputTokens = %d, want 1400", lr.Baseline.TotalInputTokens)
+	}
+	if lr.Baseline.TotalOutputTokens != 180 {
+		t.Errorf("baseline TotalOutputTokens = %d, want 180", lr.Baseline.TotalOutputTokens)
+	}
+}
+
 func TestRun_ReplayWithRepeatIsError(t *testing.T) {
 	// --repeat > 1 is meaningless in replay (fixtures are
 	// deterministic; Jaccard would always be 1.0). Run must reject

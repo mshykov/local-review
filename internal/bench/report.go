@@ -49,6 +49,9 @@ func WriteText(w io.Writer, rep Report) error {
 		if err := writeUpliftBlock(w, rep); err != nil {
 			return err
 		}
+		if err := writeOverheadBlock(w, rep); err != nil {
+			return err
+		}
 	}
 
 	if _, err := fmt.Fprintln(w, "\nPer-case detail:"); err != nil {
@@ -167,6 +170,170 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 		}
 	}
 	return nil
+}
+
+// writeOverheadBlock renders "Overhead vs raw model" — the
+// customer-facing answer to "how much extra time and how many extra
+// tokens does the tool cost me per review?" Sibling section to
+// writeUpliftBlock: quality wins live there, costs live here.
+//
+// Means are computed per case using the MeasuredCases denominator on
+// each side (treatment: LLMReport.MeasuredCases; baseline: sum of
+// MeasuredNonCleanCases + MeasuredCleanCases). A signed Δ keeps the
+// direction unambiguous: positive Δ on either column = treatment
+// costs more than baseline (the expected and acceptable outcome —
+// the table tells you how much more).
+//
+// Gated on hasUpliftMeasured(rep) at the call site; here we only
+// gate per-row to dash cells where either side has zero measured
+// cases. Token cells additionally dash when treatment-side
+// MeasuredCases is non-zero but the rolled-up token total is zero
+// (the CLI parser couldn't extract token metadata — common for
+// gemini stdout that doesn't expose structured-output flags on
+// older versions; rendering "0 (+0)" would mislead users into
+// thinking the call was free).
+func writeOverheadBlock(w io.Writer, rep Report) error {
+	if _, err := fmt.Fprintln(w, "\nOverhead vs raw model (lower is better):"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "%-10s  %-16s  %-16s\n",
+		"LLM", "Time/case (Δ)", "Tokens/case (Δ)"); err != nil {
+		return err
+	}
+	for _, lr := range rep.LLMReports {
+		tMean, tHave := treatmentMeanDurationMs(lr)
+		bMean, bHave := baselineMeanDurationMs(lr.Baseline)
+		timeCell := fmtOverheadDurationCellOrDash(tMean, bMean, tHave && bHave)
+
+		tTok, tTokHave := treatmentMeanTokens(lr)
+		bTok, bTokHave := baselineMeanTokens(lr.Baseline)
+		tokenCell := fmtOverheadTokenCellOrDash(tTok, bTok, tTokHave && bTokHave)
+
+		if _, err := fmt.Fprintf(w, "%-10s  %s  %s\n",
+			lr.LLM, timeCell, tokenCell); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// treatmentMeanDurationMs returns (mean-ms, true) when MeasuredCases > 0
+// for the treatment side. Returns (0, false) otherwise so renderers
+// know to dash the cell instead of showing a phantom zero.
+func treatmentMeanDurationMs(lr LLMReport) (float64, bool) {
+	if lr.MeasuredCases == 0 {
+		return 0, false
+	}
+	return float64(lr.TotalDurationMs) / float64(lr.MeasuredCases), true
+}
+
+// baselineMeanDurationMs is the baseline-side counterpart. The
+// denominator sums both buckets (non-clean + clean) because
+// baseline timing applies to every successful baseline pass
+// regardless of cleanliness, unlike F1/precision/recall which
+// gate per-bucket.
+func baselineMeanDurationMs(b *LLMBaselineAggregate) (float64, bool) {
+	if b == nil {
+		return 0, false
+	}
+	n := b.MeasuredNonCleanCases + b.MeasuredCleanCases
+	if n == 0 {
+		return 0, false
+	}
+	return float64(b.TotalDurationMs) / float64(n), true
+}
+
+// treatmentMeanTokens returns (mean-tokens, true) when MeasuredCases > 0
+// AND the rolled-up token total is non-zero. The second gate matters
+// because the CLI parsers leave InputTokens/OutputTokens at zero
+// when they can't extract structured token metadata (gemini stdout
+// on older versions is the canonical case); a zero mean from that
+// path would render as "0 (+0)" and mislead users into thinking the
+// call cost no tokens.
+func treatmentMeanTokens(lr LLMReport) (float64, bool) {
+	if lr.MeasuredCases == 0 {
+		return 0, false
+	}
+	total := lr.TotalInputTokens + lr.TotalOutputTokens
+	if total == 0 {
+		return 0, false
+	}
+	return float64(total) / float64(lr.MeasuredCases), true
+}
+
+// baselineMeanTokens is the baseline-side counterpart, with the
+// same "zero total → dash" guard as treatmentMeanTokens.
+func baselineMeanTokens(b *LLMBaselineAggregate) (float64, bool) {
+	if b == nil {
+		return 0, false
+	}
+	n := b.MeasuredNonCleanCases + b.MeasuredCleanCases
+	if n == 0 {
+		return 0, false
+	}
+	total := b.TotalInputTokens + b.TotalOutputTokens
+	if total == 0 {
+		return 0, false
+	}
+	return float64(total) / float64(n), true
+}
+
+// fmtOverheadDurationCellOrDash renders one "treatment (Δ)" cell in
+// time units, or "—" when either side wasn't measured. Padding
+// matches the column header in writeOverheadBlock.
+func fmtOverheadDurationCellOrDash(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return fmt.Sprintf("%-16s", "—")
+	}
+	delta := treatment - baseline
+	return fmt.Sprintf("%-6s (%+.2fs)", fmtMs(int64(treatment)), delta/1000.0)
+}
+
+// fmtOverheadTokenCellOrDash renders one "treatment (Δ)" cell in
+// tokens (k-notation for readability). Same dash-on-unmeasured
+// semantics as fmtOverheadDurationCellOrDash.
+func fmtOverheadTokenCellOrDash(treatment, baseline float64, measured bool) string {
+	if !measured {
+		return fmt.Sprintf("%-16s", "—")
+	}
+	delta := treatment - baseline
+	return fmt.Sprintf("%-7s (%s)", fmtTokens(treatment), fmtTokensSigned(delta))
+}
+
+// fmtTokens formats a token count as "Nk" once it crosses 1000,
+// or "N" below. Matches the per-LLM completion-line shape so a
+// user comparing the bench overhead to a live review's footer
+// gets numbers in the same units.
+func fmtTokens(n float64) string {
+	if n >= 10000 {
+		return fmt.Sprintf("%.0fk", n/1000.0)
+	}
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", n/1000.0)
+	}
+	return fmt.Sprintf("%.0f", n)
+}
+
+// fmtTokensSigned formats a signed token delta with explicit sign,
+// using the same k-notation as fmtTokens. Positive Δ on the tokens
+// column means treatment uses more tokens than baseline — the
+// expected direction; large positives still flag a regression
+// (the pack is paying for itself only when the quality uplift
+// justifies the token cost).
+func fmtTokensSigned(n float64) string {
+	sign := "+"
+	v := n
+	if v < 0 {
+		sign = "-"
+		v = -v
+	}
+	if v >= 10000 {
+		return fmt.Sprintf("%s%.0fk", sign, v/1000.0)
+	}
+	if v >= 1000 {
+		return fmt.Sprintf("%s%.1fk", sign, v/1000.0)
+	}
+	return fmt.Sprintf("%s%.0f", sign, v)
 }
 
 // baselineHasAnyNumericData returns true when the aggregate carries

@@ -147,9 +147,13 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	start := time.Now()
 	mode := modeName(opts.Source)
 
-	output, err := obtainReview(ctx, c, llm, opts)
+	output, usage, err := obtainReview(ctx, c, llm, opts)
 
 	cs := buildBaseScore(c, llm, mode, output, err)
+	if err == nil {
+		cs.InputTokens = usage.InputTokens
+		cs.OutputTokens = usage.OutputTokens
+	}
 
 	// Phase-2 consistency: re-sample the same (case, LLM) up to
 	// opts.Repeat times and record the Jaccard similarity. Each
@@ -265,7 +269,11 @@ func sampleConsistency(ctx context.Context, c Case, llm cli.LLM, opts Options, f
 	attempts = opts.Repeat
 	runs := [][]ProducedFinding{firstRun}
 	for i := 1; i < opts.Repeat; i++ {
-		out, err := obtainReview(ctx, c, llm, opts)
+		// Consistency cares about the produced finding sets only;
+		// token usage from the extra repeats isn't summed into the
+		// uplift aggregates (those measure the primary treatment
+		// pass per case, mirroring the baseline pass's single call).
+		out, _, err := obtainReview(ctx, c, llm, opts)
 		if err != nil {
 			continue
 		}
@@ -278,15 +286,20 @@ func sampleConsistency(ctx context.Context, c Case, llm cli.LLM, opts Options, f
 }
 
 // obtainReview returns the LLM's review markdown for one case, either
-// by invoking the CLI or reading a fixture.
-func obtainReview(ctx context.Context, c Case, llm cli.LLM, opts Options) (string, error) {
+// by invoking the CLI or reading a fixture. The TokenUsage is zero in
+// replay mode (fixtures don't carry token counts) and from any live
+// call where the source CLI didn't expose structured token metadata;
+// callers should treat the zero value as "unknown", not "no tokens
+// used."
+func obtainReview(ctx context.Context, c Case, llm cli.LLM, opts Options) (string, cli.TokenUsage, error) {
 	switch opts.Source {
 	case SourceReplay:
-		return readFixture(opts.ReplayDir, c.ID, llm.Name)
+		out, err := readFixture(opts.ReplayDir, c.ID, llm.Name)
+		return out, cli.TokenUsage{}, err
 	case SourceLive:
 		return runLive(ctx, c, llm, opts.Timeout)
 	default:
-		return "", fmt.Errorf("unknown bench source %d", opts.Source)
+		return "", cli.TokenUsage{}, fmt.Errorf("unknown bench source %d", opts.Source)
 	}
 }
 
@@ -331,13 +344,14 @@ func validateIdentifier(kind, v string) error {
 }
 
 // runLive invokes the LLM CLI with the case's diff and returns the
-// markdown output. Mirrors what internal/multi/orchestrator.go does
-// for a single agent, minus the on-disk save (the bench writes its
-// own report; per-case markdown is already persisted in the dataset).
-func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (string, error) {
+// markdown output plus the per-call TokenUsage. Mirrors what
+// internal/multi/orchestrator.go does for a single agent, minus the
+// on-disk save (the bench writes its own report; per-case markdown
+// is already persisted in the dataset).
+func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (string, cli.TokenUsage, error) {
 	pack, err := prompts.Get(c.Language)
 	if err != nil {
-		return "", fmt.Errorf("load prompt pack for language %q: %w", c.Language, err)
+		return "", cli.TokenUsage{}, fmt.Errorf("load prompt pack for language %q: %w", c.Language, err)
 	}
 	return runLiveWithPrompt(ctx, c, llm, timeout, pack)
 }
@@ -348,21 +362,20 @@ func runLive(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration) (s
 // prompts.BaselinePrompt). Splitting on the system-prompt
 // argument is enough to express "same case, different prompt" —
 // no other code path differs.
-func runLiveWithPrompt(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration, systemPrompt string) (string, error) {
+func runLiveWithPrompt(ctx context.Context, c Case, llm cli.LLM, timeout time.Duration, systemPrompt string) (string, cli.TokenUsage, error) {
 	invoker := cli.NewInvoker(llm)
 	if invoker == nil {
-		return "", fmt.Errorf("no invoker for llm %q", llm.Name)
+		return "", cli.TokenUsage{}, fmt.Errorf("no invoker for llm %q", llm.Name)
 	}
 	timeout = resolveTimeout(timeout, llm)
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	// invoker.Review returns (output, tokenUsage, err) — bench
-	// scoring works against the markdown only; token totals are
-	// already tracked per-run in the live review path and the
-	// bench-aggregate timing/cost view is Phase 2 ("Cost / latency
-	// benchmark" in #56).
-	out, _, err := invoker.Review(cctx, systemPrompt, c.Diff)
-	return out, err
+	// invoker.Review returns (output, tokenUsage, err); bench scoring
+	// works against the markdown only, but the tokenUsage threads
+	// upward into CaseScore.Input/OutputTokens and feeds the v0.9.0
+	// "Overhead vs raw model" leaderboard (treatment vs --uplift
+	// baseline token cost per case).
+	return invoker.Review(cctx, systemPrompt, c.Diff)
 }
 
 // resolveTimeout picks the per-call wall-clock cap, in priority
@@ -392,7 +405,7 @@ func resolveTimeout(provided time.Duration, llm cli.LLM) time.Duration {
 // compared against full treatment coverage, inflating uplift.
 func scoreBaseline(ctx context.Context, c Case, llm cli.LLM, opts Options) (*BaselineScore, error) {
 	start := time.Now()
-	out, err := runLiveWithPrompt(ctx, c, llm, opts.Timeout, prompts.BaselinePrompt)
+	out, usage, err := runLiveWithPrompt(ctx, c, llm, opts.Timeout, prompts.BaselinePrompt)
 	dur := time.Since(start)
 	if err != nil {
 		return nil, err
@@ -405,6 +418,8 @@ func scoreBaseline(ctx context.Context, c Case, llm cli.LLM, opts Options) (*Bas
 		FalseNegatives: cs.FalseNegatives,
 		Produced:       cs.Produced,
 		DurationMs:     dur.Milliseconds(),
+		InputTokens:    usage.InputTokens,
+		OutputTokens:   usage.OutputTokens,
 	}, nil
 }
 
@@ -436,7 +451,25 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 	fillLanguageAggregates(lr)
 	fillConsistencyAggregate(lr)
 	fillTimingAggregates(lr, durations)
+	fillTreatmentTokenAggregate(lr)
 	fillBaselineAggregate(lr)
+}
+
+// fillTreatmentTokenAggregate sums per-case treatment token counts
+// into LLMReport.TotalInput/OutputTokens and records the number of
+// non-error cases as MeasuredCases. The leaderboard uses the latter
+// as the denominator when rendering "tokens per case" in the
+// overhead block — averaging over len(lr.Cases) would skew the mean
+// downward whenever any case errored (its token count is zero).
+func fillTreatmentTokenAggregate(lr *LLMReport) {
+	for _, cs := range lr.Cases {
+		if cs.Error != "" {
+			continue
+		}
+		lr.MeasuredCases++
+		lr.TotalInputTokens += cs.InputTokens
+		lr.TotalOutputTokens += cs.OutputTokens
+	}
 }
 
 // fillBaselineAggregate rolls up CaseScore.Baseline pointers into
@@ -465,6 +498,7 @@ func fillBaselineAggregate(lr *LLMReport) {
 	measuredAny := false
 	attemptedAny := false
 	var totalDur int64
+	var totalIn, totalOut int
 	for _, cs := range lr.Cases {
 		if cs.BaselineError != "" {
 			attemptedAny = true
@@ -476,6 +510,8 @@ func fillBaselineAggregate(lr *LLMReport) {
 		attemptedAny = true
 		b := cs.Baseline
 		totalDur += b.DurationMs
+		totalIn += b.InputTokens
+		totalOut += b.OutputTokens
 		if cs.Clean {
 			cleanCases++
 			cleanFindings += b.Produced
@@ -493,6 +529,8 @@ func fillBaselineAggregate(lr *LLMReport) {
 		TotalDurationMs:       totalDur,
 		MeasuredNonCleanCases: nonCleanScored,
 		MeasuredCleanCases:    cleanCases,
+		TotalInputTokens:      totalIn,
+		TotalOutputTokens:     totalOut,
 	}
 	if measuredAny && nonCleanScored > 0 {
 		agg.Precision = ratio(tp, tp+fp)
