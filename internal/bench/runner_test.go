@@ -385,78 +385,142 @@ func TestFillBaselineAggregate_ZeroAggregateWhenAllBaselinesErrored(t *testing.T
 	}
 }
 
-// TestFillTreatmentTokenAggregate_SumsAcrossSuccessfulCases verifies
-// that the new v0.9.0 token rollup on LLMReport sums tokens only
-// from non-error case frames and uses MeasuredCases as the
-// denominator. Error frames carry zero tokens by construction
-// (buildBaseScore on err path); averaging over len(Cases) would
-// have understated mean-per-case whenever any case errored, which
-// is exactly the noise the "Overhead vs raw model" leaderboard is
-// supposed to surface honestly.
-func TestFillTreatmentTokenAggregate_SumsAcrossSuccessfulCases(t *testing.T) {
+// TestFillOverheadAggregate_PairsTreatmentAndBaseline verifies the
+// paired aggregate that backs the "Overhead vs raw model"
+// leaderboard. The headline invariant: every metric on
+// OverheadAggregate is summed over the SAME case set — cases
+// where treatment succeeded AND baseline succeeded. Reviewers on
+// the v0.9.0 PR (claude self-review + CodeRabbit + Copilot)
+// independently flagged the prior shape as comparing different
+// populations.
+func TestFillOverheadAggregate_PairsTreatmentAndBaseline(t *testing.T) {
 	lr := &LLMReport{
 		Cases: []CaseScore{
-			{CaseID: "ok-1", InputTokens: 1000, OutputTokens: 200, TreatmentDurationMs: 3000},
-			{CaseID: "ok-2", InputTokens: 1500, OutputTokens: 300, TreatmentDurationMs: 5000},
-			{CaseID: "err-1", Error: "timeout", TreatmentDurationMs: 100}, // must not be counted
+			// Paired success: both sides count.
+			{
+				CaseID:              "paired-1",
+				TreatmentDurationMs: 5000,
+				InputTokens:         1000,
+				OutputTokens:        200,
+				Baseline: &BaselineScore{
+					DurationMs: 2000, InputTokens: 600, OutputTokens: 100,
+				},
+			},
+			// Treatment errored but baseline succeeded: must NOT
+			// contribute to either side's sum or to PairedCases —
+			// the pre-fix bug was that baseline duration here
+			// silently inflated the baseline denominator while
+			// treatment skipped the case.
+			{
+				CaseID: "treatment-err-baseline-ok", Error: "timeout",
+				Baseline: &BaselineScore{
+					DurationMs: 1500, InputTokens: 500, OutputTokens: 80,
+				},
+			},
+			// Treatment succeeded but baseline didn't (Baseline nil):
+			// no pair, skip.
+			{
+				CaseID:              "treatment-ok-baseline-missing",
+				TreatmentDurationMs: 4000,
+				InputTokens:         900,
+				OutputTokens:        180,
+				Baseline:            nil,
+			},
 		},
 	}
-	fillTreatmentTokenAggregate(lr)
-	if lr.MeasuredCases != 2 {
-		t.Errorf("MeasuredCases = %d, want 2 (errored case excluded)", lr.MeasuredCases)
+	fillOverheadAggregate(lr)
+	if lr.Overhead == nil {
+		t.Fatal("expected non-nil Overhead aggregate (one case paired)")
 	}
-	if lr.TotalInputTokens != 2500 {
-		t.Errorf("TotalInputTokens = %d, want 2500", lr.TotalInputTokens)
+	if lr.Overhead.PairedCases != 1 {
+		t.Errorf("PairedCases = %d, want 1 (only paired-1 contributes)", lr.Overhead.PairedCases)
 	}
-	if lr.TotalOutputTokens != 500 {
-		t.Errorf("TotalOutputTokens = %d, want 500", lr.TotalOutputTokens)
+	if lr.Overhead.TreatmentDurationMs != 5000 {
+		t.Errorf("TreatmentDurationMs = %d, want 5000", lr.Overhead.TreatmentDurationMs)
 	}
-	// TotalTreatmentDurationMs sums treatment-only wall-clock from
-	// non-error cases. The "err-1" frame contributes its 100ms field
-	// only because we set it for the test — in production it would
-	// be zero (TreatmentDurationMs is only assigned in the err==nil
-	// path of scoreOne) — but the aggregator must filter on Error
-	// regardless so that error frames with stale or non-zero timing
-	// can't leak into the denominator-matched sum.
-	if lr.TotalTreatmentDurationMs != 8000 {
-		t.Errorf("TotalTreatmentDurationMs = %d, want 8000 (3000+5000, error frame excluded)", lr.TotalTreatmentDurationMs)
+	if lr.Overhead.BaselineDurationMs != 2000 {
+		t.Errorf("BaselineDurationMs = %d, want 2000 (must NOT include treatment-err-baseline-ok's 1500ms)", lr.Overhead.BaselineDurationMs)
 	}
 }
 
-// TestFillBaselineAggregate_SumsTokens covers the baseline-side
-// counterpart: the rolled-up LLMBaselineAggregate must carry
-// TotalInputTokens / TotalOutputTokens so the leaderboard can
-// compute the per-case baseline mean against which the treatment
-// mean is compared in the "Overhead vs raw model" table.
-func TestFillBaselineAggregate_SumsTokens(t *testing.T) {
+// TestFillOverheadAggregate_TokenMeasuredCasesOnlyCountsBothSidesNonZero
+// covers the partial-coverage path. cli.TokenUsage uses zero to
+// mean "unknown" (gemini stdout on older versions is the canonical
+// case); a paired case where one side has tokens and the other
+// doesn't must NOT contribute to TokenMeasuredCases or to the
+// token sums — averaging partial data over the full paired count
+// would understate per-case mean exactly when CLI parsers drift.
+func TestFillOverheadAggregate_TokenMeasuredCasesOnlyCountsBothSidesNonZero(t *testing.T) {
 	lr := &LLMReport{
 		Cases: []CaseScore{
+			// Both sides have tokens: counted.
 			{
-				CaseID:        "a",
-				TruePositives: 1, Matched: []MatchPair{{}},
+				CaseID:              "both-tokens",
+				TreatmentDurationMs: 5000,
+				InputTokens:         1000,
+				OutputTokens:        200,
 				Baseline: &BaselineScore{
-					TruePositives: 1, DurationMs: 100,
-					InputTokens: 800, OutputTokens: 120,
+					DurationMs: 2000, InputTokens: 600, OutputTokens: 100,
 				},
 			},
+			// Treatment has tokens, baseline doesn't: tokens NOT counted.
+			// Time still counted (the runner clock is always real).
 			{
-				CaseID: "b", Clean: true,
+				CaseID:              "treatment-tokens-only",
+				TreatmentDurationMs: 6000,
+				InputTokens:         1200,
+				OutputTokens:        250,
 				Baseline: &BaselineScore{
-					Produced: 1, DurationMs: 80,
-					InputTokens: 600, OutputTokens: 60,
+					DurationMs: 2500, InputTokens: 0, OutputTokens: 0,
 				},
 			},
 		},
 	}
-	fillBaselineAggregate(lr)
-	if lr.Baseline == nil {
-		t.Fatal("expected non-nil Baseline aggregate")
+	fillOverheadAggregate(lr)
+	if lr.Overhead == nil {
+		t.Fatal("expected non-nil Overhead aggregate")
 	}
-	if lr.Baseline.TotalInputTokens != 1400 {
-		t.Errorf("baseline TotalInputTokens = %d, want 1400", lr.Baseline.TotalInputTokens)
+	if lr.Overhead.PairedCases != 2 {
+		t.Errorf("PairedCases = %d, want 2 (both paired regardless of token coverage)", lr.Overhead.PairedCases)
 	}
-	if lr.Baseline.TotalOutputTokens != 180 {
-		t.Errorf("baseline TotalOutputTokens = %d, want 180", lr.Baseline.TotalOutputTokens)
+	if lr.Overhead.TokenMeasuredCases != 1 {
+		t.Errorf("TokenMeasuredCases = %d, want 1 (only both-tokens contributes)", lr.Overhead.TokenMeasuredCases)
+	}
+	// Token sums must only include the case where BOTH sides had
+	// tokens. The "treatment-tokens-only" case contributes 1450
+	// tokens to its own side — but if those leak into the paired
+	// sum and we divide by TokenMeasuredCases=1, the renderer
+	// would report 2650 mean tokens (1200+250+1000+200=2650 wrong)
+	// instead of the honest 1200+200=1400 — wait, that's input+output
+	// of just the both-tokens case: 1000+200 = 1200 (treatment).
+	if lr.Overhead.TreatmentInputTokens != 1000 {
+		t.Errorf("TreatmentInputTokens = %d, want 1000 (only both-tokens contributes)", lr.Overhead.TreatmentInputTokens)
+	}
+	if lr.Overhead.TreatmentOutputTokens != 200 {
+		t.Errorf("TreatmentOutputTokens = %d, want 200", lr.Overhead.TreatmentOutputTokens)
+	}
+	if lr.Overhead.BaselineInputTokens != 600 {
+		t.Errorf("BaselineInputTokens = %d, want 600", lr.Overhead.BaselineInputTokens)
+	}
+	if lr.Overhead.BaselineOutputTokens != 100 {
+		t.Errorf("BaselineOutputTokens = %d, want 100", lr.Overhead.BaselineOutputTokens)
+	}
+}
+
+// TestFillOverheadAggregate_NilWhenNoPairs verifies that single-pass
+// benches (no --uplift) leave LLMReport.Overhead nil so the renderer
+// skips the block. The renderer's hasUpliftMeasured gate handles
+// the broader "did --uplift run at all" question; this guards the
+// finer "did any case actually pair" case.
+func TestFillOverheadAggregate_NilWhenNoPairs(t *testing.T) {
+	lr := &LLMReport{
+		Cases: []CaseScore{
+			{CaseID: "x", TreatmentDurationMs: 5000, InputTokens: 1000, Baseline: nil},
+		},
+	}
+	fillOverheadAggregate(lr)
+	if lr.Overhead != nil {
+		t.Errorf("Overhead should be nil when no case paired, got %+v", lr.Overhead)
 	}
 }
 

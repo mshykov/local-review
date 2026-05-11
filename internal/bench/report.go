@@ -177,21 +177,20 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 // tokens does the tool cost me per review?" Sibling section to
 // writeUpliftBlock: quality wins live there, costs live here.
 //
-// Means are computed per case using the MeasuredCases denominator on
-// each side (treatment: LLMReport.MeasuredCases; baseline: sum of
-// MeasuredNonCleanCases + MeasuredCleanCases). A signed Δ keeps the
-// direction unambiguous: positive Δ on either column = treatment
-// costs more than baseline (the expected and acceptable outcome —
-// the table tells you how much more).
+// Means are taken from LLMReport.Overhead, the paired aggregate
+// (cases where BOTH treatment and baseline succeeded). Time uses
+// PairedCases as denominator; tokens use TokenMeasuredCases —
+// see OverheadAggregate doc for the partial-coverage rationale.
 //
-// Gated on hasUpliftMeasured(rep) at the call site; here we only
-// gate per-row to dash cells where either side has zero measured
-// cases. Token cells additionally dash when treatment-side
-// MeasuredCases is non-zero but the rolled-up token total is zero
-// (the CLI parser couldn't extract token metadata — common for
-// gemini stdout that doesn't expose structured-output flags on
-// older versions; rendering "0 (+0)" would mislead users into
-// thinking the call was free).
+// A signed Δ keeps the direction unambiguous: positive Δ on either
+// column = treatment costs more than baseline (the expected
+// outcome — the table tells you how much more).
+//
+// When token coverage was partial (some paired cases reported zero
+// tokens from the CLI parser), an inline note is emitted under the
+// row so readers see "mean is over the token-known subset only"
+// rather than silently consuming a number computed over fewer
+// cases than the rest of the row.
 func writeOverheadBlock(w io.Writer, rep Report) error {
 	if _, err := fmt.Fprintln(w, "\nOverhead vs raw model (lower is better):"); err != nil {
 		return err
@@ -201,112 +200,123 @@ func writeOverheadBlock(w io.Writer, rep Report) error {
 		return err
 	}
 	for _, lr := range rep.LLMReports {
-		tMean, tHave := treatmentMeanDurationMs(lr)
-		bMean, bHave := baselineMeanDurationMs(lr.Baseline)
+		o := lr.Overhead
+		tMean, tHave := treatmentMeanDurationMs(o)
+		bMean, bHave := baselineMeanDurationMs(o)
 		timeCell := fmtOverheadDurationCellOrDash(tMean, bMean, tHave && bHave)
 
-		tTok, tTokHave := treatmentMeanTokens(lr)
-		bTok, bTokHave := baselineMeanTokens(lr.Baseline)
+		tTok, tTokHave := treatmentMeanTokens(o)
+		bTok, bTokHave := baselineMeanTokens(o)
 		tokenCell := fmtOverheadTokenCellOrDash(tTok, bTok, tTokHave && bTokHave)
 
 		if _, err := fmt.Fprintf(w, "%-10s  %s  %s\n",
 			lr.LLM, timeCell, tokenCell); err != nil {
 			return err
 		}
+		if note := overheadCoverageNote(o); note != "" {
+			if _, err := fmt.Fprintf(w, "%-10s  note: %s\n", "", note); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-// treatmentMeanDurationMs returns (mean-ms, true) when MeasuredCases > 0
-// for the treatment side. Returns (0, false) otherwise so renderers
-// know to dash the cell instead of showing a phantom zero.
+// overheadCoverageNote returns a non-empty note when token coverage
+// was partial — TokenMeasuredCases > 0 but < PairedCases. Used by
+// both the text and markdown renderers so the partial-coverage
+// signal lands the same way the baseline-errors warning does.
+// Returns empty when coverage was full, zero (cell will be dashed),
+// or the aggregate is nil.
+func overheadCoverageNote(o *OverheadAggregate) string {
+	if o == nil || o.TokenMeasuredCases == 0 || o.TokenMeasuredCases >= o.PairedCases {
+		return ""
+	}
+	return fmt.Sprintf("tokens measured on %d of %d paired cases; mean is over the token-known subset only",
+		o.TokenMeasuredCases, o.PairedCases)
+}
+
+// treatmentMeanDurationMs returns (mean-ms, true) when at least one
+// case paired (treatment + baseline both succeeded). Returns
+// (0, false) otherwise so renderers know to dash the cell instead
+// of showing a phantom zero.
 //
-// Uses TotalTreatmentDurationMs (treatment-only wall-clock) rather
-// than TotalDurationMs (full per-case wall-clock including baseline
-// + repeats). The overhead leaderboard compares ONE treatment pass
-// against ONE baseline pass; using full per-case wall-clock here
-// would have lumped in the baseline pass's own time and double-
-// counted it against the same baseline that defines the
-// denominator — the v0.9.0 dogfood pass caught this as a
-// numerator/denominator mismatch.
-func treatmentMeanDurationMs(lr LLMReport) (float64, bool) {
-	if lr.MeasuredCases == 0 {
+// Both treatment and baseline duration sums on OverheadAggregate
+// are accumulated over the SAME PairedCases set — that's the whole
+// point of the paired aggregate, and what closes the v0.9.0
+// numerator/denominator-mismatch finding the dogfood pass + CodeRabbit
+// + Copilot all flagged.
+func treatmentMeanDurationMs(o *OverheadAggregate) (float64, bool) {
+	if o == nil || o.PairedCases == 0 {
 		return 0, false
 	}
-	return float64(lr.TotalTreatmentDurationMs) / float64(lr.MeasuredCases), true
+	return float64(o.TreatmentDurationMs) / float64(o.PairedCases), true
 }
 
-// baselineMeanDurationMs is the baseline-side counterpart. The
-// denominator sums both buckets (non-clean + clean) because
-// baseline timing applies to every successful baseline pass
-// regardless of cleanliness, unlike F1/precision/recall which
-// gate per-bucket.
-func baselineMeanDurationMs(b *LLMBaselineAggregate) (float64, bool) {
-	if b == nil {
+// baselineMeanDurationMs is the baseline-side counterpart, divided
+// by the SAME PairedCases denominator.
+func baselineMeanDurationMs(o *OverheadAggregate) (float64, bool) {
+	if o == nil || o.PairedCases == 0 {
 		return 0, false
 	}
-	n := b.MeasuredNonCleanCases + b.MeasuredCleanCases
-	if n == 0 {
-		return 0, false
-	}
-	return float64(b.TotalDurationMs) / float64(n), true
+	return float64(o.BaselineDurationMs) / float64(o.PairedCases), true
 }
 
-// treatmentMeanTokens returns (mean-tokens, true) when MeasuredCases > 0
-// AND the rolled-up token total is non-zero. The second gate matters
-// because the CLI parsers leave InputTokens/OutputTokens at zero
-// when they can't extract structured token metadata (gemini stdout
-// on older versions is the canonical case); a zero mean from that
-// path would render as "0 (+0)" and mislead users into thinking the
-// call cost no tokens.
-func treatmentMeanTokens(lr LLMReport) (float64, bool) {
-	if lr.MeasuredCases == 0 {
+// treatmentMeanTokens returns (mean-tokens, true) when at least one
+// paired case had BOTH sides report non-zero TokenUsage from their
+// CLI parser. Returns (0, false) otherwise — including the partial
+// case where some paired cases lacked tokens but others had them;
+// the renderer surfaces that case via overheadCoverageNote rather
+// than letting the helper average a real sum over fewer cases than
+// the row implies.
+//
+// Closes the v0.9.0 PR warning (CodeRabbit + Copilot + claude
+// self-review): TokenUsage uses zero to mean "unknown", not
+// "0 tokens spent", and the prior helper divided rolled-up totals
+// by all measured cases — understating mean tokens/case under
+// partial coverage.
+func treatmentMeanTokens(o *OverheadAggregate) (float64, bool) {
+	if o == nil || o.TokenMeasuredCases == 0 {
 		return 0, false
 	}
-	total := lr.TotalInputTokens + lr.TotalOutputTokens
-	if total == 0 {
-		return 0, false
-	}
-	return float64(total) / float64(lr.MeasuredCases), true
+	total := o.TreatmentInputTokens + o.TreatmentOutputTokens
+	return float64(total) / float64(o.TokenMeasuredCases), true
 }
 
-// baselineMeanTokens is the baseline-side counterpart, with the
-// same "zero total → dash" guard as treatmentMeanTokens.
-func baselineMeanTokens(b *LLMBaselineAggregate) (float64, bool) {
-	if b == nil {
+// baselineMeanTokens is the baseline-side counterpart.
+func baselineMeanTokens(o *OverheadAggregate) (float64, bool) {
+	if o == nil || o.TokenMeasuredCases == 0 {
 		return 0, false
 	}
-	n := b.MeasuredNonCleanCases + b.MeasuredCleanCases
-	if n == 0 {
-		return 0, false
-	}
-	total := b.TotalInputTokens + b.TotalOutputTokens
-	if total == 0 {
-		return 0, false
-	}
-	return float64(total) / float64(n), true
+	total := o.BaselineInputTokens + o.BaselineOutputTokens
+	return float64(total) / float64(o.TokenMeasuredCases), true
 }
 
 // fmtOverheadDurationCellOrDash renders one "treatment (Δ)" cell in
-// time units, or "—" when either side wasn't measured. Padding
-// matches the column header in writeOverheadBlock.
+// time units, or "—" when either side wasn't measured. Padded to
+// the same width as the dash variant so columns line up regardless
+// of measurement state — the v0.9.0 self-review nit was that the
+// numeric variant rendered at width 15 and the dash variant at
+// width 16, leaving a one-char shimmy when rows mixed.
 func fmtOverheadDurationCellOrDash(treatment, baseline float64, measured bool) string {
 	if !measured {
 		return fmt.Sprintf("%-16s", "—")
 	}
 	delta := treatment - baseline
-	return fmt.Sprintf("%-6s (%+.2fs)", fmtMs(int64(treatment)), delta/1000.0)
+	cell := fmt.Sprintf("%s (%+.2fs)", fmtMs(int64(treatment)), delta/1000.0)
+	return fmt.Sprintf("%-16s", cell)
 }
 
 // fmtOverheadTokenCellOrDash renders one "treatment (Δ)" cell in
 // tokens (k-notation for readability). Same dash-on-unmeasured
-// semantics as fmtOverheadDurationCellOrDash.
+// semantics as fmtOverheadDurationCellOrDash, same column width.
 func fmtOverheadTokenCellOrDash(treatment, baseline float64, measured bool) string {
 	if !measured {
 		return fmt.Sprintf("%-16s", "—")
 	}
 	delta := treatment - baseline
-	return fmt.Sprintf("%-7s (%s)", fmtTokens(treatment), fmtTokensSigned(delta))
+	cell := fmt.Sprintf("%s (%s)", fmtTokens(treatment), fmtTokensSigned(delta))
+	return fmt.Sprintf("%-16s", cell)
 }
 
 // fmtTokens formats a token count as "Nk" once it crosses 1000,

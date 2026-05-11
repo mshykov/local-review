@@ -294,18 +294,27 @@ func TestWriteMarkdown_RendersOverheadBlock(t *testing.T) {
 		Generated: time.Now(),
 		LLMReports: []LLMReport{
 			{
-				LLM:                      "claude",
-				Cases:                    []CaseScore{{CaseID: "a"}, {CaseID: "b"}},
-				MeasuredCases:            2,
-				TotalDurationMs:          14000, // full wall-clock (incl baseline+repeats); deliberately != TotalTreatmentDurationMs
-				TotalTreatmentDurationMs: 10000, // 5s mean — overhead block uses this
-				TotalInputTokens:         20000,
-				TotalOutputTokens:        4000, // 12k mean total
+				LLM:   "claude",
+				Cases: []CaseScore{{CaseID: "a"}, {CaseID: "b"}},
+				// Paired aggregate is what the overhead block reads.
+				// Time means: treatment 10000/2 = 5s, baseline 4000/2 = 2s, Δ = +3.00s.
+				// Token means: treatment 24k/2 = 12k, baseline 7k/2 = 3.5k, Δ = +8.5k.
+				Overhead: &OverheadAggregate{
+					PairedCases:           2,
+					TreatmentDurationMs:   10000,
+					BaselineDurationMs:    4000,
+					TokenMeasuredCases:    2,
+					TreatmentInputTokens:  20000,
+					TreatmentOutputTokens: 4000,
+					BaselineInputTokens:   6000,
+					BaselineOutputTokens:  1000,
+				},
+				// LLMBaselineAggregate must be present for hasUpliftMeasured
+				// to surface the overhead block — the gate is at the call
+				// site in WriteMarkdown, not in writeMarkdownOverhead itself.
 				Baseline: &LLMBaselineAggregate{
 					MeasuredNonCleanCases: 1, MeasuredCleanCases: 1,
-					TotalDurationMs:   4000, // 2s mean
-					TotalInputTokens:  6000,
-					TotalOutputTokens: 1000, // 3.5k mean total
+					TotalDurationMs: 4000,
 				},
 			},
 		},
@@ -319,12 +328,57 @@ func TestWriteMarkdown_RendersOverheadBlock(t *testing.T) {
 		"## Overhead vs raw model",
 		"| LLM | Time/case (Δ) | Tokens/case (Δ) |",
 		"| claude |",
-		"+3.00s", // 5.0s - 2.0s = +3.00s
-		"+8.5k",  // 12.0k - 3.5k = +8.5k
+		"+3.00s",
+		"+8.5k",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("overhead block missing %q\n--- output ---\n%s", want, out)
 		}
+	}
+	// Full coverage → no italic note line.
+	if strings.Contains(out, "tokens measured on") {
+		t.Errorf("coverage note should be omitted when TokenMeasuredCases == PairedCases\n--- output ---\n%s", out)
+	}
+}
+
+// TestWriteMarkdown_OverheadEmitsCoverageNoteOnPartialTokens covers
+// the partial-coverage path from the v0.9.0 PR review (CodeRabbit +
+// Copilot warning): when some paired cases reported zero tokens
+// from the CLI parser, the token mean is honestly computed over
+// only the cases that did, but the leaderboard surfaces the gap
+// via an italic note line under the table.
+func TestWriteMarkdown_OverheadEmitsCoverageNoteOnPartialTokens(t *testing.T) {
+	rep := Report{
+		Dataset: "x", CaseCount: 3, Mode: "cli",
+		Generated: time.Now(),
+		LLMReports: []LLMReport{
+			{
+				LLM:   "claude",
+				Cases: []CaseScore{{CaseID: "a"}, {CaseID: "b"}, {CaseID: "c"}},
+				Overhead: &OverheadAggregate{
+					PairedCases:           3,
+					TreatmentDurationMs:   15000,
+					BaselineDurationMs:    6000,
+					TokenMeasuredCases:    2, // 2 of 3 had tokens from both sides
+					TreatmentInputTokens:  20000,
+					TreatmentOutputTokens: 4000,
+					BaselineInputTokens:   6000,
+					BaselineOutputTokens:  1000,
+				},
+				Baseline: &LLMBaselineAggregate{
+					MeasuredNonCleanCases: 2, MeasuredCleanCases: 1,
+					TotalDurationMs: 6000,
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := WriteMarkdown(&buf, rep); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "_claude: tokens measured on 2 of 3 paired cases") {
+		t.Errorf("expected partial-coverage note for claude (2 of 3); got:\n%s", out)
 	}
 }
 
@@ -340,16 +394,18 @@ func TestWriteMarkdown_OverheadDashesWhenTokensUnmeasured(t *testing.T) {
 		Generated: time.Now(),
 		LLMReports: []LLMReport{
 			{
-				LLM:                      "gemini",
-				Cases:                    []CaseScore{{CaseID: "a"}},
-				MeasuredCases:            1,
-				TotalDurationMs:          3000,
-				TotalTreatmentDurationMs: 3000,
-				// Tokens deliberately zero — CLI parser couldn't extract them.
+				LLM:   "gemini",
+				Cases: []CaseScore{{CaseID: "a"}},
+				// One paired case but no tokens from either side
+				// (TokenMeasuredCases stays 0). Time still measured.
+				Overhead: &OverheadAggregate{
+					PairedCases:         1,
+					TreatmentDurationMs: 3000,
+					BaselineDurationMs:  1000,
+				},
 				Baseline: &LLMBaselineAggregate{
 					MeasuredNonCleanCases: 1,
 					TotalDurationMs:       1000,
-					// Baseline tokens also zero.
 				},
 			},
 		},

@@ -150,12 +150,15 @@ func scoreOne(ctx context.Context, c Case, llm cli.LLM, opts Options) CaseScore 
 	// Treatment-pass wall-clock captured separately from the full
 	// scoreOne span so the "Overhead vs raw model" leaderboard
 	// (v0.9.0) gets an apples-to-apples comparison against the
-	// baseline pass's single-call duration. cs.DurationMs further
-	// down still measures the full per-case spend (treatment +
-	// repeats + baseline) for the Overall median/p95 view.
-	treatmentStart := time.Now()
+	// baseline pass's single-call duration. We reuse `start` as
+	// the treatment-start anchor (obtainReview is the first thing
+	// scoreOne does) — the v0.9.0 self-review flagged the prior
+	// shape's back-to-back time.Now() calls as two clock reads
+	// where one suffices. cs.DurationMs further down still measures
+	// the full per-case spend (treatment + repeats + baseline) for
+	// the Overall median/p95 view.
 	output, usage, err := obtainReview(ctx, c, llm, opts)
-	treatmentDur := time.Since(treatmentStart)
+	treatmentDur := time.Since(start)
 
 	cs := buildBaseScore(c, llm, mode, output, err)
 	if err == nil {
@@ -460,35 +463,58 @@ func fillAggregates(lr *LLMReport, durations []time.Duration) {
 	fillLanguageAggregates(lr)
 	fillConsistencyAggregate(lr)
 	fillTimingAggregates(lr, durations)
-	fillTreatmentTokenAggregate(lr)
 	fillBaselineAggregate(lr)
+	fillOverheadAggregate(lr)
 }
 
-// fillTreatmentTokenAggregate sums per-case treatment token counts
-// into LLMReport.TotalInput/OutputTokens, the per-case treatment-
-// pass duration into LLMReport.TotalTreatmentDurationMs, and records
-// the number of non-error cases as MeasuredCases. The leaderboard
-// uses MeasuredCases as the denominator when rendering "tokens per
-// case" / "treatment time per case" in the overhead block —
-// averaging over len(lr.Cases) would skew the mean downward whenever
-// any case errored (its token / duration contributions are zero).
+// fillOverheadAggregate builds the paired view that backs the
+// "Overhead vs raw model" leaderboard. Walks lr.Cases and, for
+// every case where treatment.Error == "" AND cs.Baseline != nil,
+// adds the treatment-pass duration and the baseline-pass duration
+// to the matching paired-sums. Token sums are only added when BOTH
+// sides reported non-zero TokenUsage, keeping the per-case token
+// mean honest under partial CLI-parser coverage.
 //
-// Treatment duration is accumulated here (not in fillTimingAggregates)
-// because it is a treatment-only number — fillTimingAggregates' input
-// already lumps in baseline + repeat wall-clock for the Overall
-// median/p95 view, which is the right denominator for "did the run
-// get slower?" but the wrong one for "what does the tool cost on top
-// of a raw-LLM call?". Keeping the two duration aggregates in
-// separate functions makes the contract explicit.
-func fillTreatmentTokenAggregate(lr *LLMReport) {
+// Reviewers (claude self-review + CodeRabbit + Copilot, on the
+// v0.9.0 PR) flagged the pre-fix shape — independent
+// LLMReport.MeasuredCases (treatment-side) vs
+// MeasuredNonCleanCases + MeasuredCleanCases (baseline-side) — as
+// comparing different populations. A treatment-error case where
+// baseline succeeded contributed to one mean's denominator but not
+// the other, and the Δ stopped meaning "extra cost for the same
+// review." fillOverheadAggregate fixes that by pairing case-by-case
+// before summing.
+//
+// Sets lr.Overhead only when at least one case paired; nil
+// otherwise so the renderer can skip the block.
+func fillOverheadAggregate(lr *LLMReport) {
+	var agg OverheadAggregate
 	for _, cs := range lr.Cases {
-		if cs.Error != "" {
+		if cs.Error != "" || cs.Baseline == nil {
 			continue
 		}
-		lr.MeasuredCases++
-		lr.TotalInputTokens += cs.InputTokens
-		lr.TotalOutputTokens += cs.OutputTokens
-		lr.TotalTreatmentDurationMs += cs.TreatmentDurationMs
+		agg.PairedCases++
+		agg.TreatmentDurationMs += cs.TreatmentDurationMs
+		agg.BaselineDurationMs += cs.Baseline.DurationMs
+
+		// Token sums only over cases where BOTH sides reported
+		// non-zero TokenUsage. cli.TokenUsage uses zero values to
+		// mean "unknown" (gemini stdout on older versions is the
+		// canonical case); adding partial data here and dividing
+		// by PairedCases would understate the per-case mean
+		// exactly when CLI parsers drift.
+		tTok := cs.InputTokens + cs.OutputTokens
+		bTok := cs.Baseline.InputTokens + cs.Baseline.OutputTokens
+		if tTok > 0 && bTok > 0 {
+			agg.TokenMeasuredCases++
+			agg.TreatmentInputTokens += cs.InputTokens
+			agg.TreatmentOutputTokens += cs.OutputTokens
+			agg.BaselineInputTokens += cs.Baseline.InputTokens
+			agg.BaselineOutputTokens += cs.Baseline.OutputTokens
+		}
+	}
+	if agg.PairedCases > 0 {
+		lr.Overhead = &agg
 	}
 }
 
@@ -518,7 +544,6 @@ func fillBaselineAggregate(lr *LLMReport) {
 	measuredAny := false
 	attemptedAny := false
 	var totalDur int64
-	var totalIn, totalOut int
 	for _, cs := range lr.Cases {
 		if cs.BaselineError != "" {
 			attemptedAny = true
@@ -530,8 +555,6 @@ func fillBaselineAggregate(lr *LLMReport) {
 		attemptedAny = true
 		b := cs.Baseline
 		totalDur += b.DurationMs
-		totalIn += b.InputTokens
-		totalOut += b.OutputTokens
 		if cs.Clean {
 			cleanCases++
 			cleanFindings += b.Produced
@@ -549,8 +572,6 @@ func fillBaselineAggregate(lr *LLMReport) {
 		TotalDurationMs:       totalDur,
 		MeasuredNonCleanCases: nonCleanScored,
 		MeasuredCleanCases:    cleanCases,
-		TotalInputTokens:      totalIn,
-		TotalOutputTokens:     totalOut,
 	}
 	if measuredAny && nonCleanScored > 0 {
 		agg.Precision = ratio(tp, tp+fp)
