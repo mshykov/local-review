@@ -64,7 +64,19 @@ No marketing numbers in this README — they'd go stale. Read [`bench/RESULTS.md
 brew install mshykov/tap/local-review
 ```
 
-Or `curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh`, or grab a binary from [Releases](https://github.com/mshykov/local-review/releases), or `go install github.com/mshykov/local-review/cmd/local-review@latest`.
+Or
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
+```
+
+Or
+
+```sh
+go install github.com/mshykov/local-review/cmd/local-review@latest
+```
+
+Or grab a binary from [Releases](https://github.com/mshykov/local-review/releases).
 
 **2. Authenticate at least one LLM.** Claude is the easiest free option:
 
