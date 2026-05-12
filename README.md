@@ -64,13 +64,13 @@ No marketing numbers in this README — they'd go stale. Read [`bench/RESULTS.md
 brew install mshykov/tap/local-review
 ```
 
-Or 
+Or
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
 ```
 
-Or 
+Or
 
 ```sh
 go install github.com/mshykov/local-review/cmd/local-review@latest
