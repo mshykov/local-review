@@ -20,8 +20,8 @@ expected_keywords:
   - "parameterized"
   - "f-string"
   - "string concatenation"
-  - "unsanitized"
-  - "user input"
-  - "injection"
+  - "unsanitized input"
+  - "unsanitized user input"
+  - "untrusted input"
 expected_files:
   - search.py

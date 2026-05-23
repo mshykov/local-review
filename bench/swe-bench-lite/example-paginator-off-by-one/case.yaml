@@ -18,7 +18,9 @@ expected_keywords:
   - "integer division"
   - "math.ceil"
   - "remainder"
-  - "missing"
+  - "missing page"
+  - "missing last"
+  - "drops the remainder"
   - "floor division"
 expected_files:
   - paginator.py

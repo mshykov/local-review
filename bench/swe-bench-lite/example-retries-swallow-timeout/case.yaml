@@ -18,10 +18,10 @@ description: |
 expected_keywords:
   - "except Exception"
   - "bare except"
-  - "swallows"
-  - "swallow"
-  - "too broad"
+  - "swallows exceptions"
+  - "swallow exceptions"
   - "broad exception"
+  - "too broad exception"
   - "catches too much"
   - "hides errors"
   - "silent retry"
