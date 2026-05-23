@@ -1,0 +1,24 @@
+id: example-paginator-off-by-one
+source: "synthetic — django-shaped paginator off-by-one (real SWE-bench-lite tasks pending curation)"
+language: python
+title: "Paginator drops the last item when total_pages is exact"
+description: |
+  The diff replaces `math.ceil(len(self.items) / self.per_page)` with
+  `len(self.items) // self.per_page` in the `num_pages` property.
+  Integer division drops the remainder, so any item count that isn't
+  an exact multiple of `per_page` loses its final page entirely —
+  e.g. 10 items / 3 per_page reports 3 pages instead of 4, and the
+  last item is unreachable through page_range().
+
+  Original issue describes "last item missing from paginated results
+  when total count is not a multiple of page size."
+expected_keywords:
+  - "off-by-one"
+  - "last page"
+  - "integer division"
+  - "math.ceil"
+  - "remainder"
+  - "missing"
+  - "floor division"
+expected_files:
+  - paginator.py

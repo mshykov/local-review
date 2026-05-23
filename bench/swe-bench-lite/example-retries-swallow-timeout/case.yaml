@@ -1,0 +1,29 @@
+id: example-retries-swallow-timeout
+source: "synthetic — requests-shaped retry-loop exception swallow (real SWE-bench-lite tasks pending curation)"
+language: python
+title: "Retry loop catches TimeoutError and silently continues"
+description: |
+  The HTTP client's retry loop catches `TimeoutError` alongside the
+  intended `ConnectionError`, but the bug-introducing diff broadens
+  the `except` to a bare `except Exception` that also swallows
+  `KeyboardInterrupt`-derived and validation errors.  The original
+  contract was "retry on transient network failures only"; the
+  patched form retries on ANY exception, including programmer bugs,
+  hiding failures behind silent retries and exhausting the retry
+  budget on errors that will never recover.
+
+  Original issue describes "client hangs for full retry budget on a
+  TypeError thrown inside response parser — should have raised
+  immediately."
+expected_keywords:
+  - "except Exception"
+  - "bare except"
+  - "swallows"
+  - "swallow"
+  - "too broad"
+  - "broad exception"
+  - "catches too much"
+  - "hides errors"
+  - "silent retry"
+expected_files:
+  - client.py

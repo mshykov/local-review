@@ -1,0 +1,15 @@
+diff --git a/client.py b/client.py
+index aa11bb2..cc33dd4 100644
+--- a/client.py
++++ b/client.py
+@@ -42,10 +42,10 @@ class HTTPClient:
+     def _do_with_retries(self, request):
+         last_exc = None
+         for attempt in range(self.max_retries):
+             try:
+                 return self._send(request)
+-            except (ConnectionError, TimeoutError) as exc:
++            except Exception as exc:
+                 last_exc = exc
+                 time.sleep(self._backoff(attempt))
+         raise last_exc
