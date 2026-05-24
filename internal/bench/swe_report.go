@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // WriteTextSWE prints the SWE-bench catch-rate summary to w. Format
@@ -244,12 +245,5 @@ func fmtSWEPercent(lr SWEBenchLLMReport) string {
 // the existing bench per-case lines use; keeps the columns
 // scannable when LLM names are short.
 func joinWithDouble(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += "  "
-		}
-		out += p
-	}
-	return out
+	return strings.Join(parts, "  ")
 }

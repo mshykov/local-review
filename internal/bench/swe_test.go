@@ -529,6 +529,21 @@ func TestWriteJSONSWE_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestJoinWithDouble preserves the text renderer's two-space column
+// separator while avoiding quadratic string concatenation in the
+// helper implementation.
+func TestJoinWithDouble(t *testing.T) {
+	if got := joinWithDouble(nil); got != "" {
+		t.Errorf("joinWithDouble(nil) = %q, want empty string", got)
+	}
+	if got := joinWithDouble([]string{"claude:caught"}); got != "claude:caught" {
+		t.Errorf("joinWithDouble(single) = %q, want single element unchanged", got)
+	}
+	if got := joinWithDouble([]string{"claude:caught", "codex:missed", "gemini:err"}); got != "claude:caught  codex:missed  gemini:err" {
+		t.Errorf("joinWithDouble(many) = %q, want double-space join", got)
+	}
+}
+
 // mkSWECase writes <root>/<id>/{case.yaml, diff.patch} for tests.
 func mkSWECase(t *testing.T, root, id, caseYAML, diffBody string) {
 	t.Helper()
