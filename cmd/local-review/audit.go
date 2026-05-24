@@ -109,7 +109,13 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 	defer stop()
 
 	if af.topic == "" {
-		topics, _ := prompts.AvailableAuditTopics()
+		// AvailableAuditTopics failure means the embed is broken;
+		// the user needs to know that, not see "(available: )"
+		// with an empty parenthetical. CLAUDE.md rule 4.
+		topics, listErr := prompts.AvailableAuditTopics()
+		if listErr != nil {
+			return fmt.Errorf("--topic is required (also failed to list available topics: %w)", listErr)
+		}
 		return fmt.Errorf("--topic is required (available: %s)", strings.Join(topics, ", "))
 	}
 

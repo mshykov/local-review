@@ -292,7 +292,14 @@ func GetAuditPack(topic string) (string, error) {
 	}
 	b, err := fs.ReadFile("audit/" + topic + ".md")
 	if err != nil {
-		avail, _ := AvailableAuditTopics()
+		// Propagate the listing error when present — a failure to
+		// enumerate available topics means the binary's embed is
+		// corrupted and the user needs to know that, not see an
+		// empty "(available: )" parenthetical. CLAUDE.md rule 4.
+		avail, listErr := AvailableAuditTopics()
+		if listErr != nil {
+			return "", fmt.Errorf("audit topic %q not found (also failed to list available topics: %w)", topic, listErr)
+		}
 		return "", fmt.Errorf("audit topic %q not found (available: %s)", topic, strings.Join(avail, ", "))
 	}
 	return string(b), nil
