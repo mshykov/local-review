@@ -196,43 +196,43 @@ func Walk(opts WalkOptions) ([]Chunk, error) {
 // `prompt_too_long` on every one. Out of 343 Android packages,
 // 321 errored that way.
 func splitChunk(root, pkg string, paths []string, maxBytes int, warn io.Writer) ([]Chunk, error) {
-	type bin struct {
-		files []string
-		size  int
+	bins, err := packBins(root, paths, maxBytes, warn)
+	if err != nil {
+		return nil, err
 	}
-	var bins []bin
-	cur := bin{}
+	return assembleChunks(root, pkg, bins, maxBytes, warn)
+}
+
+// fileBin holds one group of files that should be sent to the LLM
+// as a single chunk. Internal to splitChunk's bin-packing pass;
+// not exported to keep the public surface small.
+type fileBin struct {
+	files []string
+	size  int // estimated; actual concat size is computed in assembleChunks
+}
+
+// packBins is splitChunk's bin-packing pass: walks the input paths
+// in order and produces []fileBin, each respecting maxBytes
+// (except single-file bins where the file alone exceeds the cap —
+// those get a warning and pass through). Pulled out of splitChunk
+// so the cognitive-complexity budget on the orchestrator stays
+// under Sonar's threshold; same decomposition pattern as
+// cmd/local-review/runner.go.
+func packBins(root string, paths []string, maxBytes int, warn io.Writer) ([]fileBin, error) {
+	var bins []fileBin
+	cur := fileBin{}
 	for _, p := range paths {
-		full := filepath.Join(root, p)
-		info, statErr := os.Stat(full)
-		if statErr != nil {
-			return nil, fmt.Errorf("stat %s: %w", p, statErr)
+		fileSize, err := estimateFileSize(root, p)
+		if err != nil {
+			return nil, err
 		}
-		// Per-file overhead estimate: the `// === FILE: <p> ===\n`
-		// marker plus a trailing newline. Small but accumulates.
-		fileSize := int(info.Size()) + len(p) + fileMarkerOverhead
-		// Single file over the cap: flush the current bin (if any)
-		// to keep its bin-mate files together, then emit the
-		// oversized file as its own bin. The warning fires for
-		// the user's awareness.
 		if fileSize > maxBytes {
-			if len(cur.files) > 0 {
-				bins = append(bins, cur)
-				cur = bin{}
-			}
-			if warn != nil {
-				_, _ = fmt.Fprintf(warn, "warning: file %s is %s (over %s per-chunk cap); cannot split a single file across chunks, LLM may refuse this chunk\n",
-					p, FormatBytes(fileSize), FormatBytes(maxBytes))
-			}
-			bins = append(bins, bin{files: []string{p}, size: fileSize})
+			bins = flushAndAppendOversized(bins, &cur, p, fileSize, maxBytes, warn)
 			continue
 		}
-		// Would this file overflow the current bin? Start a new
-		// one. The check is "current + new > cap" so a freshly
-		// flushed bin can still take a sub-cap file.
 		if cur.size+fileSize > maxBytes && len(cur.files) > 0 {
 			bins = append(bins, cur)
-			cur = bin{}
+			cur = fileBin{}
 		}
 		cur.files = append(cur.files, p)
 		cur.size += fileSize
@@ -240,36 +240,86 @@ func splitChunk(root, pkg string, paths []string, maxBytes int, warn io.Writer) 
 	if len(cur.files) > 0 {
 		bins = append(bins, cur)
 	}
+	return bins, nil
+}
 
+// estimateFileSize returns the bin-packing estimate for one file:
+// on-disk size + the per-file marker overhead concatFiles will
+// emit around it. Doesn't read the file body — uses os.Stat to
+// keep the bin-pack pass cheap (single stat per file vs reading
+// every file twice).
+func estimateFileSize(root, p string) (int, error) {
+	full := filepath.Join(root, p)
+	info, err := os.Stat(full)
+	if err != nil {
+		return 0, fmt.Errorf("stat %s: %w", p, err)
+	}
+	return int(info.Size()) + len(p) + fileMarkerOverhead, nil
+}
+
+// flushAndAppendOversized handles the single-file-over-cap case:
+// flushes the current bin (so its bin-mates stay together), warns
+// the user, and emits the oversized file as its own bin. Returns
+// the new bins slice; the caller's cur bin is reset to empty.
+func flushAndAppendOversized(bins []fileBin, cur *fileBin, p string, fileSize, maxBytes int, warn io.Writer) []fileBin {
+	if len(cur.files) > 0 {
+		bins = append(bins, *cur)
+		*cur = fileBin{}
+	}
+	if warn != nil {
+		_, _ = fmt.Fprintf(warn, "warning: file %s is %s (over %s per-chunk cap); cannot split a single file across chunks, LLM may refuse this chunk\n",
+			p, FormatBytes(fileSize), FormatBytes(maxBytes))
+	}
+	return append(bins, fileBin{files: []string{p}, size: fileSize})
+}
+
+// assembleChunks turns the bin-packer's []fileBin into the final
+// []Chunk: concatenates each bin's files, labels multi-bin
+// packages as `pkg [part N/M]`, and surfaces the post-flight
+// drift warning if the actual concat size exceeded the estimate
+// for a multi-file bin (single-file bins were already warned
+// about during packing, so no double-fire here).
+func assembleChunks(root, pkg string, bins []fileBin, maxBytes int, warn io.Writer) ([]Chunk, error) {
 	out := make([]Chunk, 0, len(bins))
 	for i, b := range bins {
 		body, size, err := concatFiles(root, b.files)
 		if err != nil {
 			return nil, err
 		}
-		// Post-flight check: if the actual concat size exceeded
-		// the cap even though the bin-pack estimate said it
-		// wouldn't, surface the drift. Happens only when
-		// fileMarkerOverhead under-estimates (shouldn't, but
-		// belt-and-braces) OR when a single-file bin is over the
-		// cap (which the per-file check already warned about, so
-		// no second warning here — we just avoid double-fire).
-		if size > maxBytes && len(b.files) > 1 && warn != nil {
-			_, _ = fmt.Fprintf(warn, "warning: %s chunk %d/%d packed to %s after concat (over %s estimate); bin-pack overhead drift, LLM may refuse this chunk\n",
-				pkg, i+1, len(bins), FormatBytes(size), FormatBytes(maxBytes))
-		}
-		label := pkg
-		if len(bins) > 1 {
-			label = fmt.Sprintf("%s [part %d/%d]", pkg, i+1, len(bins))
-		}
+		warnPostFlightDrift(pkg, i, len(bins), b.files, size, maxBytes, warn)
 		out = append(out, Chunk{
-			Package:   label,
+			Package:   labelChunk(pkg, i, len(bins)),
 			Files:     b.files,
 			Body:      body,
 			SizeBytes: size,
 		})
 	}
 	return out, nil
+}
+
+// warnPostFlightDrift fires when a multi-file bin's actual concat
+// size exceeded the cap that the bin-pack estimate said it should
+// fit under. Belt-and-braces guard: if fileMarkerOverhead ever
+// drifts low or concatFiles ever changes its emission shape, this
+// catches it loudly instead of silently shipping an oversized
+// chunk. Single-file bins skip — they were warned about during
+// packing.
+func warnPostFlightDrift(pkg string, i, n int, files []string, size, maxBytes int, warn io.Writer) {
+	if size <= maxBytes || len(files) <= 1 || warn == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(warn, "warning: %s chunk %d/%d packed to %s after concat (over %s estimate); bin-pack overhead drift, LLM may refuse this chunk\n",
+		pkg, i+1, n, FormatBytes(size), FormatBytes(maxBytes))
+}
+
+// labelChunk renders the per-chunk package name: just the pkg
+// name when there's a single bin, `pkg [part N/M]` when there
+// are multiple.
+func labelChunk(pkg string, i, n int) string {
+	if n <= 1 {
+		return pkg
+	}
+	return fmt.Sprintf("%s [part %d/%d]", pkg, i+1, n)
 }
 
 // fileMarkerOverhead is the per-file byte overhead concatFiles adds
