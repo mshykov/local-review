@@ -322,7 +322,7 @@ func RunSWE(ctx context.Context, cases []SWEBenchCase, opts Options) (SWEBenchRe
 		return SWEBenchReport{}, fmt.Errorf("--uplift is not meaningful in --swe-bench mode (binary catch/miss scoring); drop --uplift")
 	}
 	if opts.Repeat > 1 {
-		return SWEBenchReport{}, fmt.Errorf("--repeat > 1 is not yet supported in --swe-bench mode; drop --repeat (consistency tier planned for a later release)")
+		return SWEBenchReport{}, fmt.Errorf("--repeat > 1 is not yet supported in --swe-bench mode (the consistency aggregation semantics for binary catch scoring — 'caught-if-any-run-caught' vs 'caught-if-all-runs-caught' — are contentious enough to defer until we see real usage); drop --repeat or run separate single-pass invocations")
 	}
 
 	rep := SWEBenchReport{
