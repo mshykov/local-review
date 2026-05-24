@@ -34,10 +34,6 @@ type auditFlags struct {
 	// extension is .json, JSON shape is written instead.
 	out string
 
-	// jsonOut emits JSON to stdout instead of the text summary.
-	// Same shape as the existing bench --json flag.
-	jsonOut bool
-
 	// dryRun prints the audit plan (chunk count, file count per
 	// chunk, total bytes) without invoking the LLM. Lets a user
 	// preview the cost / scope before paying tokens.
@@ -97,7 +93,11 @@ committed.`,
 	cmd.Flags().StringVar(&af.include, "include", "", "comma-separated path prefixes to include (default: all auditable tracked files)")
 	cmd.Flags().StringVar(&af.exclude, "exclude", "", "comma-separated path prefixes to exclude")
 	cmd.Flags().StringVar(&af.out, "out", "", "write report to this file (.md = markdown, .json = JSON)")
-	cmd.Flags().BoolVar(&af.jsonOut, "audit-json", false, "emit JSON to stdout instead of the text summary")
+	// JSON output reuses the root-level persistent --json flag
+	// (sharedFlags.jsonOut) — it's defined on the root command so
+	// every review-shape subcommand can opt in. A separate
+	// --audit-json flag would be inconsistent with the rest of
+	// the CLI (Copilot caught this on PR #73).
 	cmd.Flags().BoolVar(&af.dryRun, "dry-run", false, "print the audit plan (chunks + sizes) without invoking the LLM")
 	cmd.Flags().IntVar(&af.maxBytesPerChunk, "max-bytes-per-chunk", 0, "soft cap on per-chunk input size (0 = default 256 KiB)")
 
@@ -124,6 +124,7 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 		Include:          splitCSV(af.include),
 		Exclude:          splitCSV(af.exclude),
 		MaxBytesPerChunk: af.maxBytesPerChunk,
+		Warn:             os.Stderr,
 	})
 	if err != nil {
 		return err
@@ -150,7 +151,7 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 		return err
 	}
 	rep.Root = "." // stamp the conceptual working-tree root onto the report
-	return emitAuditReport(af, rep)
+	return emitAuditReport(sf, af, rep)
 }
 
 // pickAuditLLM picks ONE authenticated LLM for the audit run.
@@ -178,14 +179,15 @@ func pickAuditLLM(sf *sharedFlags) (cli.LLM, error) {
 // emitAuditReport dispatches to the right writer based on flags.
 // Output sinks are independent and additive (a workflow can `--out
 // audit.md` while also wanting JSON on stdout), same shape as
-// bench's emitter.
-func emitAuditReport(af auditFlags, rep audit.Report) error {
+// bench's emitter. JSON on stdout is gated by the root-level
+// --json flag (sharedFlags.jsonOut).
+func emitAuditReport(sf *sharedFlags, af auditFlags, rep audit.Report) error {
 	if af.out != "" {
 		if err := writeAuditFile(af.out, rep); err != nil {
 			return fmt.Errorf("write --out file: %w", err)
 		}
 	}
-	if af.jsonOut {
+	if sf.jsonOut {
 		return audit.WriteJSON(os.Stdout, rep)
 	}
 	return audit.WriteText(os.Stdout, rep)

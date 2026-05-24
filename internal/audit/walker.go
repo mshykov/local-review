@@ -2,6 +2,7 @@ package audit
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,10 +53,19 @@ type WalkOptions struct {
 	Exclude []string
 
 	// MaxBytesPerChunk soft-caps the LLM input. A chunk over this
-	// size emits a warning at run time; the runner currently still
-	// sends the full chunk and lets the LLM truncate. Zero = use
-	// the package default (256 KiB).
+	// size emits a warning via Warn (when non-nil) at walk time;
+	// the runner still sends the full chunk and lets the LLM
+	// truncate / refuse — splitting an over-sized chunk usefully
+	// would need package-internal knowledge (e.g. import graphs)
+	// the audit doesn't have. Soft warning is honest about that.
+	// Zero = use the package default (256 KiB).
 	MaxBytesPerChunk int
+
+	// Warn, when non-nil, receives a one-line message per
+	// over-sized chunk so the user sees the warning before paying
+	// LLM tokens on a chunk that may not survive the context
+	// window. The CLI wires this to os.Stderr; tests pass nil.
+	Warn io.Writer
 }
 
 // defaultMaxBytesPerChunk: 256 KiB. The realistic LLM context-window
@@ -80,9 +90,19 @@ const defaultMaxBytesPerChunk = 256 * 1024
 // Output is sorted by Package (alphabetical) for deterministic
 // audit runs.
 func Walk(opts WalkOptions) ([]Chunk, error) {
+	// Resolve the repo root explicitly via `git rev-parse
+	// --show-toplevel` rather than defaulting to "." (cwd).
+	// `git ls-files` returns paths relative to the repo root, so
+	// reading them against the user's cwd silently breaks when
+	// `local-review audit` is invoked from a subdirectory.
+	// Copilot caught this on PR #73.
 	root := opts.Root
 	if root == "" {
-		root = "."
+		r, err := git.RepoRoot()
+		if err != nil {
+			return nil, fmt.Errorf("resolve repo root: %w", err)
+		}
+		root = r
 	}
 	files, err := git.TrackedFiles()
 	if err != nil {
@@ -125,6 +145,10 @@ func Walk(opts WalkOptions) ([]Chunk, error) {
 		body, size, err := concatFiles(root, paths)
 		if err != nil {
 			return nil, err
+		}
+		if size > maxBytes && opts.Warn != nil {
+			fmt.Fprintf(opts.Warn, "warning: %s chunk is %s (over %s soft cap); LLM may truncate or refuse\n",
+				pkg, FormatBytes(size), FormatBytes(maxBytes))
 		}
 		out = append(out, Chunk{
 			Package:   pkg,

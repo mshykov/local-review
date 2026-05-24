@@ -111,7 +111,7 @@ func runOne(ctx context.Context, c Chunk, pack string, invoker cli.Invoker, time
 		pr.Clean = true
 		return pr
 	}
-	pr.Findings = parseFindings(out, c.Package)
+	pr.Findings = parseFindings(out)
 	return pr
 }
 
@@ -151,18 +151,25 @@ func isCleanSentinel(out string) bool {
 // findingHeaderRE matches the audit-pack-mandated finding header:
 //
 //	[severity] path/to/file.ext:LINE
-//	[severity] path/to/file.ext:LINE-RANGE
+//	[severity] path/to/file.ext:LINE-RANGE_END
 //	[severity] path/to/file.ext       (line elided)
 //
-// captures: 1=severity, 2=path, 3=line (or empty)
-var findingHeaderRE = regexp.MustCompile(`^\s*\[(critical|major|warning|info)\]\s+([^\s:]+)(?::(\d+))?`)
+// captures: 1=severity, 2=path, 3=start line (or empty), 4=end
+// line (or empty when not a range). The PR #73 review caught the
+// prior regex dropping the range tail, which would have made
+// `:12-18` parse as Line=12 silently. Now the range is captured
+// even though the v1 Finding only stores Line; future LineEnd
+// support has the data available on the regex match.
+var findingHeaderRE = regexp.MustCompile(`^\s*\[(critical|major|warning|info)\]\s+([^\s:]+)(?::(\d+)(?:-(\d+))?)?`)
 
 // parseFindings walks the LLM output and extracts every header-
 // shaped finding plus the body lines that follow (until the next
-// header or end of output). chunkPkg is used when a finding has
-// no path — set Path to "<pkg>/?" so the renderer can still
-// disambiguate which package it came from.
-func parseFindings(out, chunkPkg string) []Finding {
+// header or end of output). The header regex requires a non-empty
+// path token, so every emitted Finding has Path set; no fallback
+// path needed. (Earlier draft carried a chunk-package fallback
+// argument and post-pass; Copilot flagged it as unreachable on
+// PR #73.)
+func parseFindings(out string) []Finding {
 	var findings []Finding
 	lines := strings.Split(out, "\n")
 	var current *Finding
@@ -178,16 +185,22 @@ func parseFindings(out, chunkPkg string) []Finding {
 	for _, line := range lines {
 		if m := findingHeaderRE.FindStringSubmatch(line); m != nil {
 			flush()
-			lineNum := 0
+			lineNum, lineEnd := 0, 0
 			if m[3] != "" {
 				if n, err := strconv.Atoi(m[3]); err == nil {
 					lineNum = n
+				}
+			}
+			if m[4] != "" {
+				if n, err := strconv.Atoi(m[4]); err == nil {
+					lineEnd = n
 				}
 			}
 			current = &Finding{
 				Severity: m[1],
 				Path:     m[2],
 				Line:     lineNum,
+				LineEnd:  lineEnd,
 			}
 			continue
 		}
@@ -197,13 +210,6 @@ func parseFindings(out, chunkPkg string) []Finding {
 		}
 	}
 	flush()
-	// Findings that didn't get a path get the chunk package as a
-	// fallback so the renderer can still attribute them.
-	for i := range findings {
-		if findings[i].Path == "" {
-			findings[i].Path = chunkPkg
-		}
-	}
 	return findings
 }
 

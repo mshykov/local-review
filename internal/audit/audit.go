@@ -32,10 +32,17 @@ type Finding struct {
 	// it. May be empty for findings that span the whole package.
 	Path string `json:"path,omitempty"`
 
-	// Line is the line number the LLM cited (best-effort; LLMs vary
-	// in line-accuracy across audit mode, where they're reading more
-	// context than in diff mode). Zero = unlocated.
+	// Line is the (start) line number the LLM cited (best-effort;
+	// LLMs vary in line-accuracy across audit mode, where they're
+	// reading more context than in diff mode). Zero = unlocated.
 	Line int `json:"line,omitempty"`
+
+	// LineEnd is the end line of a `LINE-RANGE` citation
+	// (`file.go:12-18`). Zero when the LLM gave a single line
+	// (the common case) or when the line was elided entirely.
+	// Audit packs document the range shape; the v1 renderer
+	// surfaces it inline as "file:start-end" when present.
+	LineEnd int `json:"line_end,omitempty"`
 
 	// Severity is one of "critical", "major", "warning", "info".
 	// Audit packs deliberately skip "nit" — whole-codebase reading

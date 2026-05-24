@@ -22,7 +22,7 @@ Generic Exception catch swallows real errors.
 Why: hides programmer bugs behind the retry loop.
 Suggest: catch specific error types only.
 `
-	findings := parseFindings(out, "internal/cli")
+	findings := parseFindings(out)
 	if len(findings) != 2 {
 		t.Fatalf("expected 2 findings; got %d: %+v", len(findings), findings)
 	}
@@ -37,29 +37,46 @@ Suggest: catch specific error types only.
 	}
 }
 
-// TestParseFindings_FallsBackToChunkPackageWhenPathEmpty verifies
-// the fallback: when the LLM produces a header without a parseable
-// path, we still attribute the finding to the chunk's package so
-// the renderer can group it sensibly.
-func TestParseFindings_FallsBackToChunkPackageWhenPathEmpty(t *testing.T) {
-	// LLMs occasionally elide the path on a "whole-package"
-	// finding. The header regex still matches with an empty path
-	// only when the input has a real path token — so we exercise
-	// the fallback by feeding a header with a path token that
-	// parseFindings is asked to NOT have.
-	//
-	// In practice the fallback is mostly defensive. This test
-	// asserts the post-processing step works: if a finding's Path
-	// is empty after parsing, replace with the chunk package.
-	findings := []Finding{{Severity: "warning", Body: "x"}}
-	// Simulate what parseFindings does at the end of its loop.
-	for i := range findings {
-		if findings[i].Path == "" {
-			findings[i].Path = "internal/cli"
-		}
+// TestParseFindings_LineRangeCaptured covers the v0.10.0-c PR-
+// review fix: the header regex accepts `:LINE-LINE` ranges in
+// addition to plain `:LINE`. Audit packs document the range
+// shape; without the regex update, `file.go:12-18` parsed as
+// Line=12 and silently dropped the end-line.
+func TestParseFindings_LineRangeCaptured(t *testing.T) {
+	out := `[warning] foo.go:12-18
+duplicated try/except chain across function body
+Why: divergence in 3 of the 6 copies; bug fixes only land in one.
+Suggest: extract a shared helper.
+`
+	findings := parseFindings(out)
+	if len(findings) != 1 {
+		t.Fatalf("expected 1 finding; got %d", len(findings))
 	}
-	if findings[0].Path != "internal/cli" {
-		t.Errorf("expected fallback path; got %q", findings[0].Path)
+	if findings[0].Line != 12 || findings[0].LineEnd != 18 {
+		t.Errorf("expected Line=12 LineEnd=18; got Line=%d LineEnd=%d", findings[0].Line, findings[0].LineEnd)
+	}
+}
+
+// TestFormatLocation_HandlesSingleLineAndRange covers the
+// renderer-side rendering of Finding.Line / Finding.LineEnd.
+// Single-line stays "path:line"; range becomes "path:start-end";
+// elided line drops the suffix entirely.
+func TestFormatLocation_HandlesSingleLineAndRange(t *testing.T) {
+	cases := []struct {
+		f    Finding
+		want string
+	}{
+		{Finding{Path: "foo.go", Line: 12}, "foo.go:12"},
+		{Finding{Path: "foo.go", Line: 12, LineEnd: 18}, "foo.go:12-18"},
+		{Finding{Path: "foo.go"}, "foo.go"},
+		// LineEnd == Line collapses to single-line shape (LLM
+		// occasionally emits redundant range like "12-12").
+		{Finding{Path: "foo.go", Line: 12, LineEnd: 12}, "foo.go:12"},
+	}
+	for _, tc := range cases {
+		if got := formatLocation(tc.f); got != tc.want {
+			t.Errorf("formatLocation(%+v) = %q, want %q", tc.f, got, tc.want)
+		}
 	}
 }
 

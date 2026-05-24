@@ -8,6 +8,20 @@ import (
 	"strings"
 )
 
+// formatLocation renders a Finding's location as "path",
+// "path:line", or "path:start-end" depending on which fields are
+// populated. Used by both text and markdown renderers so the
+// LineEnd range shape stays consistent across output formats.
+func formatLocation(f Finding) string {
+	if f.Line == 0 {
+		return f.Path
+	}
+	if f.LineEnd > 0 && f.LineEnd != f.Line {
+		return fmt.Sprintf("%s:%d-%d", f.Path, f.Line, f.LineEnd)
+	}
+	return fmt.Sprintf("%s:%d", f.Path, f.Line)
+}
+
 // WriteText renders the audit report as a terminal-friendly text
 // summary. Headline counts at the top, then per-package sections
 // with findings inline. Matches the shape the review path uses so
@@ -59,10 +73,7 @@ func writeTextPackage(w io.Writer, pr PackageReport) error {
 		return err
 	}
 	for _, f := range pr.Findings {
-		loc := f.Path
-		if f.Line > 0 {
-			loc = fmt.Sprintf("%s:%d", f.Path, f.Line)
-		}
+		loc := formatLocation(f)
 		if _, err := fmt.Fprintf(w, "  [%s] %s\n", f.Severity, loc); err != nil {
 			return err
 		}
@@ -171,10 +182,7 @@ func writeMarkdownPackage(w io.Writer, pr PackageReport) error {
 		return err
 	}
 	for _, f := range pr.Findings {
-		loc := f.Path
-		if f.Line > 0 {
-			loc = fmt.Sprintf("%s:%d", f.Path, f.Line)
-		}
+		loc := formatLocation(f)
 		if _, err := fmt.Fprintf(w, "- **[%s]** `%s`\n", f.Severity, loc); err != nil {
 			return err
 		}

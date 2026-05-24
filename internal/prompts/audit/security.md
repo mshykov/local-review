@@ -78,9 +78,8 @@ Use exactly these — same as the review path:
 | **major** | Significant security weakness — missing rate limit on auth, weak crypto, insecure deserialization. |
 | **warning** | Defense-in-depth issue worth addressing — missing security header, overly-permissive CORS. |
 | **info** | Note for context — "we should pick a CSP value before launch." |
-| **nit** | Style / preference — skip these in audit mode, they dilute the signal. |
 
-**Audit mode skips `nit`.** If you'd grade it `nit`, drop it entirely. The whole-codebase context produces enough findings already; nits make the report unreadable.
+**Audit mode has no `nit` tier.** If you'd grade something `nit`, drop it entirely. The whole-codebase context produces enough findings already; pure-preference notes make the report unreadable. The parser will also drop any `[nit]` finding silently (`nit` isn't in the regex allow-list), so emitting one is just wasted output.
 
 ## Output format
 
