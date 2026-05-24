@@ -49,10 +49,18 @@ func RepoRoot() (string, error) {
 // Shells out via `os/exec` for the same reason internal/git/diff.go
 // does: keeps the binary go-git-free per the project's hard
 // constraints (CLAUDE.md "What this project is" section).
-func TrackedFiles() ([]string, error) {
-	root, err := RepoRoot()
-	if err != nil {
-		return nil, err
+func TrackedFiles(root string) ([]string, error) {
+	if root == "" {
+		// Caller didn't supply a root — resolve it ourselves
+		// once. Callers that already have a root (e.g.
+		// audit.Walk) should pass it in to skip this lookup;
+		// see internal/audit/walker.go for the threading.
+		// Copilot caught the redundant rev-parse on PR #73.
+		r, err := RepoRoot()
+		if err != nil {
+			return nil, err
+		}
+		root = r
 	}
 	var stdout, stderr bytes.Buffer
 	// Three flags combine to make the output repo-wide and

@@ -90,12 +90,12 @@ const defaultMaxBytesPerChunk = 256 * 1024
 // Output is sorted by Package (alphabetical) for deterministic
 // audit runs.
 func Walk(opts WalkOptions) ([]Chunk, error) {
-	// Resolve the repo root explicitly via `git rev-parse
-	// --show-toplevel` rather than defaulting to "." (cwd).
-	// `git ls-files` returns paths relative to the repo root, so
-	// reading them against the user's cwd silently breaks when
-	// `local-review audit` is invoked from a subdirectory.
-	// Copilot caught this on PR #73.
+	// Resolve the repo root once via `git rev-parse
+	// --show-toplevel` and thread it both to TrackedFiles (so
+	// `git -C <root> ls-files` runs against the right tree) and
+	// to concatFiles (the on-disk read root). Single resolution,
+	// no redundant rev-parse — Copilot flagged the duplicate
+	// lookup on PR #73.
 	root := opts.Root
 	if root == "" {
 		r, err := git.RepoRoot()
@@ -104,7 +104,7 @@ func Walk(opts WalkOptions) ([]Chunk, error) {
 		}
 		root = r
 	}
-	files, err := git.TrackedFiles()
+	files, err := git.TrackedFiles(root)
 	if err != nil {
 		return nil, fmt.Errorf("list tracked files: %w", err)
 	}

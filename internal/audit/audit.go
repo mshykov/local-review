@@ -27,9 +27,13 @@ import "time"
 // path's finding shape so consumers that already render review JSON
 // can reuse most of the pipeline.
 type Finding struct {
-	// Path is repo-relative; the audit always uses the path the LLM
-	// returned, falling back to the chunk path when the LLM elided
-	// it. May be empty for findings that span the whole package.
+	// Path is repo-relative — the path the LLM returned in the
+	// finding header. Always non-empty for findings produced by
+	// the v1 parser: findingHeaderRE requires a non-empty path
+	// token, so a header without one doesn't match and the
+	// would-be finding is dropped. (Earlier drafts had a chunk-
+	// package fallback but the regex made it unreachable — see
+	// PR #73 review for the cleanup.)
 	Path string `json:"path,omitempty"`
 
 	// Line is the (start) line number the LLM cited (best-effort;
@@ -72,9 +76,16 @@ type PackageReport struct {
 	// clean OR when the LLM errored (Error captures the failure).
 	Findings []Finding `json:"findings,omitempty"`
 
-	// Clean is true when the LLM explicitly produced a "[clean]"
-	// sentinel. Distinguishes "audited and found nothing" from
-	// "audited and the parse missed everything."
+	// Clean is the canonical "audited and found nothing" signal:
+	// true when the LLM emitted the `[clean] no findings in this
+	// package` sentinel and the runner recognised it. Empty
+	// Findings alone is ambiguous — could be a clean run, a
+	// parse miss, or an error frame — so consumers checking for
+	// "this package is clean" should use this field, not
+	// len(Findings) == 0. Raw is still populated on clean runs
+	// (the runner stores the LLM output before deciding) so
+	// future-self / parser-debug paths can see what the LLM
+	// actually said.
 	Clean bool `json:"clean,omitempty"`
 
 	// Raw is the LLM's untrimmed response. Kept on the report so a
