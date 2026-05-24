@@ -136,6 +136,108 @@ expected_keywords:
 	}
 }
 
+// TestLoadSWEBenchDataset_RejectsDuplicateIDs covers the
+// duplicate-id guard added in response to Copilot+CodeRabbit
+// review on PR #70. Two directories that both declare
+// `id: same-id` collide on fixture lookup
+// (<replay>/<id>/<llm>.md) and on per-task indexing in the
+// report — refuse before either silently produces wrong numbers.
+func TestLoadSWEBenchDataset_RejectsDuplicateIDs(t *testing.T) {
+	root := t.TempDir()
+	mkSWECase(t, root, "alpha", `id: same-id
+title: alpha
+expected_keywords: [k]
+`, "diff alpha")
+	mkSWECase(t, root, "beta", `id: same-id
+title: beta
+expected_keywords: [k]
+`, "diff beta")
+	_, err := LoadSWEBenchDataset(root)
+	if err == nil {
+		t.Fatal("expected error on duplicate case id; got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error should mention 'duplicate'; got %v", err)
+	}
+}
+
+// TestLoadSWEBenchDataset_RejectsEmptyDataset covers the
+// empty-result guard added in PR #70 review. An empty result
+// could come from a wrong --swe-bench-dataset path or a directory
+// of partial entries; either way, returning a zero-row report
+// silently masks the curation gap. Fail loud instead.
+func TestLoadSWEBenchDataset_RejectsEmptyDataset(t *testing.T) {
+	root := t.TempDir()
+	_, err := LoadSWEBenchDataset(root)
+	if err == nil {
+		t.Fatal("expected error on empty dataset; got nil")
+	}
+	if !strings.Contains(err.Error(), "no swe-bench cases found") {
+		t.Errorf("error should mention 'no swe-bench cases found'; got %v", err)
+	}
+}
+
+// TestLoadSWEBenchDataset_TrimsWhitespaceOnlyIDAndTitle covers the
+// TrimSpace-before-required-field-check fix from PR #70 review.
+// A YAML value of `id: "   "` (or `title: "  "`) would otherwise
+// sneak past validation and produce a task whose fixture lookup
+// and reporting indexing break in different ways.
+func TestLoadSWEBenchDataset_TrimsWhitespaceOnlyIDAndTitle(t *testing.T) {
+	root := t.TempDir()
+	mkSWECase(t, root, "bad-id", `id: "   "
+title: real title
+expected_keywords: [k]
+`, "diff")
+	_, err := LoadSWEBenchDataset(root)
+	if err == nil || !strings.Contains(err.Error(), "id") {
+		t.Errorf("whitespace-only id should be rejected with id-required error; got %v", err)
+	}
+
+	// Reset and try whitespace title.
+	root2 := t.TempDir()
+	mkSWECase(t, root2, "bad-title", `id: real-id
+title: "  "
+expected_keywords: [k]
+`, "diff")
+	_, err = LoadSWEBenchDataset(root2)
+	if err == nil || !strings.Contains(err.Error(), "title") {
+		t.Errorf("whitespace-only title should be rejected with title-required error; got %v", err)
+	}
+}
+
+// TestLoadSWEBenchDataset_FailsLoudOnNonNotExistReadError covers
+// the "only skip on os.ErrNotExist" fix from PR #70 review. The
+// prior shape swallowed permission/IO errors as if they were
+// missing files, hiding real dataset corruption. We can't trivially
+// simulate a permission denial in a portable test (chmod is a
+// no-op on some CI filesystems), so we exercise the next-closest
+// shape: a `case.yaml` that's a directory instead of a file.
+// `os.ReadFile` returns a non-NotExist error there, and the
+// loader must surface it instead of returning (nil, nil).
+func TestLoadSWEBenchDataset_FailsLoudOnNonNotExistReadError(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "broken")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// case.yaml is itself a directory — os.ReadFile fails with a
+	// non-NotExist error (EISDIR on Linux, EISDIR-equivalent on
+	// other POSIX, "is a directory" error on Windows).
+	if err := os.MkdirAll(filepath.Join(taskDir, "case.yaml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "diff.patch"), []byte("diff"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadSWEBenchDataset(root)
+	if err == nil {
+		t.Fatal("expected error when case.yaml is unreadable (non-NotExist); got nil")
+	}
+	if !strings.Contains(err.Error(), "read case.yaml") {
+		t.Errorf("error should mention 'read case.yaml'; got %v", err)
+	}
+}
+
 // TestLoadSWEBenchDataset_SkipsPartialEntries verifies the
 // "missing diff.patch OR case.yaml = skip silently" contract.
 // Same shape as LoadDataset's partial-entry handling — keeps a

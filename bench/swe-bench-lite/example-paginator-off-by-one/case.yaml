@@ -1,7 +1,7 @@
 id: example-paginator-off-by-one
 source: "synthetic — django-shaped paginator off-by-one (real SWE-bench-lite tasks pending curation)"
 language: python
-title: "Paginator drops the last item when total_pages is exact"
+title: "Paginator drops the last page when item count is not an exact multiple of per_page"
 description: |
   The diff replaces `math.ceil(len(self.items) / self.per_page)` with
   `len(self.items) // self.per_page` in the `num_pages` property.

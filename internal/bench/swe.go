@@ -19,6 +19,7 @@ package bench
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -141,23 +142,35 @@ type SWEBenchReport struct {
 
 // LoadSWEBenchDataset walks rootDir for `<task-id>/case.yaml` +
 // `<task-id>/diff.patch` pairs and returns the parsed cases sorted
-// by id. Tasks missing either file are skipped silently — same
-// behaviour as LoadDataset — so a half-curated entry doesn't kill
-// the whole run.
+// by id. Behaviour mirrors LoadDataset's contract — both for caller
+// ergonomics and so the bench harness has one consistent
+// dataset-loading model across modes:
 //
-// Validation:
-//   - id and title are required; empty fields fail loudly.
-//   - expected_keywords must be non-empty (the scorer needs
-//     something to match against; an empty list would silently mark
-//     every task as missed and obscure the curation gap).
-//   - Empty keywords inside the list are trimmed; if every entry
-//     trims to empty, the task is rejected.
+//   - A task directory missing either file is skipped silently
+//     ("partial entry"). The dir-walk produced its name once, then
+//     curation never finished — not fatal.
+//   - Any OTHER read error on those files (permission denied,
+//     filesystem corruption) fails the whole load. Hiding I/O
+//     failures behind a silent skip would let a partially-readable
+//     dataset masquerade as a fully-loaded one.
+//   - Duplicate case ids fail loudly. A duplicate id collides on
+//     fixture lookup (<replay>/<id>/<llm>.md) and on per-task
+//     indexing in the report — both produce silently-wrong
+//     numbers, so refuse before they happen.
+//   - Empty result (no tasks loaded) fails loudly. A wrong
+//     `--swe-bench-dataset` path or an entire directory of
+//     partial entries would otherwise yield a zero-row report
+//     that looks like a clean reviewer wipe.
+//
+// Per-case validation lives in loadSWEBenchCase: trimmed id+title
+// required, at least one non-empty expected_keyword required.
 func LoadSWEBenchDataset(rootDir string) ([]SWEBenchCase, error) {
 	entries, err := os.ReadDir(rootDir)
 	if err != nil {
 		return nil, fmt.Errorf("read swe-bench dataset root %s: %w", rootDir, err)
 	}
 	var cases []SWEBenchCase
+	idToDir := make(map[string]string)
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -170,34 +183,65 @@ func LoadSWEBenchDataset(rootDir string) ([]SWEBenchCase, error) {
 		if c == nil {
 			continue // partial entry; skipped
 		}
+		if prev, dup := idToDir[c.ID]; dup {
+			return nil, fmt.Errorf("duplicate swe-bench case id %q in %q and %q (each case directory must have a unique id)", c.ID, prev, dir)
+		}
+		idToDir[c.ID] = dir
 		cases = append(cases, *c)
+	}
+	if len(cases) == 0 {
+		return nil, fmt.Errorf("no swe-bench cases found under %q (each case is a subdirectory with case.yaml + diff.patch)", rootDir)
 	}
 	sort.Slice(cases, func(i, j int) bool { return cases[i].ID < cases[j].ID })
 	return cases, nil
 }
 
-// loadSWEBenchCase parses one task directory. Returns (nil, nil)
-// when the directory doesn't have both case.yaml and diff.patch —
-// "partial entry, skip silently." A returned error means the files
-// are present but malformed; that fails the whole bench load so
-// dataset corruption can't masquerade as a missing reviewer.
+// loadSWEBenchCase parses one task directory.
+//
+// Returns (nil, nil) when EITHER case.yaml OR diff.patch is missing
+// from the directory (os.ErrNotExist) — that's a partial / half-
+// curated entry and the LoadSWEBenchDataset contract is to skip
+// those silently rather than fail the whole bench.
+//
+// Returns (nil, err) on any other read error (permission denied,
+// I/O failure, etc.) — those are real dataset corruption and
+// would silently shrink the load to whatever did read cleanly if
+// swallowed. Same fail-loud invariant CLAUDE.md rule 4 calls out.
+//
+// Returns (nil, err) on malformed YAML, missing required fields
+// (id, title — both TrimSpace-checked), or an empty / all-
+// whitespace expected_keywords list (an empty list would silently
+// mark every task missed and obscure the curation gap).
 func loadSWEBenchCase(dir string) (*SWEBenchCase, error) {
 	yamlPath := filepath.Join(dir, "case.yaml")
 	diffPath := filepath.Join(dir, "diff.patch")
 	yb, yerr := os.ReadFile(yamlPath)
 	db, derr := os.ReadFile(diffPath)
 	if yerr != nil || derr != nil {
-		// Partial entry — skipped per the LoadSWEBenchDataset
-		// contract. Caller doesn't need to distinguish "no file" from
-		// "permission error" here; the dir-walk already iterated this
-		// path, so a permission denial would be an oddly partial
-		// corruption and worth ignoring once.
-		return nil, nil
+		// Partial entry: skip ONLY when the file is missing
+		// (os.ErrNotExist). Any other error — permission denied,
+		// filesystem hiccup — is real corruption and must surface,
+		// or the bench would silently report on a partial load.
+		if errors.Is(yerr, os.ErrNotExist) || errors.Is(derr, os.ErrNotExist) {
+			return nil, nil
+		}
+		if yerr != nil {
+			return nil, fmt.Errorf("read case.yaml: %w", yerr)
+		}
+		return nil, fmt.Errorf("read diff.patch: %w", derr)
 	}
 	var c SWEBenchCase
 	if err := yaml.Unmarshal(yb, &c); err != nil {
 		return nil, fmt.Errorf("parse case.yaml: %w", err)
 	}
+	// TrimSpace before required-field checks so a YAML value of
+	// `id: "   "` doesn't sneak past validation and produce a
+	// task whose fixture lookup, dedup, and reporting indexing
+	// all silently break in different ways. CLAUDE.md rule 4
+	// ("Fail loud, fail closed — use TrimSpace for emptiness
+	// checks").
+	c.ID = strings.TrimSpace(c.ID)
+	c.Title = strings.TrimSpace(c.Title)
 	if c.ID == "" {
 		return nil, fmt.Errorf("case.yaml missing required field: id")
 	}

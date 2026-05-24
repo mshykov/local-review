@@ -1,10 +1,12 @@
 # SWE-bench-lite catch-rate dataset
 
-A curated subset of [SWE-bench-lite](https://www.swebench.com/lite.html) tasks
-adapted into the local-review bench format. Each task ships a
-**bug-introducing diff** (the SWE-bench fix patch, reverse-applied) plus a
-list of keyword phrases the reviewer's findings should mention to count as a
-"catch."
+A [SWE-bench-lite](https://www.swebench.com/lite.html)-shaped dataset adapted
+into the local-review bench format. **Day-1 ships synthetic examples** in the
+upstream task shape; real-task curation from the upstream dataset is in
+progress (target N=10 before v0.10.0 ships — see "Current status" below).
+Each task ships a **bug-introducing diff** (the SWE-bench fix patch, reverse-
+applied) plus a list of keyword phrases the reviewer's findings should mention
+to count as a "catch."
 
 Headline question this dataset answers: **does local-review actually catch
 real bugs in real codebases that we did not author?** The original
@@ -33,7 +35,7 @@ out of scope; tracked for a later release).
 
 ## Layout
 
-```
+```text
 bench/swe-bench-lite/
 ├── README.md                    # this file
 ├── <task-id>/

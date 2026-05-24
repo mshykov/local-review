@@ -82,7 +82,7 @@ func WriteMarkdownSWE(w io.Writer, rep SWEBenchReport) error {
 	for _, lr := range rep.LLMReports {
 		missed := lr.Tasks - lr.CaughtCount - lr.Errors
 		if _, err := fmt.Fprintf(w, "| %s | %d | %d | %d | %d | %s |\n",
-			lr.LLM, lr.Tasks, lr.CaughtCount, missed, lr.Errors, fmtSWEPercent(lr.CatchRate),
+			lr.LLM, lr.Tasks, lr.CaughtCount, missed, lr.Errors, fmtSWEPercent(lr),
 		); err != nil {
 			return err
 		}
@@ -101,7 +101,7 @@ func writeSWEOverallTable(w io.Writer, rep SWEBenchReport) error {
 	for _, lr := range rep.LLMReports {
 		missed := lr.Tasks - lr.CaughtCount - lr.Errors
 		if _, err := fmt.Fprintf(w, "%-10s  %-5d  %-6d  %-6d  %-6d  %-10s\n",
-			lr.LLM, lr.Tasks, lr.CaughtCount, missed, lr.Errors, fmtSWEPercent(lr.CatchRate),
+			lr.LLM, lr.Tasks, lr.CaughtCount, missed, lr.Errors, fmtSWEPercent(lr),
 		); err != nil {
 			return err
 		}
@@ -220,17 +220,24 @@ func sweBenchPerCaseLines(rep SWEBenchReport) []string {
 	return lines
 }
 
-// fmtSWEPercent renders a fractional rate as "NN%" with sensible
-// rounding. "—" when the denominator was zero (Tasks == 0, which
-// shouldn't happen in practice but stays robust against an empty
-// dataset). Always integer percent in v1 for at-a-glance reading;
-// JSON output carries the exact float for tools that want more
-// precision.
-func fmtSWEPercent(r float64) string {
-	if r < 0 {
+// fmtSWEPercent renders an LLM's catch rate as "NN%", or "—" when
+// the LLM scored zero tasks (denominator was zero — shouldn't
+// happen in practice because LoadSWEBenchDataset refuses an empty
+// dataset, but stays honest if a future code path ever produces a
+// zero-task LLM report). Always integer percent in v1 for at-a-
+// glance reading; JSON output carries the exact float for tools
+// that want more precision.
+//
+// Earlier shape took the rate alone and returned "—" on r < 0,
+// but nothing set a negative sentinel — the comment and code
+// disagreed (Copilot caught this on PR #70). Taking the report
+// directly lets the function honor the Tasks==0 case it
+// originally promised.
+func fmtSWEPercent(lr SWEBenchLLMReport) string {
+	if lr.Tasks == 0 {
 		return "—"
 	}
-	return fmt.Sprintf("%.0f%%", r*100)
+	return fmt.Sprintf("%.0f%%", lr.CatchRate*100)
 }
 
 // joinWithDouble joins parts with two spaces — same separator
