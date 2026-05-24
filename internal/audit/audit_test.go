@@ -405,23 +405,26 @@ func TestSplitChunk_OversizedSingleFileEmitsOneChunkAndWarns(t *testing.T) {
 		t.Fatalf("expected 2 chunks (oversized huge.go + sibling small.go); got %d", len(chunks))
 	}
 	// One of the chunks must contain just huge.go and exceed the
-	// cap.
-	var hugeChunk *Chunk
-	for i := range chunks {
-		for _, f := range chunks[i].Files {
+	// cap. Locate it by index first, then read fields off the
+	// slice — avoids holding a pointer-to-slice-element across
+	// the assertions (anti-idiomatic in Go even when safe here).
+	hugeIdx := -1
+	for i, c := range chunks {
+		for _, f := range c.Files {
 			if f == "huge.go" {
-				hugeChunk = &chunks[i]
+				hugeIdx = i
 			}
 		}
 	}
-	if hugeChunk == nil {
+	if hugeIdx == -1 {
 		t.Fatal("no chunk contained huge.go")
 	}
-	if len(hugeChunk.Files) != 1 {
-		t.Errorf("oversized file should be alone in its chunk; got %v", hugeChunk.Files)
+	huge := chunks[hugeIdx]
+	if len(huge.Files) != 1 {
+		t.Errorf("oversized file should be alone in its chunk; got %v", huge.Files)
 	}
-	if hugeChunk.SizeBytes <= 50*1024 {
-		t.Errorf("oversized chunk should exceed cap by definition; got %d", hugeChunk.SizeBytes)
+	if huge.SizeBytes <= 50*1024 {
+		t.Errorf("oversized chunk should exceed cap by definition; got %d", huge.SizeBytes)
 	}
 	// Warning must mention the oversized file by name.
 	if !strings.Contains(warn.String(), "huge.go") {

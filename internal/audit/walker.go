@@ -239,6 +239,17 @@ func splitChunk(root, pkg string, paths []string, maxBytes int, warn io.Writer) 
 		if err != nil {
 			return nil, err
 		}
+		// Post-flight check: if the actual concat size exceeded
+		// the cap even though the bin-pack estimate said it
+		// wouldn't, surface the drift. Happens only when
+		// fileMarkerOverhead under-estimates (shouldn't, but
+		// belt-and-braces) OR when a single-file bin is over the
+		// cap (which the per-file check already warned about, so
+		// no second warning here — we just avoid double-fire).
+		if size > maxBytes && len(b.files) > 1 && warn != nil {
+			_, _ = fmt.Fprintf(warn, "warning: %s chunk %d/%d packed to %s after concat (over %s estimate); bin-pack overhead drift, LLM may refuse this chunk\n",
+				pkg, i+1, len(bins), FormatBytes(size), FormatBytes(maxBytes))
+		}
 		label := pkg
 		if len(bins) > 1 {
 			label = fmt.Sprintf("%s [part %d/%d]", pkg, i+1, len(bins))
@@ -253,14 +264,23 @@ func splitChunk(root, pkg string, paths []string, maxBytes int, warn io.Writer) 
 	return out, nil
 }
 
-// fileMarkerOverhead approximates the bytes the `// === FILE: <p>
-// ===\n` marker adds per file in concatFiles' output. Used by
-// splitChunk's pre-flight bin-packing — we estimate from
-// os.Stat(file.Size()) + this constant rather than reading the
-// file twice (once for sizing, once for concatenation). A small
-// over-estimate is fine; an under-estimate would let chunks creep
-// past maxBytes.
-const fileMarkerOverhead = len("// === FILE: ") + len(" ===\n") + 1 // +1 for the possibly-missing trailing newline
+// fileMarkerOverhead is the per-file byte overhead concatFiles adds
+// beyond the file's own contents — the `// === FILE: <p> ===\n`
+// header plus the conditional trailing `\n` it appends when the
+// file body doesn't already end with one. Used by splitChunk's
+// pre-flight bin-packing to estimate chunk size from
+// `os.Stat(file).Size() + len(p) + fileMarkerOverhead` rather
+// than reading every file twice (size pass + concat pass).
+//
+// Concretely: len("// === FILE: ") = 13, len(" ===\n") = 5, plus
+// 1 byte for the worst-case trailing newline. Total 19. The +1
+// over-estimates by exactly 1 byte for files that already end
+// with a newline (the common case) — at a 96 KiB cap that's a
+// 0.001% over-estimate per file, which is negligible. An
+// under-estimate would be worse: chunks could creep past maxBytes
+// and resurface the prompt_too_long failures this whole feature
+// is supposed to prevent.
+const fileMarkerOverhead = len("// === FILE: ") + len(" ===\n") + 1
 
 // concatFiles reads each file under root and concatenates with a
 // `// === FILE: <path> ===` marker that the audit pack tells the
