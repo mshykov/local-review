@@ -65,6 +65,14 @@ type WalkOptions struct {
 	// over-sized chunk so the user sees the warning before paying
 	// LLM tokens on a chunk that may not survive the context
 	// window. The CLI wires this to os.Stderr; tests pass nil.
+	//
+	// Walk is sequential — writes to Warn happen one at a time
+	// from a single goroutine, so the writer doesn't need to be
+	// thread-safe. If Walk ever fans out across goroutines
+	// (currently it doesn't; per-chunk LLM calls already give
+	// us enough parallelism upstream in Run), this field's
+	// contract changes and synchronization moves into the
+	// caller.
 	Warn io.Writer
 }
 
