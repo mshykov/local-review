@@ -124,6 +124,54 @@ func TestResolveAPIKeyCustomEnv(t *testing.T) {
 	}
 }
 
+// TestResolveAPIKey_EnvVarOverridesYAMLKey covers the v0.10.0
+// audit-dogfood finding: when both a YAML-stored API key AND a
+// corresponding env var are present, env wins. Closes the
+// developer-commits-test-key-then-sets-prod-env-var footgun the
+// pre-v0.10.0 resolver silently passed through.
+func TestResolveAPIKey_EnvVarOverridesYAMLKey(t *testing.T) {
+	t.Setenv("LOCAL_REVIEW_API_KEY", "sk-from-env")
+	cfg := Defaults()
+	cfg.Provider.APIKey = "sk-stale-yaml-key" // simulates a YAML-loaded key
+	resolveAPIKey(&cfg)
+	if cfg.Provider.APIKey != "sk-from-env" {
+		t.Errorf("env should override deprecated YAML key; got %q, want sk-from-env", cfg.Provider.APIKey)
+	}
+}
+
+// TestResolveAPIKey_YAMLKeyKeptWhenEnvUnset preserves the v0
+// backwards-compat shape: users who put a key in YAML and never
+// set an env var (the original supported workflow) keep using
+// that key. Only present-env wins; empty env doesn't clobber.
+func TestResolveAPIKey_YAMLKeyKeptWhenEnvUnset(t *testing.T) {
+	// Belt-and-suspenders: ensure no leaked env var from the
+	// outer test environment colours the result.
+	t.Setenv("LOCAL_REVIEW_API_KEY", "")
+	cfg := Defaults()
+	cfg.Provider.APIKey = "sk-yaml-only"
+	resolveAPIKey(&cfg)
+	if cfg.Provider.APIKey != "sk-yaml-only" {
+		t.Errorf("empty env should leave YAML key intact; got %q, want sk-yaml-only", cfg.Provider.APIKey)
+	}
+}
+
+// TestResolveAPIKeys_EnvOverridesYAMLPerLLM is the multi-LLM
+// counterpart of TestResolveAPIKey_EnvVarOverridesYAMLKey. The
+// per-LLM resolver in resolveAPIKeys has the same precedence
+// contract as the single-provider resolver.
+func TestResolveAPIKeys_EnvOverridesYAMLPerLLM(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-env-claude")
+	cfg := Defaults()
+	// Simulate a YAML-loaded stale key on the claude LLM config.
+	claudeCfg := cfg.LLMs["claude"]
+	claudeCfg.APIKey = "sk-stale-yaml-claude"
+	cfg.LLMs["claude"] = claudeCfg
+	resolveAPIKeys(&cfg)
+	if got := cfg.LLMs["claude"].APIKey; got != "sk-env-claude" {
+		t.Errorf("claude api_key = %q, want sk-env-claude (env should win)", got)
+	}
+}
+
 // v0.1 tests
 
 func TestDefaults_V01(t *testing.T) {
@@ -353,6 +401,75 @@ prompts:
 	}
 	if cfg.Prompts.PackDir != abs {
 		t.Errorf("PackDir = %q, want absolute %q (must pass through)", cfg.Prompts.PackDir, abs)
+	}
+}
+
+// TestLoadUsesRepoYAML_PromptsPackDir_RejectsPathTraversal covers
+// the v0.10.0 audit-dogfood finding: a YAML-supplied relative
+// `pack_dir` that escapes the config directory via `..` segments
+// MUST be rejected at load time. Previously the resolver happily
+// joined `<config-dir>/../../../etc` and let the override-reader
+// read whatever files happened to be in the resulting absolute
+// location.
+//
+// Absolute paths still pass through (the TestLoadUsesRepoYAML_
+// PromptsPackDir_AbsolutePathPreserved case directly above
+// covers that explicit-opt-in shape).
+func TestLoadUsesRepoYAML_PromptsPackDir_RejectsPathTraversal(t *testing.T) {
+	for _, badPath := range []string{
+		"../escape",
+		"../../etc",
+		"foo/../../escape",
+		"a/b/c/../../../../etc",
+	} {
+		t.Run(badPath, func(t *testing.T) {
+			repoCfg := filepath.Join(t.TempDir(), ".local-review.yml")
+			if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: `+badPath+`
+`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(repoCfg)
+			if err == nil {
+				t.Fatalf("expected Load to reject pack_dir %q; got nil error", badPath)
+			}
+			if !strings.Contains(err.Error(), "escapes config directory") {
+				t.Errorf("error should mention 'escapes config directory'; got %v", err)
+			}
+		})
+	}
+}
+
+// TestLoadUsesRepoYAML_PromptsPackDir_AllowsRelativePathsInsideConfigDir
+// pins the happy path: any relative path that stays under the
+// config directory after Clean must pass through. Includes
+// the `foo/../bar` shape that uses `..` segments but ultimately
+// stays inside.
+func TestLoadUsesRepoYAML_PromptsPackDir_AllowsRelativePathsInsideConfigDir(t *testing.T) {
+	for _, goodPath := range []string{
+		".local-review/prompts",
+		"prompts",
+		"a/b/c",
+		"foo/../bar", // ultimately resolves to <baseDir>/bar
+	} {
+		t.Run(goodPath, func(t *testing.T) {
+			baseDir := t.TempDir()
+			repoCfg := filepath.Join(baseDir, ".local-review.yml")
+			if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: `+goodPath+`
+`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(repoCfg)
+			if err != nil {
+				t.Fatalf("Load: %v (path %q should be allowed)", err, goodPath)
+			}
+			if cfg.Prompts.PackDir == "" {
+				t.Errorf("PackDir should be set; got empty")
+			}
+		})
 	}
 }
 
