@@ -18,6 +18,14 @@ func TestDetect(t *testing.T) {
 		"path/to/file.jsx": TypeScript,
 		"path/to/file.mjs": TypeScript,
 		"path/to/file.cjs": TypeScript,
+		// v0.10.0-b — Swift / Kotlin / Liquid packs (the user's daily
+		// stacks that previously fell through to default.md).
+		"App/ViewController.swift":           Swift,
+		"feature/UserViewModel.kt":           Kotlin,
+		"build.gradle.kts":                   Kotlin,
+		"settings.gradle.kts":                Kotlin,
+		"theme/sections/product-form.liquid": Liquid,
+		"snippets/cart-line.liquid":          Liquid,
 	}
 	for path, want := range cases {
 		if got := Detect(path); got != want {

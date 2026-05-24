@@ -28,23 +28,30 @@ const (
 	Ruby       = "ruby"
 	CSharp     = "csharp"
 	PHP        = "php"
+	Swift      = "swift"
+	Kotlin     = "kotlin"
+	Liquid     = "liquid"
 )
 
 var byExt = map[string]string{
-	".ts":   TypeScript,
-	".tsx":  TypeScript,
-	".js":   TypeScript, // see the const-block comment above for why JS → TS
-	".jsx":  TypeScript,
-	".mjs":  TypeScript,
-	".cjs":  TypeScript,
-	".go":   Go,
-	".py":   Python,
-	".pyw":  Python,
-	".java": Java,
-	".rs":   Rust,
-	".rb":   Ruby,
-	".cs":   CSharp,
-	".php":  PHP,
+	".ts":     TypeScript,
+	".tsx":    TypeScript,
+	".js":     TypeScript, // see the const-block comment above for why JS → TS
+	".jsx":    TypeScript,
+	".mjs":    TypeScript,
+	".cjs":    TypeScript,
+	".go":     Go,
+	".py":     Python,
+	".pyw":    Python,
+	".java":   Java,
+	".rs":     Rust,
+	".rb":     Ruby,
+	".cs":     CSharp,
+	".php":    PHP,
+	".swift":  Swift,
+	".kt":     Kotlin,
+	".kts":    Kotlin, // Gradle Kotlin DSL (build.gradle.kts, settings.gradle.kts)
+	".liquid": Liquid,
 }
 
 // Detect returns the language identifier for a file path, or Default
