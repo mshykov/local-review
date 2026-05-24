@@ -238,6 +238,70 @@ func TestLoadSWEBenchDataset_FailsLoudOnNonNotExistReadError(t *testing.T) {
 	}
 }
 
+// TestLoadSWEBenchDataset_MixedNotExistAndRealErrorSurfaces covers
+// the bug CodeRabbit + Copilot flagged on the post-fix-up commits
+// of PR #70: a partial entry (case.yaml missing) where the
+// SIBLING file (diff.patch) failed with a non-NotExist error
+// (e.g. EISDIR or EACCES). The previous OR-of-NotExist short-
+// circuited to "skip silently" — hiding the real corruption on
+// the sibling. Now each error is evaluated independently.
+//
+// Portable trigger for the non-NotExist read failure: make
+// diff.patch a directory instead of a file — os.ReadFile then
+// returns EISDIR (or platform equivalent), which is not
+// os.ErrNotExist. case.yaml is deliberately absent.
+func TestLoadSWEBenchDataset_MixedNotExistAndRealErrorSurfaces(t *testing.T) {
+	root := t.TempDir()
+	taskDir := filepath.Join(root, "mixed")
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// case.yaml deliberately not written → NotExist.
+	// diff.patch is a directory → non-NotExist read error.
+	if err := os.MkdirAll(filepath.Join(taskDir, "diff.patch"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadSWEBenchDataset(root)
+	if err == nil {
+		t.Fatal("expected error: diff.patch unreadable AND case.yaml missing should surface diff's real error, not silently skip")
+	}
+	if !strings.Contains(err.Error(), "read diff.patch") {
+		t.Errorf("error should surface the diff.patch read failure, not the case.yaml miss; got %v", err)
+	}
+}
+
+// TestLoadSWEBenchDataset_RejectsUnsafeIDs covers the ID-validation
+// fix from PR #70 review. CaseScore.ID is used as the fixture-
+// lookup key (<replay>/<id>/<llm>.md) — without the same
+// safeIdentifierRE guard the replay path uses, a YAML id like
+// "../etc" would pass loading and either explode at fixture-read
+// time or escape the replay root. Now rejected at load time.
+func TestLoadSWEBenchDataset_RejectsUnsafeIDs(t *testing.T) {
+	for _, badID := range []string{
+		"../etc",
+		"foo/bar",
+		".",
+		"..",
+		".hidden",
+		"with spaces",
+		"semi;colon",
+	} {
+		root := t.TempDir()
+		mkSWECase(t, root, "dir-name", `id: "`+badID+`"
+title: real title
+expected_keywords: [k]
+`, "diff")
+		_, err := LoadSWEBenchDataset(root)
+		if err == nil {
+			t.Errorf("expected unsafe id %q to be rejected; got nil error", badID)
+			continue
+		}
+		if !strings.Contains(err.Error(), "swe-bench case id") {
+			t.Errorf("error for unsafe id %q should mention 'swe-bench case id'; got %v", badID, err)
+		}
+	}
+}
+
 // TestLoadSWEBenchDataset_SkipsPartialEntries verifies the
 // "missing diff.patch OR case.yaml = skip silently" contract.
 // Same shape as LoadDataset's partial-entry handling — keeps a

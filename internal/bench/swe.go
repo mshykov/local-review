@@ -218,17 +218,24 @@ func loadSWEBenchCase(dir string) (*SWEBenchCase, error) {
 	yb, yerr := os.ReadFile(yamlPath)
 	db, derr := os.ReadFile(diffPath)
 	if yerr != nil || derr != nil {
-		// Partial entry: skip ONLY when the file is missing
-		// (os.ErrNotExist). Any other error — permission denied,
-		// filesystem hiccup — is real corruption and must surface,
-		// or the bench would silently report on a partial load.
-		if errors.Is(yerr, os.ErrNotExist) || errors.Is(derr, os.ErrNotExist) {
-			return nil, nil
-		}
-		if yerr != nil {
+		// Each non-nil error is evaluated independently so a mixed
+		// pair — e.g. case.yaml missing AND diff.patch returns
+		// EACCES — still surfaces the EACCES instead of being
+		// swallowed by the NotExist on the sibling. The pre-fix
+		// shape used `errors.Is(yerr, NotExist) || errors.Is(derr,
+		// NotExist)` which short-circuited to "skip silently" on
+		// any partial-missing, hiding real corruption on the
+		// other file. Caught by CodeRabbit + Copilot on PR #70.
+		if yerr != nil && !errors.Is(yerr, os.ErrNotExist) {
 			return nil, fmt.Errorf("read case.yaml: %w", yerr)
 		}
-		return nil, fmt.Errorf("read diff.patch: %w", derr)
+		if derr != nil && !errors.Is(derr, os.ErrNotExist) {
+			return nil, fmt.Errorf("read diff.patch: %w", derr)
+		}
+		// At least one file is missing AND neither sibling
+		// produced a non-NotExist error: partial entry, skip
+		// per the LoadSWEBenchDataset contract.
+		return nil, nil
 	}
 	var c SWEBenchCase
 	if err := yaml.Unmarshal(yb, &c); err != nil {
@@ -247,6 +254,15 @@ func loadSWEBenchCase(dir string) (*SWEBenchCase, error) {
 	}
 	if c.Title == "" {
 		return nil, fmt.Errorf("case.yaml missing required field: title")
+	}
+	// ID must pass the same safeIdentifierRE the replay path uses
+	// for fixture lookups (readFixture → validateIdentifier).
+	// Without this guard, a YAML id like "../etc" would slip past
+	// loading and explode at fixture-read time — or worse, escape
+	// the replay root before validateIdentifier catches it.
+	// Caught by Copilot on PR #70.
+	if err := validateIdentifier("swe-bench case id", c.ID); err != nil {
+		return nil, err
 	}
 	// Trim and validate keywords: empty list (or list of only-empties)
 	// would silently mark every task missed; loud failure is right.
