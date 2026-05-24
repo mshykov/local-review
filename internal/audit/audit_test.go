@@ -157,6 +157,16 @@ func TestWalker_PathPassesFilters(t *testing.T) {
 		{"internal/cli/foo.go", []string{"internal/multi"}, nil, false},
 		{"internal/cli/foo.go", nil, []string{"internal/cli"}, false},
 		{"internal/cli/foo.go", []string{"internal"}, []string{"internal/cli"}, false},
+		// Directory-boundary cases (regression for the v0.10.0-c
+		// PR review fix): `internal/cli` must NOT match
+		// `internal/cli2/foo.go`. Raw HasPrefix used to do this
+		// wrong and pull unintended files into the filter.
+		{"internal/cli2/foo.go", []string{"internal/cli"}, nil, false},
+		{"internal/cli2/foo.go", nil, []string{"internal/cli"}, true},
+		// Exact-match (no trailing slash, file at the directory's
+		// own path) and trailing-slash tolerance.
+		{"internal/cli", []string{"internal/cli"}, nil, true},
+		{"internal/cli/foo.go", []string{"internal/cli/"}, nil, true},
 	}
 	for _, tc := range cases {
 		if got := pathPassesFilters(tc.path, tc.include, tc.exclude); got != tc.want {

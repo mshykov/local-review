@@ -196,11 +196,17 @@ func concatFiles(root string, paths []string) (string, int, error) {
 // pathPassesFilters applies the include / exclude prefix filters
 // from WalkOptions. Empty Include = no include filter (everything
 // passes the include test); non-empty Exclude always filters.
+//
+// Path matching is directory-boundary-aware: the prefix must
+// match either the whole path or a prefix followed by `/`. Raw
+// HasPrefix would have matched `internal/cli2/foo.go` against
+// `internal/cli` and pulled it into the wrong filter — CodeRabbit
+// caught this on PR #73.
 func pathPassesFilters(path string, include, exclude []string) bool {
 	if len(include) > 0 {
 		matched := false
 		for _, prefix := range include {
-			if strings.HasPrefix(path, prefix) {
+			if pathHasPrefix(path, prefix) {
 				matched = true
 				break
 			}
@@ -210,11 +216,27 @@ func pathPassesFilters(path string, include, exclude []string) bool {
 		}
 	}
 	for _, prefix := range exclude {
-		if strings.HasPrefix(path, prefix) {
+		if pathHasPrefix(path, prefix) {
 			return false
 		}
 	}
 	return true
+}
+
+// pathHasPrefix returns true when path is exactly prefix or sits
+// under prefix as a directory entry. `internal/cli` matches
+// `internal/cli/foo.go` and `internal/cli` itself but NOT
+// `internal/cli2/foo.go`. Trailing `/` on the prefix is tolerated
+// so users can write either `--exclude bench/` or `--exclude bench`.
+func pathHasPrefix(path, prefix string) bool {
+	prefix = strings.TrimRight(prefix, "/")
+	if prefix == "" {
+		return true
+	}
+	if path == prefix {
+		return true
+	}
+	return strings.HasPrefix(path, prefix+"/")
 }
 
 // isAuditable returns true when the file's extension maps to a
