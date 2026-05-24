@@ -221,6 +221,11 @@ func writeAuditFile(path string, rep audit.Report) (retErr error) {
 // (package + file count + size) plus a total. Lets the user
 // eyeball cost before paying tokens; especially useful on first
 // audit of an unfamiliar codebase.
+//
+// Uses audit.FormatBytes for byte sizing so the dry-run preview
+// renders the same units the runner's per-chunk progress lines
+// use during a real run — single source of truth for the
+// formatting, no drift between preview and run.
 func writeAuditPlan(w io.Writer, topic string, chunks []audit.Chunk) error {
 	totalFiles := 0
 	totalBytes := 0
@@ -229,31 +234,18 @@ func writeAuditPlan(w io.Writer, topic string, chunks []audit.Chunk) error {
 		totalBytes += c.SizeBytes
 	}
 	if _, err := fmt.Fprintf(w, "Audit plan (topic=%s, dry-run):\n  %d chunks · %d files · %s total\n\n",
-		topic, len(chunks), totalFiles, fmtBytes(totalBytes)); err != nil {
+		topic, len(chunks), totalFiles, audit.FormatBytes(totalBytes)); err != nil {
 		return err
 	}
 	for _, c := range chunks {
+		suffix := ""
+		if len(c.Files) != 1 {
+			suffix = "s"
+		}
 		if _, err := fmt.Fprintf(w, "  %-40s  %d file%s  %s\n",
-			c.Package, len(c.Files), pluralSuffix(len(c.Files)), fmtBytes(c.SizeBytes)); err != nil {
+			c.Package, len(c.Files), suffix, audit.FormatBytes(c.SizeBytes)); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func pluralSuffix(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
-
-func fmtBytes(n int) string {
-	if n < 1024 {
-		return fmt.Sprintf("%dB", n)
-	}
-	if n < 1024*1024 {
-		return fmt.Sprintf("%.1fKiB", float64(n)/1024)
-	}
-	return fmt.Sprintf("%.1fMiB", float64(n)/(1024*1024))
 }

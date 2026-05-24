@@ -77,7 +77,7 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 	for i, c := range chunks {
 		if opts.Progress != nil {
 			fmt.Fprintf(opts.Progress, "[%d/%d] auditing %s (%d file%s, %s)...\n",
-				i+1, len(chunks), c.Package, len(c.Files), pluralS(len(c.Files)), fmtBytes(c.SizeBytes))
+				i+1, len(chunks), c.Package, len(c.Files), pluralS(len(c.Files)), FormatBytes(c.SizeBytes))
 		}
 		pr := runOne(ctx, c, pack, invoker, timeout)
 		rep.Packages = append(rep.Packages, pr)
@@ -247,7 +247,15 @@ func pluralS(n int) string {
 	return "s"
 }
 
-func fmtBytes(n int) string {
+// FormatBytes renders a byte count in human-readable units (B /
+// KiB / MiB). Exported so the cmd-layer dry-run preview can
+// render chunk sizes in the same units the runner's progress
+// output uses during a real audit — single source of truth, no
+// drift between preview and run. Inputs above ~10 MiB stay in
+// MiB rather than escalating to GiB (audit chunks shouldn't
+// reach a GiB; if they do, the soft-cap warning is the bigger
+// problem).
+func FormatBytes(n int) string {
 	if n < 1024 {
 		return fmt.Sprintf("%dB", n)
 	}
