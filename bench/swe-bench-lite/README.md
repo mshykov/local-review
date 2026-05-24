@@ -47,7 +47,7 @@ bench/swe-bench-lite/
 ## `case.yaml` schema
 
 ```yaml
-id: <stable-id>                  # also the directory name; must match [A-Za-z0-9_-][A-Za-z0-9._-]*
+id: <stable-id>                  # also the directory name; minimum 1 char, must match [A-Za-z0-9_-][A-Za-z0-9._-]*
 source: <upstream-reference>     # e.g. "princeton-nlp/SWE-bench-lite#django__django-12345"
 language: <lang-id>              # "python", "javascript", … (matches internal/lang ids)
 title: <one-line summary>
