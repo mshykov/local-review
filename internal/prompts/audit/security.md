@@ -85,7 +85,7 @@ Use exactly these — same as the review path:
 
 For each finding, emit:
 
-```
+```text
 [severity] path/to/file.ext:LINE-NUMBER (or LINE-RANGE)
 <one-sentence statement of the problem>
 Why: <one sentence — concrete failure mode / attack scenario>
@@ -96,7 +96,7 @@ If a finding spans multiple files (e.g., a function defined in one and called da
 
 If you find **nothing of severity ≥ warning** in this package, output exactly:
 
-```
+```text
 [clean] no security findings in this package
 ```
 

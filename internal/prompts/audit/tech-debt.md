@@ -76,7 +76,7 @@ Use exactly these:
 
 For each finding, emit:
 
-```
+```text
 [severity] path/to/file.ext:LINE-NUMBER (or LINE-RANGE)
 <one-sentence statement of the debt pattern>
 Why: <one sentence — concrete maintenance cost / past incident shape>
@@ -87,7 +87,7 @@ If a finding spans multiple files (the canonical case for duplication / leaky ab
 
 If you find **nothing of severity ≥ warning** in this package, output exactly:
 
-```
+```text
 [clean] no tech-debt findings in this package
 ```
 

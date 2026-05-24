@@ -101,24 +101,37 @@ func main() {
 
 	root := &cobra.Command{
 		Use:   "local-review",
-		Short: "AI code review for your local diff. BYOK, language-agnostic.",
-		Long: helpHeader() + `local-review reviews a git diff with the LLMs you have installed and
-runs them in parallel. It runs entirely on your machine; the only
-network call is to whichever LLM endpoint you configured.
+		Short: "AI code review for your local diff (or full-tree audit). BYOK, language-agnostic.",
+		Long: helpHeader() + `local-review runs LLM-driven code review locally. Two modes:
+
+  • Diff review — review the git diff on your current branch / staged
+    / a single commit. Multi-LLM by default; merges the findings. The
+    canonical pre-commit / pre-MR workflow.
+  • Audit — walk the whole committed tree and run a topic-driven
+    sweep (security, tech-debt, ...) for issues no individual diff
+    would surface. Single-LLM, scoped by --topic.
+
+Everything runs on your machine; the only network call is to whichever
+LLM endpoint you configured.
 
 Quick start:
 
-  local-review init             # interactive — picks a provider, writes .local-review.yml
-  local-review doctor           # check which LLM CLIs are installed/authenticated
-  local-review review           # review current branch with every active LLM
+  local-review init                # interactive — picks a provider, writes .local-review.yml
+  local-review doctor              # check which LLM CLIs are installed/authenticated
+  local-review review              # review current branch with every active LLM
+  local-review audit --topic security    # full-tree security sweep
+  local-review audit --topic tech-debt   # full-tree tech-debt sweep
 
 By default, every LLM CLI that is both installed AND authenticated runs
-in parallel and the findings are merged into one report. Use ~/.local-review.yml
-or ./.local-review.yml to override; CLI flags override config.
+in parallel for review mode and the findings are merged into one
+report. Audit mode is single-LLM by design — picks one authenticated
+agent. Use ~/.local-review.yml or ./.local-review.yml to override;
+CLI flags override config.
 
-If no LLM CLI is active, falls back to the configured 'provider:' (any
-OpenAI-compatible endpoint: OpenAI, Anthropic, Mistral, DeepSeek,
-Together, Groq, OpenRouter, Ollama, vLLM, etc.).
+If no LLM CLI is active, the review-shape commands fall back to the
+configured 'provider:' (any OpenAI-compatible endpoint: OpenAI,
+Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter, Ollama,
+vLLM, etc.).
 
 See README and https://mshykov.github.io/local-review/ for details.`,
 		SilenceUsage: true,
