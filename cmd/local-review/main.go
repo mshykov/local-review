@@ -180,6 +180,7 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	addGrouped("review", stagedCmd(&sf))
 	addGrouped("review", commitCmd(&sf))
 	addGrouped("review", branchCmd(&sf))
+	addGrouped("review", auditCmd(&sf))
 	addGrouped("setup", initCmd())
 	addGrouped("setup", doctorCmd())
 	addGrouped("setup", configCmd(&sf))
