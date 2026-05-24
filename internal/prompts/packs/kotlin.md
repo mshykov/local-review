@@ -6,7 +6,7 @@ Apply the default review rules. Plus: Kotlin-specific patterns to look for.
 
 ### Null safety
 - **Not-null assertion (`!!`)** — almost always a smell outside test code and Java-interop boundaries; flag any `!!` on a value that wasn't trivially just null-checked. Suggest `?.`, `?: throw`, `requireNotNull`, `checkNotNull`, or pattern match via `let`.
-- **Platform types from Java interop** — `String!` (no `?` and no non-`?`) silently allows nulls in; annotate boundary calls with `@field:Nullable` / `@get:NotNull` or wrap on entry.
+- **Platform types from Java interop** — `String!` (no `?` and no non-`?`) silently allows nulls in; add nullability annotations on the Java declarations (or external annotations), and coerce immediately at the Kotlin boundary (`String?`, `requireNotNull`, etc.).
 - **`lateinit var` accessed before assignment** — `UninitializedPropertyAccessException`. When the value won't be reassigned after init AND init can be expressed as a local lambda (e.g. a derived helper, a cached parsed config), prefer `val x by lazy { … }` — same single-shot init, but the field stays immutable and a re-init bug becomes a compile error. `lateinit var` is the right shape when the value is genuinely mutable or set by an external framework (DI, view binding, test setup) where `lazy` can't express the initializer.
 - **`!!` on chain results** (`a?.b?.c!!`) — defeats the chain's null-safety purpose; either commit to the null path or throw explicitly.
 - **Smart cast lost across a non-`val`** — mutable property re-read after the null check; capture into a local `val` first.
