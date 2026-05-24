@@ -147,7 +147,14 @@ func Walk(opts WalkOptions) ([]Chunk, error) {
 			return nil, err
 		}
 		if size > maxBytes && opts.Warn != nil {
-			fmt.Fprintf(opts.Warn, "warning: %s chunk is %s (over %s soft cap); LLM may truncate or refuse\n",
+			// Stderr-shaped informational write: explicitly
+			// discard the error rather than swallowing it
+			// silently. CLAUDE.md rule 4 demands intent be
+			// explicit; aborting an audit because a progress
+			// warning failed to flush would be the wrong
+			// choice, so we record the policy in the assignment
+			// shape and move on.
+			_, _ = fmt.Fprintf(opts.Warn, "warning: %s chunk is %s (over %s soft cap); LLM may truncate or refuse\n",
 				pkg, FormatBytes(size), FormatBytes(maxBytes))
 		}
 		out = append(out, Chunk{

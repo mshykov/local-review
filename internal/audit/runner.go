@@ -76,7 +76,12 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 	timeout := resolveTimeout(opts.Timeout, opts.LLM)
 	for i, c := range chunks {
 		if opts.Progress != nil {
-			fmt.Fprintf(opts.Progress, "[%d/%d] auditing %s (%d file%s, %s)...\n",
+			// Stderr-shaped progress write: explicitly discard.
+			// Same policy as the walker's Warn writer — see
+			// walker.go for the rationale (aborting an audit
+			// because a progress line failed to flush would
+			// be the wrong choice).
+			_, _ = fmt.Fprintf(opts.Progress, "[%d/%d] auditing %s (%d file%s, %s)...\n",
 				i+1, len(chunks), c.Package, len(c.Files), pluralS(len(c.Files)), FormatBytes(c.SizeBytes))
 		}
 		pr := runOne(ctx, c, pack, invoker, timeout)
