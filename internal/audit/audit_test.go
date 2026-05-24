@@ -326,7 +326,8 @@ func TestSplitChunk_SplitsAcrossBinsWhenOverCap(t *testing.T) {
 	mkFile(t, root, "b.go", body)
 	mkFile(t, root, "c.go", body)
 	mkFile(t, root, "d.go", body)
-	chunks, err := splitChunk(root, "pkg", []string{"a.go", "b.go", "c.go", "d.go"}, 50*1024, nil)
+	wantFiles := []string{"a.go", "b.go", "c.go", "d.go"}
+	chunks, err := splitChunk(root, "pkg", wantFiles, 50*1024, nil)
 	if err != nil {
 		t.Fatalf("splitChunk: %v", err)
 	}
@@ -345,6 +346,39 @@ func TestSplitChunk_SplitsAcrossBinsWhenOverCap(t *testing.T) {
 		if c.SizeBytes > 50*1024 {
 			t.Errorf("split bin exceeded cap: %s (%d bytes)", c.Package, c.SizeBytes)
 		}
+	}
+	// Flatten chunks back into the file list and assert exact
+	// equality with the input — splitChunk must preserve every
+	// file in input order, never drop or duplicate. CodeRabbit
+	// caught the prior shape as too lax (would have passed even
+	// if files were dropped). Hardened on PR #74 review.
+	gotFiles := make([]string, 0, len(wantFiles))
+	for _, c := range chunks {
+		gotFiles = append(gotFiles, c.Files...)
+	}
+	if len(gotFiles) != len(wantFiles) {
+		t.Fatalf("expected %d files across split chunks; got %d (%v)", len(wantFiles), len(gotFiles), gotFiles)
+	}
+	for i := range wantFiles {
+		if gotFiles[i] != wantFiles[i] {
+			t.Errorf("split file at index %d: got %q, want %q (full flattened: %v)", i, gotFiles[i], wantFiles[i], gotFiles)
+		}
+	}
+}
+
+// TestWalk_RejectsNegativeMaxBytesPerChunk pins the fail-loud
+// guard added in PR #74: a negative cap would make every file
+// appear oversized in the bin-packer and produce nonsense
+// warnings, so Walk refuses up-front with an actionable error.
+// Zero stays valid (means "use the default"). CLAUDE.md rule 4:
+// fail loud, fail closed.
+func TestWalk_RejectsNegativeMaxBytesPerChunk(t *testing.T) {
+	_, err := Walk(WalkOptions{Root: t.TempDir(), MaxBytesPerChunk: -1})
+	if err == nil {
+		t.Fatal("expected Walk to reject negative MaxBytesPerChunk; got nil error")
+	}
+	if !strings.Contains(err.Error(), "MaxBytesPerChunk must be >= 0") {
+		t.Errorf("error should mention the constraint; got %v", err)
 	}
 }
 

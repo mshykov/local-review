@@ -52,13 +52,17 @@ type WalkOptions struct {
 	Include []string
 	Exclude []string
 
-	// MaxBytesPerChunk soft-caps the LLM input. A chunk over this
-	// size emits a warning via Warn (when non-nil) at walk time;
-	// the runner still sends the full chunk and lets the LLM
-	// truncate / refuse — splitting an over-sized chunk usefully
-	// would need package-internal knowledge (e.g. import graphs)
-	// the audit doesn't have. Soft warning is honest about that.
-	// Zero = use the package default (256 KiB).
+	// MaxBytesPerChunk caps the LLM input per chunk. Packages over
+	// this size are auto-split into `pkg [part N/M]` sub-chunks via
+	// the greedy bin-packer in splitChunk; single files individually
+	// over the cap surface a warning and pass through as one chunk
+	// (splitting a source file at an arbitrary line boundary would
+	// produce semantically broken chunks). Zero = use the package
+	// default (96 KiB — empirical headroom needed for claude-code's
+	// own system prompt + tool definitions on top of the audit pack
+	// body). Negative values are rejected by Walk at load time —
+	// silently letting a negative cap flow through would make every
+	// file appear oversized and produce nonsense warnings.
 	MaxBytesPerChunk int
 
 	// Warn, when non-nil, receives a one-line message per
@@ -107,6 +111,18 @@ const defaultMaxBytesPerChunk = 96 * 1024
 // Output is sorted by Package (alphabetical) for deterministic
 // audit runs.
 func Walk(opts WalkOptions) ([]Chunk, error) {
+	// Validate caller-supplied options up-front before doing
+	// any I/O (git ls-files, file reads). Cheap fail-fast for
+	// obvious misuse — CLAUDE.md rule 4 (fail loud, fail
+	// closed). A negative cap would make every file appear
+	// oversized in splitChunk and produce nonsense warnings;
+	// refuse at the entry so the caller sees the bug instead
+	// of a wall of misleading stderr. Caught by CodeRabbit on
+	// PR #74.
+	if opts.MaxBytesPerChunk < 0 {
+		return nil, fmt.Errorf("MaxBytesPerChunk must be >= 0 (got %d); use 0 for the default", opts.MaxBytesPerChunk)
+	}
+
 	// Resolve the repo root once via `git rev-parse
 	// --show-toplevel` and thread it both to TrackedFiles (so
 	// `git -C <root> ls-files` runs against the right tree) and
@@ -248,14 +264,36 @@ func packBins(root string, paths []string, maxBytes int, warn io.Writer) ([]file
 // emit around it. Doesn't read the file body — uses os.Stat to
 // keep the bin-pack pass cheap (single stat per file vs reading
 // every file twice).
+//
+// Returns an error if the file's on-disk size doesn't fit in an
+// int (i.e., > 2 GiB on a 32-bit build). Audit chunks max out at
+// the per-chunk cap (96 KiB by default; never more than a couple
+// of MiB in any reasonable user config), so a multi-GiB single
+// file is either a binary that slipped past isAuditable's
+// allowlist or a genuine I/O misadventure — either way, failing
+// here is better than wrapping arithmetic. Caught by Copilot on
+// PR #74 — int64-to-int cast was unguarded.
 func estimateFileSize(root, p string) (int, error) {
 	full := filepath.Join(root, p)
 	info, err := os.Stat(full)
 	if err != nil {
 		return 0, fmt.Errorf("stat %s: %w", p, err)
 	}
-	return int(info.Size()) + len(p) + fileMarkerOverhead, nil
+	rawSize := info.Size()
+	if rawSize < 0 || rawSize > int64(maxIntValue) {
+		return 0, fmt.Errorf("stat %s: file size %d does not fit in int (32-bit build with a >2GiB file?)", p, rawSize)
+	}
+	return int(rawSize) + len(p) + fileMarkerOverhead, nil
 }
+
+// maxIntValue is platform-dependent int max — the upper bound for
+// the int64-to-int conversion in estimateFileSize. On 64-bit
+// builds (the project's release targets: darwin/linux/windows ×
+// amd64/arm64) this is 2^63-1 and the bounds check effectively
+// never fires; on 32-bit builds it's 2^31-1 and a >2GiB file
+// would otherwise wrap. ^uint(0) >> 1 is the standard
+// int-max idiom that doesn't require importing math.
+const maxIntValue = int(^uint(0) >> 1)
 
 // flushAndAppendOversized handles the single-file-over-cap case:
 // flushes the current bin (so its bin-mates stay together), warns
@@ -267,7 +305,13 @@ func flushAndAppendOversized(bins []fileBin, cur *fileBin, p string, fileSize, m
 		*cur = fileBin{}
 	}
 	if warn != nil {
-		_, _ = fmt.Fprintf(warn, "warning: file %s is %s (over %s per-chunk cap); cannot split a single file across chunks, LLM may refuse this chunk\n",
+		// fileSize includes the per-file marker overhead (~30
+		// bytes for the `// === FILE: <p> ===\n` line); say
+		// "estimated chunk contribution" rather than "file size"
+		// so a user with a 100 KiB file doesn't wonder why the
+		// warning says 100.1 KiB. Copilot caught the wording
+		// mismatch on PR #74.
+		_, _ = fmt.Fprintf(warn, "warning: file %s has an estimated chunk contribution of %s (over %s per-chunk cap); cannot split a single file across chunks, LLM may refuse this chunk\n",
 			p, FormatBytes(fileSize), FormatBytes(maxBytes))
 	}
 	return append(bins, fileBin{files: []string{p}, size: fileSize})
@@ -308,7 +352,11 @@ func warnPostFlightDrift(pkg string, i, n int, files []string, size, maxBytes in
 	if size <= maxBytes || len(files) <= 1 || warn == nil {
 		return
 	}
-	_, _ = fmt.Fprintf(warn, "warning: %s chunk %d/%d packed to %s after concat (over %s estimate); bin-pack overhead drift, LLM may refuse this chunk\n",
+	// "over %s cap" is the honest framing: maxBytes is the cap the
+	// bin-packer aimed to stay under, not an estimate. The drift is
+	// between the pre-concat size estimate and the actual concat
+	// size; the cap is the cap. Copilot caught the wording on PR #74.
+	_, _ = fmt.Fprintf(warn, "warning: %s chunk %d/%d packed to %s after concat (over %s cap); bin-pack overhead drift, LLM may refuse this chunk\n",
 		pkg, i+1, n, FormatBytes(size), FormatBytes(maxBytes))
 }
 
