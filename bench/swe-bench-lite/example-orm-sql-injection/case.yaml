@@ -1,0 +1,27 @@
+id: example-orm-sql-injection
+source: "synthetic — django-orm-shaped raw query construction (real SWE-bench-lite tasks pending curation)"
+language: python
+title: "raw_query() concatenates user input into SQL string"
+description: |
+  The ORM helper `search_by_name(name)` originally used a parameterized
+  query (`cursor.execute("... WHERE name = %s", [name])`). The bug-
+  introducing diff inlines the user-supplied `name` into the SQL string
+  via f-string, turning what was a safe call into a textbook SQL
+  injection vector. Any caller passing user input from a web request
+  now exposes the database.
+
+  Original issue describes a CVE filed against the project's search
+  endpoint after a security researcher demonstrated extraction of
+  arbitrary table contents via crafted name parameter.
+expected_keywords:
+  - "SQL injection"
+  - "sql injection"
+  - "parameterized query"
+  - "parameterized"
+  - "f-string"
+  - "string concatenation"
+  - "unsanitized input"
+  - "unsanitized user input"
+  - "untrusted input"
+expected_files:
+  - search.py

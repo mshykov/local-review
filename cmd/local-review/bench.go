@@ -54,6 +54,19 @@ type benchFlags struct {
 	// cold?" Live mode only; replay rejects --uplift up at the
 	// runner level.
 	uplift bool
+
+	// sweBench switches the bench into SWE-bench-lite catch-rate
+	// mode: loads tasks from sweBenchDataset (default
+	// `bench/swe-bench-lite`), runs the multi-LLM review on each
+	// bug-introducing diff, and scores via keyword match against
+	// each task's `expected_keywords`. Output is a separate
+	// `## SWE-bench-lite catch rate` markdown section + a parallel
+	// JSON shape — the labelled-dataset and SWE-bench reports are
+	// independent (you call the bench twice if you want both
+	// committed to RESULTS.md). Mutually exclusive with --uplift
+	// and --repeat > 1 — see RunSWE for the rationale.
+	sweBench        bool
+	sweBenchDataset string
 }
 
 // benchCmd wires the `local-review bench` subcommand. Phase 1 + 2 of
@@ -125,6 +138,9 @@ bench/README.md for how to add a new case.`,
 			if !cmd.Flags().Changed("strict") {
 				strict = bf.replayDir != ""
 			}
+			if bf.sweBench {
+				return runSWEBench(cmd.Context(), bf, strict)
+			}
 			return runBench(cmd.Context(), bf, strict)
 		},
 	}
@@ -138,6 +154,8 @@ bench/README.md for how to add a new case.`,
 	cmd.Flags().IntVar(&bf.repeat, "repeat", 1, "sample each (case, LLM) N times for Jaccard consistency (live mode only; replay rejects N>1)")
 	cmd.Flags().StringVar(&bf.markdownPath, "markdown", "", "also write a leaderboard markdown file to this path (overall + per-language + per-case tables)")
 	cmd.Flags().BoolVar(&bf.uplift, "uplift", false, "also run each (case, LLM) with a minimal generic system prompt and report treatment-vs-baseline deltas (live mode only; replay rejects --uplift). Costs roughly 2× the tokens; the answer is 'is local-review better than running the raw LLM cold?'")
+	cmd.Flags().BoolVar(&bf.sweBench, "swe-bench", false, "run in SWE-bench-lite catch-rate mode against curated bug-introducing diffs (default dataset: bench/swe-bench-lite); see bench/swe-bench-lite/README.md")
+	cmd.Flags().StringVar(&bf.sweBenchDataset, "swe-bench-dataset", "bench/swe-bench-lite", "path to the SWE-bench-lite dataset root (only used with --swe-bench)")
 
 	return cmd
 }
@@ -375,4 +393,127 @@ func writeBenchToFile(path string, rep bench.Report, emit func(io.Writer, bench.
 		}
 	}()
 	return emit(f, rep)
+}
+
+// runSWEBench is the SWE-bench-lite dispatcher: load SWE cases, pick
+// LLMs (same rules as the labelled-dataset path), run, render.
+// Mirrors runBench's decomposition for symmetry; the entry-point
+// `--swe-bench` flag in benchCmd's RunE picks which to call.
+func runSWEBench(ctx context.Context, bf benchFlags, strict bool) error {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	cases, llms, err := loadSWEBenchInputs(bf)
+	if err != nil {
+		return err
+	}
+	rep, err := executeSWEBench(ctx, bf, cases, llms)
+	if err != nil {
+		return err
+	}
+	if err := emitSWEBenchReport(bf, rep); err != nil {
+		return err
+	}
+	if strict {
+		return checkSWEStrictFailures(rep)
+	}
+	return nil
+}
+
+func loadSWEBenchInputs(bf benchFlags) ([]bench.SWEBenchCase, []cli.LLM, error) {
+	cases, err := bench.LoadSWEBenchDataset(bf.sweBenchDataset)
+	if err != nil {
+		return nil, nil, err
+	}
+	llms, err := pickBenchLLMs(bf)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(llms) == 0 {
+		return nil, nil, fmt.Errorf("no LLMs to bench (run `local-review doctor` for status, or pass --replay <dir> to use recorded fixtures)")
+	}
+	return cases, llms, nil
+}
+
+func executeSWEBench(ctx context.Context, bf benchFlags, cases []bench.SWEBenchCase, llms []cli.LLM) (bench.SWEBenchReport, error) {
+	source := bench.SourceLive
+	if bf.replayDir != "" {
+		source = bench.SourceReplay
+	}
+	rep, err := bench.RunSWE(ctx, cases, bench.Options{
+		LLMs:      llms,
+		Source:    source,
+		ReplayDir: bf.replayDir,
+		Repeat:    bf.repeat,
+		Uplift:    bf.uplift,
+	})
+	if err != nil {
+		return bench.SWEBenchReport{}, err
+	}
+	rep.Dataset = bf.sweBenchDataset
+	return rep, nil
+}
+
+func emitSWEBenchReport(bf benchFlags, rep bench.SWEBenchReport) error {
+	if bf.outFile != "" {
+		if err := writeSWEBenchJSONFile(bf.outFile, rep); err != nil {
+			return fmt.Errorf("write --out file: %w", err)
+		}
+	}
+	if bf.markdownPath != "" {
+		if err := writeSWEBenchMarkdownFile(bf.markdownPath, rep); err != nil {
+			return fmt.Errorf("write --markdown file: %w", err)
+		}
+	}
+	if bf.jsonOut {
+		return bench.WriteJSONSWE(os.Stdout, rep)
+	}
+	return bench.WriteTextSWE(os.Stdout, rep)
+}
+
+func writeSWEBenchJSONFile(path string, rep bench.SWEBenchReport) error {
+	return writeSWEBenchToFile(path, rep, bench.WriteJSONSWE)
+}
+
+func writeSWEBenchMarkdownFile(path string, rep bench.SWEBenchReport) error {
+	return writeSWEBenchToFile(path, rep, bench.WriteMarkdownSWE)
+}
+
+func writeSWEBenchToFile(path string, rep bench.SWEBenchReport, emit func(io.Writer, bench.SWEBenchReport) error) (retErr error) {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil && retErr == nil {
+			retErr = fmt.Errorf("close %s: %w", path, cerr)
+		}
+	}()
+	return emit(f, rep)
+}
+
+// checkSWEStrictFailures is the SWE-bench counterpart of
+// checkStrictFailures: a missing fixture or a CLI invocation failure
+// should fail CI under --strict, so a half-scored bench doesn't
+// silently ship a clean-looking catch rate. Caught/missed verdicts
+// themselves are NOT failures — that's the whole point of the
+// scorer — only invocation errors are.
+func checkSWEStrictFailures(rep bench.SWEBenchReport) error {
+	var failures []string
+	for _, lr := range rep.LLMReports {
+		for _, cs := range lr.Cases {
+			if cs.Error != "" {
+				failures = append(failures, fmt.Sprintf("%s/%s: %s", lr.LLM, cs.CaseID, cs.Error))
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("strict mode: %d case(s) errored: %s", len(failures), strings.Join(failures, "; "))
+	}
+	return nil
 }

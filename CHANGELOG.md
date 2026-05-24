@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`local-review bench --swe-bench` — SWE-bench-lite catch-rate mode.** A second bench section ("SWE-bench-lite catch rate") in `bench/RESULTS.md` measuring how the reviewer performs on **bug-introducing diffs in the SWE-bench-lite format** — diffs adapted by reverse-applying a known fix patch, scored by case-insensitive keyword match between the LLM's review markdown and the task's `expected_keywords`. v0.10.0-a ships 3 **synthetic SWE-bench-shaped examples** (paginator, retries, ORM SQL injection); real-task curation from the upstream SWE-bench-lite dataset (target N=10) lands as a follow-up commit before the v0.10.0 tag, at which point the catch rate measures performance against real bugs from real Python projects we did not author — the credibility signal that closes v0.8/v0.9's "circular benchmark" critique. Loads tasks from `bench/swe-bench-lite/<id>/{case.yaml, diff.patch}`, runs the existing multi-LLM review path on each diff. v1 is binary `caught` / `missed`; a partial-credit LLM-as-judge tier is tracked for a later release. New flags `--swe-bench` and `--swe-bench-dataset <dir>` on the existing hidden `bench` subcommand; new `SWEBenchReport` JSON shape (text via `WriteTextSWE`, markdown via `WriteMarkdownSWE`); refuses `--uplift` and `--repeat > 1` loudly (neither concept maps onto binary catch scoring in v1). Error frames count toward the catch-rate denominator — a reviewer that crashes catches no bugs, and silently shrinking the denominator to the surviving subset would inflate apparent catch rate exactly when reviewers are flakiest.
+- **`bench/swe-bench-lite/` dataset with 3 example tasks.** Day-1 ships synthetic SWE-bench-shaped examples covering a paginator off-by-one (integer-division-vs-ceil), a retry loop swallowing the wrong exception class, and an ORM SQL-injection regression. Clearly labelled as examples in the dataset README — real tasks curated from upstream SWE-bench-lite (target: N=10) land in a follow-up commit before v0.10.0 ships.
+
 ## [0.9.0] - 2026-05-11
 
 **Theme: make the tool sell itself.**
