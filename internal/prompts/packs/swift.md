@@ -9,7 +9,7 @@ Apply the default review rules. Plus: Swift-specific patterns to look for.
 - **Implicitly unwrapped optionals (`Type!`)** — defer crash to first use; treat as a code smell unless the value is provably set before any read (IB outlets, late-init pattern).
 - **`as!` downcasts** — runtime crash on mismatch; use `as?` + `guard let`.
 - **Chained `?.`** swallowing errors silently — when the chain is doing real work (mutation, side effect), the silent-nil-skip is usually a bug.
-- **Comparing `Optional` to a value** without unwrapping — `someInt == 0` is `false` when `someInt` is `nil`; usually you meant `someInt ?? 0 == 0`.
+- **Comparing `Optional` to a value** without unwrapping — `someInt == 0` is `false` when `someInt` is `nil`; usually you meant `(someInt ?? 0) == 0` (parens added for clarity even though `??` does bind tighter than `==` in Swift — the unparenthesized form trips readers).
 - **`Optional<Bool>` in conditions** — `if let x` is correct; `if x == true` silently drops the `nil` case.
 
 ### Memory & reference cycles

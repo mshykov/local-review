@@ -16,7 +16,7 @@ Liquid is a template language, not a programming language — review priorities 
 - **`canonical_url`, `og:url`, `link` tags built from `request.path`** without sanitizing — open-redirect / phishing surface.
 
 ### Performance (page weight + render time)
-- **`{% for ... in collections.all.products %}** without a `limit:` — iterates every product in the shop; will time out on shops with thousands of SKUs (Shopify caps theme rendering).
+- **`{% for ... in collections.all.products %}`** without a `limit:` — iterates every product in the shop; will time out on shops with thousands of SKUs (Shopify caps theme rendering).
 - **Nested `{% for %}` over collections.products** — quadratic; almost always a sign the logic belongs in a query / metafield rather than the template.
 - **`paginate` not used on large listings** — without `{% paginate collection.products by 24 %}` the page renders all products at once.
 - **`{% assign %}` of a heavy filter chain inside a loop** — recomputed every iteration; lift out of the loop.
@@ -30,7 +30,7 @@ Liquid is a template language, not a programming language — review priorities 
 ### Liquid logic correctness
 - **`{% if x %}` where `x` is a string** — empty string is truthy in Liquid (it's a defined value), unlike most languages. Use `{% if x != blank %}` or `{% if x != '' %}` explicitly.
 - **`nil` vs `blank`** — `nil` is "the variable was never set"; `blank` matches `nil`, empty string, and empty arrays. `{% if x == blank %}` is usually what you want for "no useful value."
-- **`{% unless x %}` with a chained condition** — `{% unless x and y %}` is De Morgan's nightmare; refactor to `{% if not (x and y) %}` or split into two `{% if %}` blocks.
+- **`{% unless x %}` with a chained condition** — `{% unless x and y %}` is De Morgan's nightmare ("unless both" reads as "if either is not"). Liquid has no `not` unary operator and doesn't support parentheses for grouping, so refactor by either splitting into nested `{% if %}` blocks (`{% if x %}{% if y %}…{% endif %}{% endif %}`) or rewriting as the comparison-level complement (`{% if x == blank or y == blank %}` for the "either is missing" case, depending on the underlying intent).
 - **`{% assign x = ... %}` inside `{% for %}`** intending closure capture — Liquid `assign` is global to the scope, not a fresh binding per iteration.
 - **`{% capture %}` with no end tag** — silent breakage; the rest of the template captures into `x` and renders nothing.
 - **`forloop.index` vs `forloop.index0`** — off-by-one source. `index` starts at 1; `index0` starts at 0.
@@ -65,7 +65,7 @@ Liquid is a template language, not a programming language — review priorities 
 
 - **Snake_case filter names** — Liquid filter convention (`image_url`, `where`, `map`, `compact`, `escape`).
 - **One filter per pipe** — chained filters read top-to-bottom; long chains across one line are unreadable, prefer multi-line.
-- **`{% liquid %}` block for multiple statements** — Shopify-specific shorthand that drops the `{%%}` brackets for each statement; cleaner for long logic sections.
+- **`{% liquid %}` block for multiple statements** — Shopify-specific shorthand that drops the `{%` and `%}` delimiters around each statement inside the block; cleaner for long logic sections.
 - **`{% render %}` over `{% include %}`** — `include` is deprecated; `render` has explicit variable scoping (the snippet sees only what you pass).
 - **`{% comment %} … {% endcomment %}`** for multi-line; `{# … #}` (Jekyll) does NOT work in Liquid.
 - **Empty-state guards at the top** — `{% if products.size == 0 %}…{% else %}{% for %}…{% endfor %}{% endif %}` reads cleaner than testing inside the loop body.
