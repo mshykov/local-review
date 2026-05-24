@@ -80,11 +80,14 @@ const defaultMaxBytesPerChunk = 256 * 1024
 //
 // Eligibility:
 //   - File is tracked by git (we use TrackedFiles to enumerate).
-//   - File extension maps to a known language pack OR matches a
-//     small built-in allowlist of common config / source shapes
-//     (see isAuditable below). The default pack catches the rest
-//     when it's actually source; binary / image / archive files
-//     are skipped.
+//   - File extension maps to a known language pack via
+//     internal/lang.Detect, OR matches isAuditable's small
+//     built-in allowlist of common config / build / script
+//     shapes (Bash, YAML, SQL, Dockerfile, Terraform). Files
+//     whose extension lang.Detect classifies as `default` are
+//     SKIPPED (binary / image / archive / unknown text) unless
+//     they're on the allowlist — keeping audit input focused on
+//     source the LLM can usefully reason about.
 //   - File survives the Include/Exclude filters.
 //
 // Output is sorted by Package (alphabetical) for deterministic

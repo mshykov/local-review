@@ -59,9 +59,12 @@ type Finding struct {
 }
 
 // PackageReport is the per-package output: one chunk, one LLM
-// invocation, one set of findings. Empty Findings + Raw == ""
-// means the LLM returned the "[clean] no findings in this package"
-// sentinel; the renderer collapses these into a single tail line.
+// invocation, one set of findings. The canonical "audited and
+// found nothing" signal is the Clean field, NOT empty Findings
+// (which is ambiguous — could be a clean run, a parser miss, or
+// an error frame). The renderer collapses Clean rows into a
+// single tail line. Raw stays populated on clean runs too, so
+// parser-debug paths can see what the LLM actually said.
 type PackageReport struct {
 	// Package is the repo-relative directory path. Top-level files
 	// (e.g. main.go in repo root) live under "." by convention.
