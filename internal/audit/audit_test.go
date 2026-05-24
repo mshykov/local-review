@@ -3,7 +3,6 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -468,9 +467,3 @@ func mkFile(t *testing.T, root, name, body string) {
 		t.Fatalf("write %s: %v", full, err)
 	}
 }
-
-// Compile-time pin: the formatter helpers stay referenced even if
-// a test refactor temporarily drops their last call site. Cheap
-// insurance against `go test` failing on "imported and not used"
-// during in-flight edits.
-var _ = fmt.Sprintf
