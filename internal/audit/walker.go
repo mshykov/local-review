@@ -198,7 +198,7 @@ func Walk(opts WalkOptions) ([]Chunk, error) {
 //
 // Edge case — a single file larger than maxBytes — emits a
 // one-file chunk that exceeds the cap and surfaces a warning via
-// opts.Warn (when non-nil). The LLM will probably refuse with
+// the provided warn writer (when non-nil). The LLM will probably refuse with
 // `prompt_too_long`, but splitting a single source file at an
 // arbitrary line boundary would produce nonsense chunks (split
 // mid-function, no scope context), so the alternative is worse.
