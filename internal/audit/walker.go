@@ -68,11 +68,17 @@ type WalkOptions struct {
 	Warn io.Writer
 }
 
-// defaultMaxBytesPerChunk: 256 KiB. The realistic LLM context-window
-// pressure point — Claude Sonnet 4.5 fits ~1 MiB at the high end,
-// but staying under 256 KiB keeps response latency reasonable AND
-// leaves headroom for the system prompt + LLM reasoning.
-const defaultMaxBytesPerChunk = 256 * 1024
+// defaultMaxBytesPerChunk: 96 KiB. Empirical default — claude-code
+// (the wrapper the multi-LLM path shells out to) returns
+// `prompt_too_long` on chunks at ~176 KiB through Claude Haiku 4.5,
+// well below the model's nominal 200K-token context. The wrapper
+// adds its own system prompt + tool definitions on top of the
+// audit pack body, so the effective budget for chunk content is a
+// good bit smaller than the raw model context. 96 KiB leaves
+// reliable headroom across Claude / Gemini / Codex and keeps
+// response latency reasonable. Big packages get auto-split (see
+// splitChunk below) rather than failing.
+const defaultMaxBytesPerChunk = 96 * 1024
 
 // Walk returns one Chunk per directory containing audit-eligible
 // files. Directories with no eligible files are skipped silently
@@ -145,30 +151,116 @@ func Walk(opts WalkOptions) ([]Chunk, error) {
 	for _, pkg := range pkgs {
 		paths := byPkg[pkg]
 		sort.Strings(paths)
-		body, size, err := concatFiles(root, paths)
+		parts, err := splitChunk(root, pkg, paths, maxBytes, opts.Warn)
 		if err != nil {
 			return nil, err
 		}
-		if size > maxBytes && opts.Warn != nil {
-			// Stderr-shaped informational write: explicitly
-			// discard the error rather than swallowing it
-			// silently. CLAUDE.md rule 4 demands intent be
-			// explicit; aborting an audit because a progress
-			// warning failed to flush would be the wrong
-			// choice, so we record the policy in the assignment
-			// shape and move on.
-			_, _ = fmt.Fprintf(opts.Warn, "warning: %s chunk is %s (over %s soft cap); LLM may truncate or refuse\n",
-				pkg, FormatBytes(size), FormatBytes(maxBytes))
+		out = append(out, parts...)
+	}
+	return out, nil
+}
+
+// splitChunk turns one package's files into one OR MORE Chunks,
+// bin-packing files so each chunk stays under maxBytes. Packages
+// that fit in a single chunk emit one Chunk with the package
+// name unchanged; oversized packages emit multiple Chunks tagged
+// `pkg [part N/M]` so the report attribution stays readable.
+//
+// The greedy bin-packing is intentional: it preserves file
+// adjacency (files A, B, C, D in that order end up as [A,B] +
+// [C,D] not [A,D] + [B,C]). LLMs do better when a chunk's files
+// are related, and `git ls-files` already returns files in tree
+// order, so adjacency is a useful proxy for "related."
+//
+// Edge case — a single file larger than maxBytes — emits a
+// one-file chunk that exceeds the cap and surfaces a warning via
+// opts.Warn (when non-nil). The LLM will probably refuse with
+// `prompt_too_long`, but splitting a single source file at an
+// arbitrary line boundary would produce nonsense chunks (split
+// mid-function, no scope context), so the alternative is worse.
+// v1: surface the size + skip nothing; future work could add a
+// per-file split strategy keyed on language (e.g., split Go at
+// `func` boundaries).
+//
+// Caught by user-reported failures on PR #73's first dogfood:
+// the 256 KiB soft cap was too high empirically and the runner
+// just shipped oversized chunks to the LLM, which returned
+// `prompt_too_long` on every one. Out of 343 Android packages,
+// 321 errored that way.
+func splitChunk(root, pkg string, paths []string, maxBytes int, warn io.Writer) ([]Chunk, error) {
+	type bin struct {
+		files []string
+		size  int
+	}
+	var bins []bin
+	cur := bin{}
+	for _, p := range paths {
+		full := filepath.Join(root, p)
+		info, statErr := os.Stat(full)
+		if statErr != nil {
+			return nil, fmt.Errorf("stat %s: %w", p, statErr)
+		}
+		// Per-file overhead estimate: the `// === FILE: <p> ===\n`
+		// marker plus a trailing newline. Small but accumulates.
+		fileSize := int(info.Size()) + len(p) + fileMarkerOverhead
+		// Single file over the cap: flush the current bin (if any)
+		// to keep its bin-mate files together, then emit the
+		// oversized file as its own bin. The warning fires for
+		// the user's awareness.
+		if fileSize > maxBytes {
+			if len(cur.files) > 0 {
+				bins = append(bins, cur)
+				cur = bin{}
+			}
+			if warn != nil {
+				_, _ = fmt.Fprintf(warn, "warning: file %s is %s (over %s per-chunk cap); cannot split a single file across chunks, LLM may refuse this chunk\n",
+					p, FormatBytes(fileSize), FormatBytes(maxBytes))
+			}
+			bins = append(bins, bin{files: []string{p}, size: fileSize})
+			continue
+		}
+		// Would this file overflow the current bin? Start a new
+		// one. The check is "current + new > cap" so a freshly
+		// flushed bin can still take a sub-cap file.
+		if cur.size+fileSize > maxBytes && len(cur.files) > 0 {
+			bins = append(bins, cur)
+			cur = bin{}
+		}
+		cur.files = append(cur.files, p)
+		cur.size += fileSize
+	}
+	if len(cur.files) > 0 {
+		bins = append(bins, cur)
+	}
+
+	out := make([]Chunk, 0, len(bins))
+	for i, b := range bins {
+		body, size, err := concatFiles(root, b.files)
+		if err != nil {
+			return nil, err
+		}
+		label := pkg
+		if len(bins) > 1 {
+			label = fmt.Sprintf("%s [part %d/%d]", pkg, i+1, len(bins))
 		}
 		out = append(out, Chunk{
-			Package:   pkg,
-			Files:     paths,
+			Package:   label,
+			Files:     b.files,
 			Body:      body,
 			SizeBytes: size,
 		})
 	}
 	return out, nil
 }
+
+// fileMarkerOverhead approximates the bytes the `// === FILE: <p>
+// ===\n` marker adds per file in concatFiles' output. Used by
+// splitChunk's pre-flight bin-packing — we estimate from
+// os.Stat(file.Size()) + this constant rather than reading the
+// file twice (once for sizing, once for concatenation). A small
+// over-estimate is fine; an under-estimate would let chunks creep
+// past maxBytes.
+const fileMarkerOverhead = len("// === FILE: ") + len(" ===\n") + 1 // +1 for the possibly-missing trailing newline
 
 // concatFiles reads each file under root and concatenates with a
 // `// === FILE: <path> ===` marker that the audit pack tells the
