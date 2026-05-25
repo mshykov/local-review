@@ -2,6 +2,7 @@ package multi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -205,5 +206,142 @@ func TestRunParallel_FastFailErrorsStillStream(t *testing.T) {
 	}
 	if results["claude"].Error != nil {
 		t.Errorf("claude agent should have succeeded, got: %v", results["claude"].Error)
+	}
+}
+
+// --- GateDecision tests ----------------------------------------------------
+//
+// These tests pin the *meaning* of the gate (per CLAUDE.md rule 9: tests
+// encode the invariant, not the call). The dual-metric pattern that
+// preceded GateDecision drifted across 5 review rounds historically
+// (`CountSuccessful` → `CountWithOutput` migration); naming each case
+// for the underlying scenario makes a regression obvious from the
+// failure line, not from re-reading the body.
+
+func TestDecideGate_AllSuccessful(t *testing.T) {
+	results := []ReviewResult{
+		{LLM: "claude", Output: "finding"},
+		{LLM: "gemini", Output: "finding"},
+		{LLM: "codex", Output: "finding"},
+	}
+	g := DecideGate(results)
+	if g.Total != 3 || g.Successful != 3 || g.WithOutput != 3 {
+		t.Errorf("Total/Successful/WithOutput = %d/%d/%d, want 3/3/3", g.Total, g.Successful, g.WithOutput)
+	}
+	if !g.HasMergeable() {
+		t.Error("HasMergeable() = false, want true (3 reviews with output)")
+	}
+	if got := g.Failed(); got != 0 {
+		t.Errorf("Failed() = %d, want 0", got)
+	}
+}
+
+func TestDecideGate_AllFailed(t *testing.T) {
+	agentFailed := errors.New("agent failed")
+	results := []ReviewResult{
+		{LLM: "claude", Error: agentFailed},
+		{LLM: "gemini", Error: agentFailed},
+	}
+	g := DecideGate(results)
+	if g.Total != 2 || g.Successful != 0 || g.WithOutput != 0 {
+		t.Errorf("counts = %d/%d/%d, want 2/0/0", g.Total, g.Successful, g.WithOutput)
+	}
+	if g.HasMergeable() {
+		t.Error("HasMergeable() = true, want false (no output)")
+	}
+	if got := g.ClassifyZero(); got != ZeroMergeableAllFailed {
+		t.Errorf("ClassifyZero() = %v, want ZeroMergeableAllFailed", got)
+	}
+}
+
+// "Succeeded but empty" is a real LLM-emitter pathology — the CLI exits
+// 0 with blank stdout. Pre-consolidation this slipped past a Successful-
+// only gate check and reached the merger with nothing to consume.
+func TestDecideGate_AllSucceededButEmpty(t *testing.T) {
+	results := []ReviewResult{
+		{LLM: "claude", Output: ""},
+		{LLM: "gemini", Output: "   \n\t"},
+	}
+	g := DecideGate(results)
+	if g.Total != 2 || g.Successful != 2 || g.WithOutput != 0 {
+		t.Errorf("counts = %d/%d/%d, want 2/2/0", g.Total, g.Successful, g.WithOutput)
+	}
+	if g.HasMergeable() {
+		t.Error("HasMergeable() = true, want false (whitespace-only output is not mergeable)")
+	}
+	if got := g.ClassifyZero(); got != ZeroMergeableAllEmpty {
+		t.Errorf("ClassifyZero() = %v, want ZeroMergeableAllEmpty (every Error nil, no Output)", got)
+	}
+}
+
+func TestDecideGate_MixedFailedAndEmpty(t *testing.T) {
+	agentFailed := errors.New("agent failed")
+	results := []ReviewResult{
+		{LLM: "claude", Error: agentFailed},
+		{LLM: "gemini", Output: ""}, // succeeded with no output
+	}
+	g := DecideGate(results)
+	if g.Total != 2 || g.Successful != 1 || g.WithOutput != 0 {
+		t.Errorf("counts = %d/%d/%d, want 2/1/0", g.Total, g.Successful, g.WithOutput)
+	}
+	if g.HasMergeable() {
+		t.Error("HasMergeable() = true, want false")
+	}
+	if got := g.ClassifyZero(); got != ZeroMergeableMixed {
+		t.Errorf("ClassifyZero() = %v, want ZeroMergeableMixed (one failed, one succeeded with no output)", got)
+	}
+}
+
+// SaveReview-failed-with-output: Error is set but Output is populated.
+// The merger CAN still consume the in-memory output. Pre-consolidation
+// a Successful-only check would abort the merge here ("all failed")
+// even though the merger would have produced a valid consolidated
+// report. GateDecision must count this as mergeable.
+func TestDecideGate_SaveReviewFailedWithOutput_StillMergeable(t *testing.T) {
+	saveErr := errors.New("save review: disk full")
+	results := []ReviewResult{
+		{LLM: "claude", Output: "finding", Error: saveErr},
+		{LLM: "gemini", Output: "finding", Error: saveErr},
+	}
+	g := DecideGate(results)
+	if g.Total != 2 || g.Successful != 0 || g.WithOutput != 2 {
+		t.Errorf("counts = %d/%d/%d, want 2/0/2 (both save-failed but both have output)", g.Total, g.Successful, g.WithOutput)
+	}
+	if !g.HasMergeable() {
+		t.Error("HasMergeable() = false, want true (save failure does not erase in-memory Output)")
+	}
+}
+
+// Mixed real-world shape that surfaces both views diverging at once.
+// One succeeded with output, one save-failed with output, one crashed:
+// Successful=1 (only the clean one), WithOutput=2 (the two with output),
+// Failed=2 (save-fail counts as failed in the Error sense).
+func TestDecideGate_MixedShapeBothViewsDiverge(t *testing.T) {
+	saveErr := errors.New("save review: disk full")
+	hardErr := errors.New("claude review failed: signal: killed")
+	results := []ReviewResult{
+		{LLM: "claude", Output: "finding"},
+		{LLM: "gemini", Output: "finding", Error: saveErr},
+		{LLM: "codex", Error: hardErr},
+	}
+	g := DecideGate(results)
+	if g.Total != 3 || g.Successful != 1 || g.WithOutput != 2 {
+		t.Errorf("counts = %d/%d/%d, want 3/1/2", g.Total, g.Successful, g.WithOutput)
+	}
+	if got := g.Failed(); got != 2 {
+		t.Errorf("Failed() = %d, want 2", got)
+	}
+	if !g.HasMergeable() {
+		t.Error("HasMergeable() = false, want true (2 with output)")
+	}
+}
+
+func TestDecideGate_Empty(t *testing.T) {
+	g := DecideGate(nil)
+	if g.Total != 0 || g.Successful != 0 || g.WithOutput != 0 {
+		t.Errorf("counts = %d/%d/%d, want all zero for nil input", g.Total, g.Successful, g.WithOutput)
+	}
+	if g.HasMergeable() {
+		t.Error("HasMergeable() = true on empty set, want false")
 	}
 }
