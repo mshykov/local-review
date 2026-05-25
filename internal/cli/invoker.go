@@ -271,11 +271,11 @@ type ClaudeInvoker struct {
 
 func (c *ClaudeInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
 	prompt := buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff
-	return c.run(ctx, prompt, "claude review")
+	return c.run(ctx, prompt)
 }
 
 func (c *ClaudeInvoker) RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error) {
-	return c.run(ctx, prompt, "claude")
+	return c.run(ctx, prompt)
 }
 
 // run is the shared driver. Splits args into "model + stdin prompt" so
@@ -302,7 +302,7 @@ func (c *ClaudeInvoker) RunPrompt(ctx context.Context, prompt string) (string, T
 // text fallback. On error we concatenate stdout+stderr for
 // ClassifyExit so the user-facing message still includes the
 // stderr tail.
-func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (string, TokenUsage, error) {
+func (c *ClaudeInvoker) run(ctx context.Context, prompt string) (string, TokenUsage, error) {
 	args := []string{"--print", "--output-format", "json"}
 	if c.model != "" {
 		args = append(args, "--model", c.model)
@@ -314,10 +314,11 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt, errLabel string) (strin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		// errLabel was the old "claude review failed:" / "claude:" prefix
-		// — the caller's per-LLM line already names the agent so the
-		// prefix would duplicate.
-		_ = errLabel
+		// No error-label prefix here: the runner's per-LLM completion
+		// line already names the agent ("claude ✗ ..."), so a second
+		// "claude review failed:" prefix on the message would
+		// duplicate. ClassifyExit's output is the user-facing summary;
+		// no caller-side framing needed.
 		combined := append(stdout.Bytes(), stderr.Bytes()...)
 		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "claude"))
 	}
