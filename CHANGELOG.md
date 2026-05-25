@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-05-25
+
+**Theme: clear the deck.**
+
+A no-features patch release whose job is to make v0.10.0's audit dogfood pay off — burn down the `major` findings `audit/tech-debt.md` surfaced on this codebase. Four of the six majors closed across PRs #80–#82; the remaining two (parallel `bench` / `swe-bench` code paths ~250 lines, and a `GeminiInvoker.run` / `ClaudeInvoker.run` extraction ~80 lines) deferred as needs-design rather than cleanup.
+
+No user-visible behaviour change in any commit. Every PR shipped behind 0-blocking `local-review review main` self-review before merge; the burn-down also caught two genuine Copilot doc-clarity issues (vague "three writers" wording, wrong file-perm assertion — `os.Create` uses `0o666` masked by umask, not a guaranteed `0o644`) that landed as follow-up fixes inside the same PR.
+
+Pattern worth noting: the v0.10.0 audit was the source for the entire v0.10.1 + v0.10.2 cleanup roadmap. The tool's own deep-codebase output is the project's roadmap now; not a one-time artifact.
+
 ### Removed
 
 - **Dead code + dead parameters surfaced by v0.10.0's `audit/tech-debt.md`.** Three small deletions, no user-visible behavior change, opens the v0.10.2 burn-down on the audit's outstanding findings. (1) `internal/review/review.go` — removed the unused `matchGlob(path, pattern string) bool` function. It was lower-case (private), claimed in its doc comment to be "kept for back-compat with any external caller," but private functions have no external callers; production filtering goes through `compileGlobs` + `matchesAnyCompiled` (amortises regex compilation across the diff), tests go through `matchesAny`. Audit flagged it as dead code on `review.go:306-315`; the audit's framing was right. (2) `internal/cli/invoker.go` — removed the unused `errLabel string` parameter from `ClaudeInvoker.run` and its two callers (`Review`, `RunPrompt`). Pre-fix the parameter was passed in by every caller and explicitly discarded via `_ = errLabel` — a vestige of a pre-v0.7 "claude review failed:" prefix that the runner's per-LLM completion line now owns. CodexInvoker's `runExec` retains its `errLabel` parameter because it still distinguishes pre-invocation errors (temp-file creation) from post-success errors (output-file read), neither of which the runner's per-LLM line covers. (3) `internal/cli/version.go` — removed the unused `name` parameter from `detectVersion(name, path string)`. The function never read `name`; the audit's warning that "parameter suggests the function is name-aware when it's not" was accurate. Doc comment now points future maintainers at the right discriminator (`path`'s basename) if a CLI ever needs version-flag-specific branching.
