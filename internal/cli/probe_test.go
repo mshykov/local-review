@@ -308,6 +308,7 @@ func TestProbeStatusString(t *testing.T) {
 		ProbeReady:        "ready",
 		ProbeError:        "error",
 		ProbeTimeout:      "timeout",
+		ProbeCanceled:     "canceled",
 		ProbeStatus(999):  "unknown",
 		ProbeStatus(-100): "unknown",
 	}
@@ -328,4 +329,180 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// hungInvoker simulates a CLI whose subprocess hangs past
+// SIGKILL: ignores ctx.Done() entirely and blocks until its own
+// `release` channel closes. Without v0.10.5's race-on-ctx.Done
+// pattern, a Probe against this invoker would hang for the full
+// `release` duration regardless of the per-LLM ctx deadline.
+// With the fix, Probe returns immediately when ctx expires; the
+// hung goroutine drains in the background, unblocking only when
+// the test signals release.
+type hungInvoker struct {
+	release chan struct{} // close to unblock; nil = block forever
+}
+
+func (h *hungInvoker) Review(ctx context.Context, _, _ string) (string, TokenUsage, error) {
+	return "", TokenUsage{}, errors.New("Review not used in probe tests")
+}
+
+func (h *hungInvoker) RunPrompt(_ context.Context, _ string) (string, TokenUsage, error) {
+	// Deliberately ignore ctx — mirrors the bug we're testing
+	// against (real CLIs whose cmd.Wait() blocks on pipe drain
+	// after exec.CommandContext SIGKILLs the process).
+	if h.release != nil {
+		<-h.release
+	}
+	return "OK", TokenUsage{}, nil
+}
+
+// Regression test for the v0.10.5 probe-timeout fix. Pre-fix,
+// Probe called inv.RunPrompt synchronously; if the underlying
+// CLI hung past ctx.Deadline (the v0.10.0-RC and PR #86 dogfood
+// observed cases), the probe phase wallclock was bounded by the
+// CLI's subprocess-death time, not the per-LLM ctx deadline. A
+// 10s ctx deadline could produce a 4-minute probe phase.
+//
+// With the fix in place, Probe must return ProbeTimeout within a
+// small margin of the ctx deadline, regardless of whether the
+// underlying invoker honors ctx cancellation.
+func TestProbe_RespectsCtxDeadlineEvenWhenInvokerHangs(t *testing.T) {
+	// Tight deadline (30ms) + an invoker that ignores ctx and
+	// will block forever unless we explicitly release it. The
+	// test concludes within tens of ms; the goroutine the fix
+	// leaks is reaped via defer-close at the end.
+	release := make(chan struct{})
+	defer close(release) // unblocks the leaked goroutine on test exit
+	inv := &hungInvoker{release: release}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	r := Probe(ctx, inv, "claude")
+	elapsed := time.Since(start)
+
+	if r.Status != ProbeTimeout {
+		t.Errorf("Status = %s, want ProbeTimeout (hung invoker should not let probe complete normally)", r.Status)
+	}
+	// Threshold: the 30ms deadline plus generous slack for the
+	// goroutine + channel + select scheduler. 200ms gives enough
+	// headroom for CI runner jitter while still failing if the
+	// fix is regressed (pre-fix this would have been blocked
+	// forever, exceeding any threshold).
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("Probe took %v with hung invoker and 30ms ctx — race-on-ctx.Done is broken", elapsed)
+	}
+}
+
+// Companion test: same hung-invoker shape but inside ProbeAll's
+// fan-out. v0.10.0-RC's dogfood specifically reported the probe
+// PHASE wallclock as 4m34s when one LLM hung; the fan-out should
+// be bounded by the per-LLM timeout, not the slow LLM's
+// subprocess-death time.
+func TestProbeAll_PhaseRespectsTimeoutEvenWhenOneInvokerHangs(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+
+	llms := []LLM{
+		{Name: "claude", Path: "fake"},
+		{Name: "gemini-hung", Path: "fake"},
+		{Name: "codex", Path: "fake"},
+	}
+	factory := func(l LLM) Invoker {
+		if l.Name == "gemini-hung" {
+			return &hungInvoker{release: release}
+		}
+		return &fakeProbeInvoker{output: "OK"}
+	}
+
+	const perLLM = 50 * time.Millisecond
+	start := time.Now()
+	results := ProbeAllWithInvokerFactory(context.Background(), llms, perLLM, factory)
+	elapsed := time.Since(start)
+
+	if len(results) != 3 {
+		t.Fatalf("got %d results, want 3", len(results))
+	}
+	// gemini-hung must surface as Timeout, not block the whole phase.
+	if results[1].Status != ProbeTimeout {
+		t.Errorf("gemini-hung result = %s, want ProbeTimeout", results[1].Status)
+	}
+	// Phase wallclock must be bounded by perLLM + scheduler slack,
+	// NOT by however long the hung invoker would have taken.
+	if elapsed > perLLM+200*time.Millisecond {
+		t.Errorf("ProbeAll phase took %v with one hung invoker and %v per-LLM cap — fan-out is not respecting the cap", elapsed, perLLM)
+	}
+}
+
+// v0.10.5 added the canceled-vs-timeout distinction. Before this,
+// a user Ctrl+C during the probe phase would surface as
+// "every active LLM failed pre-flight" because Probe returned
+// ProbeTimeout indiscriminately on ctx.Done(). The fix branches
+// on ctx.Err() inside the Done() case.
+func TestProbe_CanceledIsDistinctFromTimeout(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	inv := &hungInvoker{release: release}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately — the ctx.Done() branch fires with
+	// ctx.Err() == context.Canceled (not DeadlineExceeded).
+	cancel()
+
+	r := Probe(ctx, inv, "claude")
+	if r.Status != ProbeCanceled {
+		t.Errorf("Status = %s, want ProbeCanceled (user-cancel must not look like a timeout)", r.Status)
+	}
+	if !errors.Is(r.Err, context.Canceled) {
+		t.Errorf("Err = %v, want to wrap context.Canceled", r.Err)
+	}
+}
+
+// And the inverse — a DeadlineExceeded must still classify as
+// ProbeTimeout, not ProbeCanceled. The distinction matters at
+// the runner: timeout = skip this LLM, canceled = abort the run.
+func TestProbe_DeadlineExceededStillTimeout(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	inv := &hungInvoker{release: release}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	r := Probe(ctx, inv, "claude")
+	if r.Status != ProbeTimeout {
+		t.Errorf("Status = %s, want ProbeTimeout (deadline expiry must not look like a cancel)", r.Status)
+	}
+	if !errors.Is(r.Err, context.DeadlineExceeded) {
+		t.Errorf("Err = %v, want to wrap context.DeadlineExceeded", r.Err)
+	}
+}
+
+// Race window: when ctx is canceled, the invoker may honor ctx
+// and return context.Canceled BEFORE Probe's outer
+// case <-ctx.Done() fires. Without the guard at the top of
+// classifyProbeOutcome, the canceled result would have fallen
+// through to ProbeError instead of ProbeCanceled — surfacing as
+// "every LLM failed pre-flight" instead of propagating cleanly.
+// (Claude + codex both caught this on PR #88's second dogfood.)
+//
+// The fake invoker here returns context.Canceled DIRECTLY rather
+// than blocking long enough for ctx.Done() to fire — simulating
+// a CLI that honors ctx promptly. This forces the result through
+// the outcomeCh path, exercising classifyProbeOutcome's canceled
+// branch instead of Probe's outer Done() branch.
+func TestProbe_CanceledOutcomeFromInvokerStillClassifiesAsCanceled(t *testing.T) {
+	inv := &fakeProbeInvoker{err: context.Canceled}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel; invoker reads ctx.Err and returns ctx.Err
+	// Race: depending on Go scheduler, Probe's outer Done() may
+	// fire first OR the invoker's outcomeCh send may win. Either
+	// way the result MUST be ProbeCanceled, never ProbeError.
+
+	r := Probe(ctx, inv, "claude")
+	if r.Status != ProbeCanceled {
+		t.Errorf("Status = %s, want ProbeCanceled (canceled invoker return must not fall through to ProbeError)", r.Status)
+	}
 }
