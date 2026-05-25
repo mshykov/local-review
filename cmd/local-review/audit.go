@@ -40,9 +40,11 @@ type auditFlags struct {
 	dryRun bool
 
 	// maxBytesPerChunk soft-caps each chunk. Zero falls back to
-	// the audit package's internal default (256 KiB) which is the
+	// the audit package's internal default (96 KiB) which is the
 	// realistic balance between LLM context-window pressure and
-	// "one chunk = one package" cohesion.
+	// "one chunk = one package" cohesion. Packages over the cap
+	// auto-split into `pkg [part N/M]` sub-chunks (see
+	// internal/audit/walker.go splitChunk).
 	maxBytesPerChunk int
 }
 
@@ -99,7 +101,7 @@ committed.`,
 	// --audit-json flag would be inconsistent with the rest of
 	// the CLI (Copilot caught this on PR #73).
 	cmd.Flags().BoolVar(&af.dryRun, "dry-run", false, "print the audit plan (chunks + sizes) without invoking the LLM")
-	cmd.Flags().IntVar(&af.maxBytesPerChunk, "max-bytes-per-chunk", 0, "soft cap on per-chunk input size (0 = default 256 KiB)")
+	cmd.Flags().IntVar(&af.maxBytesPerChunk, "max-bytes-per-chunk", 0, "per-chunk input cap; packages over the cap auto-split into `pkg [part N/M]` sub-chunks (0 = default 96 KiB; negative values are rejected)")
 
 	return cmd
 }
