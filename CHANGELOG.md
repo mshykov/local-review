@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-05-25
+
+**Theme: tighten the install path.**
+
+A focused patch release closing the only remaining `warning`-severity finding from v0.10.0's first audit — `install.sh`'s env-var-only opt-out for skipping checksum verification. The fix is small (~30 lines of shell) but the surface it covers is the project's primary install path (`curl ... | sh`), so worth its own release rather than bundling into a larger v0.11. The TTY-aware probe + `if !` read guards (caught by Copilot mid-review) also harden the failure path against the ENXIO-under-`set -e` crash that would have terminated the script on some non-interactive contexts. Three-LLM review found no issues in this PR's diff; CodeRabbit caught a CHANGELOG header that I had accidentally deleted in an earlier edit. The interplay of reviewers each with their own blind spots is the trust signal.
+
 ### Security
 
 - **`install.sh`: env-var checksum bypass no longer accepts silent opt-out when a TTY is available.** v0.10.0-RC1's `audit/security.md` (single `warning` finding the LLM caught on the stale-binary dogfood) flagged that `INSTALL_REVIEW_SKIP_VERIFICATION=1` could be set silently by a compromised shell rc, parent process, or CI config — forcing an unverified install without the user's explicit awareness. Three-way resolution now: (1) env var set explicitly → proceed with a loud warning (CI's documented escape hatch is preserved); (2) `/dev/tty` available (the common case, true even for `curl | sh` because stdin is the piped script but `/dev/tty` still points to the user's terminal) → prompt `y/N` for explicit acknowledgement that no env var alone could provide; (3) no env var AND no `/dev/tty` (true non-interactive CI without explicit opt-in) → fail loud with the env-var hint, same as pre-v0.10.3. Behaviour is unchanged for users who already pass the env var; the new interactive prompt only fires on the previously-fail-loud branch when a real terminal is reachable, replacing the v0.10.2 "Sorry, can't install — set this env var" wall with a one-key acknowledgement.
