@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Dead code + dead parameters surfaced by v0.10.0's `audit/tech-debt.md`.** Three small deletions, no user-visible behavior change, opens the v0.10.2 burn-down on the audit's outstanding findings. (1) `internal/review/review.go` — removed the unused `matchGlob(path, pattern string) bool` function. It was lower-case (private), claimed in its doc comment to be "kept for back-compat with any external caller," but private functions have no external callers; production filtering goes through `compileGlobs` + `matchesAnyCompiled` (amortises regex compilation across the diff), tests go through `matchesAny`. Audit flagged it as dead code on `review.go:306-315`; the audit's framing was right. (2) `internal/cli/invoker.go` — removed the unused `errLabel string` parameter from `ClaudeInvoker.run` and its two callers (`Review`, `RunPrompt`). Pre-fix the parameter was passed in by every caller and explicitly discarded via `_ = errLabel` — a vestige of a pre-v0.7 "claude review failed:" prefix that the runner's per-LLM completion line now owns. CodexInvoker's `runExec` retains its `errLabel` parameter because it still distinguishes pre-invocation errors (temp-file creation) from post-success errors (output-file read), neither of which the runner's per-LLM line covers. (3) `internal/cli/version.go` — removed the unused `name` parameter from `detectVersion(name, path string)`. The function never read `name`; the audit's warning that "parameter suggests the function is name-aware when it's not" was accurate. Doc comment now points future maintainers at the right discriminator (`path`'s basename) if a CLI ever needs version-flag-specific branching.
+
 ## [0.10.1] - 2026-05-25
 
 **Theme: fail fast on the slow path.**
