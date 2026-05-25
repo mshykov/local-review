@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -206,25 +205,17 @@ func emitAuditReport(sf *sharedFlags, af auditFlags, rep audit.Report) error {
 // convention from bench's --markdown / --out separation but here
 // it's one --out flag that switches on extension, since audit's
 // canonical output IS the markdown report.
-func writeAuditFile(path string, rep audit.Report) (retErr error) {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
+//
+// File creation + mkdir-parents + close-error handling delegated to
+// writeFileWithDirs (see cmd/local-review/iohelpers.go); this
+// function owns only the extension → emitter routing.
+func writeAuditFile(path string, rep audit.Report) error {
+	return writeFileWithDirs(path, func(w io.Writer) error {
+		if strings.HasSuffix(strings.ToLower(path), ".json") {
+			return audit.WriteJSON(w, rep)
 		}
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("close %s: %w", path, cerr)
-		}
-	}()
-	if strings.HasSuffix(strings.ToLower(path), ".json") {
-		return audit.WriteJSON(f, rep)
-	}
-	return audit.WriteMarkdown(f, rep)
+		return audit.WriteMarkdown(w, rep)
+	})
 }
 
 // writeAuditPlan prints the dry-run preview: one line per chunk
