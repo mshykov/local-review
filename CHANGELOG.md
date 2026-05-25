@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.10.2] - 2026-05-25
+### Security
+
+- **`install.sh`: env-var checksum bypass no longer accepts silent opt-out when a TTY is available.** v0.10.0-RC1's `audit/security.md` (single `warning` finding the LLM caught on the stale-binary dogfood) flagged that `INSTALL_REVIEW_SKIP_VERIFICATION=1` could be set silently by a compromised shell rc, parent process, or CI config — forcing an unverified install without the user's explicit awareness. Three-way resolution now: (1) env var set explicitly → proceed with a loud warning (CI's documented escape hatch is preserved); (2) `/dev/tty` available (the common case, true even for `curl | sh` because stdin is the piped script but `/dev/tty` still points to the user's terminal) → prompt `y/N` for explicit acknowledgement that no env var alone could provide; (3) no env var AND no `/dev/tty` (true non-interactive CI without explicit opt-in) → fail loud with the env-var hint, same as pre-v0.10.3. Behaviour is unchanged for users who already pass the env var; the new interactive prompt only fires on the previously-fail-loud branch when a real terminal is reachable, replacing the v0.10.2 "Sorry, can't install — set this env var" wall with a one-key acknowledgement.
+
+
 
 **Theme: clear the deck.**
 

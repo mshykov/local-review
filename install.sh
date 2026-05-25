@@ -107,10 +107,40 @@ else
   # unverified install. Default to fail-loud; let users opt out
   # explicitly only when they know they're installing a legacy
   # release that genuinely doesn't ship a manifest.
+  #
+  # Three-way opt-out resolution (v0.10.3 hardened — closes the
+  # `warning` finding from v0.10.0-RC1's audit/security.md: an
+  # env-var-only bypass can be set silently by a compromised shell
+  # rc / parent process / CI config, forcing an unverified install
+  # without the user's explicit awareness):
+  #
+  #   1. INSTALL_REVIEW_SKIP_VERIFICATION=1 set explicitly → proceed
+  #      with a loud warning. The user (or their CI config) made the
+  #      call; we trust it.
+  #   2. /dev/tty is available (interactive shell — true even in the
+  #      common `curl | sh` invocation, where stdin is the piped
+  #      script but /dev/tty is still the user's terminal) → prompt
+  #      y/N. Forces an explicit user acknowledgement that no env
+  #      var alone could provide.
+  #   3. No env var AND no /dev/tty (true non-interactive CI without
+  #      explicit opt-in) → fail loud with the env-var hint, same
+  #      as pre-v0.10.3.
   if [ "${INSTALL_REVIEW_SKIP_VERIFICATION:-}" = "1" ]; then
     echo "⚠️  ${checksums} unavailable for ${VERSION} — skipping integrity check" >&2
     echo "   (INSTALL_REVIEW_SKIP_VERIFICATION=1 — only safe for releases <v0.6.0)" >&2
     cd "$tmp"
+  elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    echo "⚠️  ${checksums} unavailable for ${VERSION} — checksum verification can't run" >&2
+    echo "   This may be: network glitch, release packaging error, OR a legacy release <v0.6.0 that doesn't ship a manifest." >&2
+    printf "Continue without integrity verification? [y/N] " >/dev/tty
+    # Read from /dev/tty directly. stdin in the curl-pipe-sh case
+    # is the piped script body, not the user's keyboard; /dev/tty
+    # is the only reliable source for an interactive answer.
+    read -r answer </dev/tty
+    case "$answer" in
+      y|Y|yes|YES|Yes) cd "$tmp" ;;
+      *) echo "Aborted." >&2; exit 1 ;;
+    esac
   else
     echo "❌ failed to fetch ${checksums_url}" >&2
     echo "   refusing to install — the checksum manifest may be unavailable due to a network issue or a release packaging error" >&2
