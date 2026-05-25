@@ -30,9 +30,13 @@ import (
 // `if cerr != nil && retErr == nil` guard. The dropped close error
 // would not be actionable on top of the already-failed emit anyway.
 //
-// Permission: 0755 on directories matches the project default for
+// Permission: 0o755 on directories matches the project default for
 // `.local-review/`, `audit/`, and any user-supplied --out target.
-// The 0644 default on the file itself comes from os.Create.
+// File perms come from os.Create — which calls open(2) with mode
+// 0o666, then the process umask (typically 022) masks it down to
+// 0o644 on most systems. Not pinned here; the three pre-
+// consolidation writers all called os.Create the same way, so the
+// effective on-disk perm is unchanged from v0.10.1.
 func writeFileWithDirs(path string, emit func(io.Writer) error) (retErr error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
