@@ -7,13 +7,18 @@ instead of shipping releases on vibes.
 
 **Phase 1** shipped the harness: a small hand-curated dataset, an
 in-CLI scorer, and a deterministic replay mode for CI.
-**Phase 2** (this directory's current state) added per-language
-splits, consistency runs (`--repeat N`, Jaccard similarity), a
-markdown leaderboard (`--markdown bench/RESULTS.md`), and grew the
-dataset to **10 cases** spanning Go, TypeScript, Python, and Rust.
-**Phase 3** (planned) adds cross-tool comparisons (CodeRabbit,
-Copilot review, etc.) and an LLM-as-judge backstop. See the issue
-for the long-term roadmap.
+**Phase 2** added per-language splits, consistency runs
+(`--repeat N`, Jaccard similarity), a markdown leaderboard
+(`--markdown bench/RESULTS.md`), and grew the dataset to **10
+cases** spanning Go, TypeScript, Python, and Rust.
+**Phase 3** (v0.10.0 in progress) adds a **SWE-bench-lite
+catch-rate mode** (`--swe-bench`) measuring how the reviewer
+performs on real-world bug-introducing diffs adapted from the
+upstream SWE-bench-lite dataset — closes the "circular benchmark"
+critique by scoring against bugs we did not author. See
+[`swe-bench-lite/README.md`](swe-bench-lite/README.md). A
+partial-credit LLM-as-judge backstop and cross-tool comparisons
+(CodeRabbit, Copilot review, etc.) are tracked for later releases.
 
 ## Layout
 

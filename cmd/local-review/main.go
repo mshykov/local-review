@@ -88,6 +88,16 @@ type sharedFlags struct {
 	// because their values are typically multi-line — config-only
 	// is the right ergonomic choice for those.
 	promptPackDir string
+
+	// v0.10.1 pre-flight readiness probe. When true, skip the
+	// per-LLM `Reply OK` probe and proceed straight to the real
+	// review — same behaviour as v0.10.0 and earlier. Reserved for
+	// CI/scripting use cases where the probe's extra ~10s and
+	// minor token cost are worse than tolerating a 4-min hang on
+	// a doomed LLM (the case the probe was designed to prevent).
+	// Default is to run the probe; the flag exists as an escape
+	// hatch, not as a routine knob.
+	noPreflight bool
 }
 
 func main() {
@@ -101,24 +111,37 @@ func main() {
 
 	root := &cobra.Command{
 		Use:   "local-review",
-		Short: "AI code review for your local diff. BYOK, language-agnostic.",
-		Long: helpHeader() + `local-review reviews a git diff with the LLMs you have installed and
-runs them in parallel. It runs entirely on your machine; the only
-network call is to whichever LLM endpoint you configured.
+		Short: "AI code review for your local diff (or full-tree audit). BYOK, language-agnostic.",
+		Long: helpHeader() + `local-review runs LLM-driven code review locally. Two modes:
+
+  • Diff review — review the git diff on your current branch / staged
+    / a single commit. Multi-LLM by default; merges the findings. The
+    canonical pre-commit / pre-MR workflow.
+  • Audit — walk the whole committed tree and run a topic-driven
+    sweep (security, tech-debt, ...) for issues no individual diff
+    would surface. Single-LLM, scoped by --topic.
+
+Everything runs on your machine; the only network call is to whichever
+LLM endpoint you configured.
 
 Quick start:
 
-  local-review init             # interactive — picks a provider, writes .local-review.yml
-  local-review doctor           # check which LLM CLIs are installed/authenticated
-  local-review review           # review current branch with every active LLM
+  local-review init                # interactive — picks a provider, writes .local-review.yml
+  local-review doctor              # check which LLM CLIs are installed/authenticated
+  local-review review              # review current branch with every active LLM
+  local-review audit --topic security    # full-tree security sweep
+  local-review audit --topic tech-debt   # full-tree tech-debt sweep
 
 By default, every LLM CLI that is both installed AND authenticated runs
-in parallel and the findings are merged into one report. Use ~/.local-review.yml
-or ./.local-review.yml to override; CLI flags override config.
+in parallel for review mode and the findings are merged into one
+report. Audit mode is single-LLM by design — picks one authenticated
+agent. Use ~/.local-review.yml or ./.local-review.yml to override;
+CLI flags override config.
 
-If no LLM CLI is active, falls back to the configured 'provider:' (any
-OpenAI-compatible endpoint: OpenAI, Anthropic, Mistral, DeepSeek,
-Together, Groq, OpenRouter, Ollama, vLLM, etc.).
+If no LLM CLI is active, the review-shape commands fall back to the
+configured 'provider:' (any OpenAI-compatible endpoint: OpenAI,
+Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter, Ollama,
+vLLM, etc.).
 
 See README and https://mshykov.github.io/local-review/ for details.`,
 		SilenceUsage: true,
@@ -159,6 +182,27 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	// difference is what each form is interpreted relative to.
 	root.PersistentFlags().StringVar(&sf.promptPackDir, "prompt-pack-dir", "", "override directory for language pack files (e.g. .local-review/prompts); falls through to embedded packs for missing files. Resolved relative to CWD; YAML's prompts.pack_dir resolves relative to the config file.")
 
+	// pre-flight readiness probe (v0.10.1).
+	//
+	// The probe makes a tiny "reply OK" call to each LLM with a 10s
+	// timeout before the real review fan-out. Mainly here to catch
+	// the failure mode that surfaced after v0.10.0: gemini's
+	// "exhausted capacity on this model" error took ~4 minutes to
+	// surface inside the real review's much longer timeout window,
+	// leaving the user staring at a frozen terminal for 4 minutes
+	// before learning gemini was a no-op. The probe shifts that
+	// signal to seconds and lets the run proceed without the
+	// doomed LLM.
+	//
+	// --no-preflight is an escape hatch for the few callers who
+	// actually want the v0.10.0 behaviour: CI jobs where the ~10s
+	// probe adds wallclock without value (the probe-failures would
+	// surface anyway during the real call, and the run is non-
+	// interactive so no terminal-staring concern), or scripts that
+	// can't afford the ~1k probe tokens per LLM. Not a routine
+	// knob; the default-on behaviour is the recommended path.
+	root.PersistentFlags().BoolVar(&sf.noPreflight, "no-preflight", false, "skip the per-LLM readiness probe before review (default: probe enabled)")
+
 	// Group commands so --help reads as three sections (Review / Setup /
 	// Other) instead of one alphabetical wall. Cobra renders any command
 	// without a GroupID under "Additional Commands:", so we also wire the
@@ -180,6 +224,7 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	addGrouped("review", stagedCmd(&sf))
 	addGrouped("review", commitCmd(&sf))
 	addGrouped("review", branchCmd(&sf))
+	addGrouped("review", auditCmd(&sf))
 	addGrouped("setup", initCmd())
 	addGrouped("setup", doctorCmd())
 	addGrouped("setup", configCmd(&sf))

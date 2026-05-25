@@ -1,0 +1,17 @@
+diff --git a/search.py b/search.py
+index 7788aa1..99bbcc2 100644
+--- a/search.py
++++ b/search.py
+@@ -12,8 +12,8 @@ class UserSearch:
+     def search_by_name(self, name: str) -> List[User]:
+         """Return users whose name matches the given prefix."""
+         with self.conn.cursor() as cursor:
+-            cursor.execute(
+-                "SELECT id, name, email FROM users WHERE name LIKE %s",
+-                [f"{name}%"],
+-            )
++            cursor.execute(
++                f"SELECT id, name, email FROM users WHERE name LIKE '{name}%'"
++            )
+             rows = cursor.fetchall()
+         return [User(*r) for r in rows]

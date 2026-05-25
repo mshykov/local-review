@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -262,7 +263,9 @@ func mergeFrom(dst *Config, path string) error {
 	// must point at <repo-root>/.local-review/prompts no matter
 	// where the user runs `local-review` from. Pre-fix, running
 	// from a subdirectory silently fell through to embedded packs.
-	resolveRelativePaths(&layer, filepath.Dir(path))
+	if err := resolveRelativePaths(&layer, filepath.Dir(path)); err != nil {
+		return fmt.Errorf("resolve relative paths in %s: %w", path, err)
+	}
 	merge(dst, layer)
 	return nil
 }
@@ -274,14 +277,47 @@ func mergeFrom(dst *Config, path string) error {
 // already-merged config and are naturally interpreted relative to
 // the user's CWD (which is what shell users expect from
 // `--prompt-pack-dir ./prompts`).
-func resolveRelativePaths(layer *Config, baseDir string) {
+//
+// Returns an error when a YAML-supplied relative path escapes
+// baseDir via `..` segments. This is the defence the audit feature
+// caught missing in v0.10.0-c's own dogfood: a malicious or
+// accidentally-shared `.local-review.yml` with
+// `pack_dir: ../../../../etc` would previously resolve outside
+// the intended directory, letting any subsequent override read
+// touch files in arbitrary locations. Absolute paths still pass
+// through (explicit user opt-in to a specific location is fine);
+// only relative escapes are rejected.
+func resolveRelativePaths(layer *Config, baseDir string) error {
 	if p := layer.Prompts.PackDir; p != "" && !filepath.IsAbs(p) {
-		layer.Prompts.PackDir = filepath.Join(baseDir, p)
+		resolved := filepath.Join(baseDir, p)
+		if !pathInsideDir(resolved, baseDir) {
+			return fmt.Errorf("prompts.pack_dir %q escapes config directory (resolves to %q outside %q); use an absolute path if you really need to point outside the config directory",
+				p, resolved, baseDir)
+		}
+		layer.Prompts.PackDir = resolved
 	}
 	// StorageConfig.BasePath is intentionally LEFT relative — the
 	// existing storage code resolves it relative to CWD on every
 	// invocation, and tests + docs depend on that behaviour. Changing
 	// it here would be a backwards-incompatible shift; deferred.
+	return nil
+}
+
+// pathInsideDir returns true when filePath, after lexical cleaning,
+// sits inside dir. Mirrors the helper in internal/prompts; we
+// re-implement here rather than import to keep the dependency
+// shape of internal/config minimal (nothing else in this package
+// imports prompts, and adding the dep just for a 6-line helper is
+// over-coupling).
+func pathInsideDir(filePath, dir string) bool {
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(filePath))
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 // merge does a shallow overlay: any non-zero field in src replaces dst.
@@ -410,51 +446,75 @@ func merge(dst *Config, src Config) {
 	}
 }
 
-// resolveAPIKey fills cfg.Provider.APIKey from the named env var when
-// it isn't already set in YAML (v0 compatibility).
+// resolveAPIKey resolves cfg.Provider.APIKey with **env vars taking
+// precedence over the YAML-stored key** when both are present.
+// YAML-stored keys are explicitly marked DEPRECATED in the schema
+// AND warned about at load time (see warnDeprecatedAPIKeys), but
+// prior to the v0.10.0 audit dogfood the resolver still preferred
+// YAML over env — meaning a developer who committed a test key to
+// `.local-review.yml` and later set a correct prod key in the
+// environment would silently keep using the stale YAML value.
+// Env-first closes that footgun. Empty env var falls back to the
+// YAML key (preserves v0 compat for users who put a key in YAML
+// and never set an env var).
 func resolveAPIKey(cfg *Config) {
-	if cfg.Provider.APIKey != "" {
-		return
-	}
 	envName := cfg.Provider.APIKeyEnv
 	if envName == "" {
 		envName = "LOCAL_REVIEW_API_KEY"
 	}
-	cfg.Provider.APIKey = os.Getenv(envName)
+	if envVal := os.Getenv(envName); envVal != "" {
+		cfg.Provider.APIKey = envVal
+	}
+	// else: leave whatever was already in cfg.Provider.APIKey
+	// (possibly a deprecated YAML key, warned about separately).
 }
 
-// resolveAPIKeys fills API keys for all LLMs from their configured env vars (v0.1).
+// resolveAPIKeys is the per-LLM counterpart of resolveAPIKey for
+// the multi-LLM path. Same env-first precedence and same fallback
+// rule: env wins when set; empty env preserves whatever YAML had.
 func resolveAPIKeys(cfg *Config) {
 	for name, llmCfg := range cfg.LLMs {
-		// Skip if API key already set
-		if llmCfg.APIKey != "" {
-			continue
-		}
-
-		// Skip if no env var configured
 		if llmCfg.APIKeyEnv == "" {
 			continue
 		}
-
-		// Resolve from environment
-		llmCfg.APIKey = os.Getenv(llmCfg.APIKeyEnv)
-		cfg.LLMs[name] = llmCfg
+		if envVal := os.Getenv(llmCfg.APIKeyEnv); envVal != "" {
+			llmCfg.APIKey = envVal
+			cfg.LLMs[name] = llmCfg
+		}
 	}
 }
 
-// warnDeprecatedAPIKeys warns if API keys are set in YAML config files (security risk).
+// warnDeprecatedAPIKeys warns if API keys are set in YAML config
+// files. Runs BEFORE the resolver, so the warning fires on every
+// YAML-stored key regardless of whether an env var will end up
+// winning. The text reflects the v0.10.0 precedence flip: env wins
+// when set, so a YAML key is only "in effect" when there's no env
+// var of the corresponding name. Either way, committing keys to
+// YAML is the wrong shape and the warning surfaces that.
 func warnDeprecatedAPIKeys(cfg *Config) {
-	// Check Provider.APIKey
 	if cfg.Provider.APIKey != "" {
+		envName := cfg.Provider.APIKeyEnv
+		if envName == "" {
+			envName = "LOCAL_REVIEW_API_KEY"
+		}
 		fmt.Fprintf(os.Stderr, "WARNING: api_key in YAML config is deprecated and insecure.\n")
-		fmt.Fprintf(os.Stderr, "         Use environment variable %s instead.\n", cfg.Provider.APIKeyEnv)
+		fmt.Fprintf(os.Stderr, "         Use environment variable %s instead (when set, it takes precedence over this YAML key).\n", envName)
 	}
 
-	// Check LLM APIKeys
 	for name, llmCfg := range cfg.LLMs {
 		if llmCfg.APIKey != "" {
 			fmt.Fprintf(os.Stderr, "WARNING: api_key for %s in YAML config is deprecated and insecure.\n", name)
-			fmt.Fprintf(os.Stderr, "         Use environment variable %s instead.\n", llmCfg.APIKeyEnv)
+			// If the user set api_key but not api_key_env, our
+			// previous warning printed "Use environment variable
+			// instead..." with an empty name — actively
+			// unhelpful (Copilot caught this on PR #75). Emit a
+			// concrete-next-step message instead, pointing at the
+			// per-LLM config field they need to add.
+			if llmCfg.APIKeyEnv == "" {
+				fmt.Fprintf(os.Stderr, "         Set llms.%s.api_key_env to an env var name and export the key in your shell instead.\n", name)
+			} else {
+				fmt.Fprintf(os.Stderr, "         Use environment variable %s instead (when set, it takes precedence over this YAML key).\n", llmCfg.APIKeyEnv)
+			}
 		}
 	}
 }

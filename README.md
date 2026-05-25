@@ -54,6 +54,8 @@ The honest answer to "should I trust this tool?" lives in [**`bench/RESULTS.md`*
 
 No marketing numbers in this README — they'd go stale. Read [`bench/RESULTS.md`](bench/RESULTS.md) for the current state, and [`bench/README.md`](bench/README.md) for the methodology.
 
+**Deep-codebase audit dogfood.** v0.10.0 added a second trust artifact: [`audit/`](audit/) — `local-review audit --topic <security|tech-debt>` run against this repo's own committed source tree, output committed. Same shape as `bench/RESULTS.md` (raw output preserved so you can read it before adopting), but answers a different question: *what does diff-time review miss?* See [`audit/README.md`](audit/README.md) for methodology, [`audit/security.md`](audit/security.md) and [`audit/tech-debt.md`](audit/tech-debt.md) for the latest runs.
+
 ---
 
 ## Get started
@@ -297,7 +299,7 @@ Exit codes:
 
 ## Prompt packs
 
-local-review ships with packs for `default`, `typescript`, `go`, `python`, `rust`, with more coming. The CLI auto-picks based on the dominant language in your diff. Force a specific pack with `review.prompt_pack: <id>` in your YAML config.
+local-review ships with packs for `default`, `typescript`, `go`, `python`, `rust`, `swift`, `kotlin`, and `liquid`, with more coming. The CLI auto-picks based on the dominant language in your diff. Force a specific pack with `review.prompt_pack: <id>` in your YAML config.
 
 Each pack is a markdown file (in [`internal/prompts/packs/`](internal/prompts/packs/)) that defines:
 - What to look for (priority-ordered)

@@ -20,10 +20,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
-//go:embed packs/*.md
+//go:embed packs/*.md audit/*.md
 var fs embed.FS
 
 // Pack is the resolved prompt content plus a human-readable label of
@@ -268,7 +269,56 @@ func pathInsideDir(filePath, dir string) bool {
 
 // Available returns the language ids that have dedicated packs.
 func Available() ([]string, error) {
-	entries, err := fs.ReadDir("packs")
+	return listMarkdownStems("packs")
+}
+
+// GetAuditPack returns the embedded audit pack for a given topic
+// (e.g. "security", "tech-debt"). Returns an actionable error
+// naming the available topics when the topic is unknown — audit is
+// user-facing, so a typo at the CLI must produce a helpful message,
+// not a stack trace. v0.10.0-c: no user-override mechanism yet
+// (mirrors the early days of language packs before pack_dir / prepend
+// / append landed); the audit topics are deliberately fewer and more
+// curated than language packs.
+func GetAuditPack(topic string) (string, error) {
+	if topic == "" {
+		return "", fmt.Errorf("audit topic is required (try --topic security or --topic tech-debt)")
+	}
+	// Reuse the language-id regex: lowercase alphanumeric + underscore
+	// + dash, no leading separator. Refuses path traversal even
+	// though embed.FS already constrains reads to the embedded tree.
+	if !languageIDRE.MatchString(topic) {
+		return "", fmt.Errorf("audit topic %q contains invalid characters (allowed: lowercase alphanumeric, dash, underscore; must start with a letter or digit)", topic)
+	}
+	b, err := fs.ReadFile("audit/" + topic + ".md")
+	if err != nil {
+		// Propagate the listing error when present — a failure to
+		// enumerate available topics means the binary's embed is
+		// corrupted and the user needs to know that, not see an
+		// empty "(available: )" parenthetical. CLAUDE.md rule 4.
+		avail, listErr := AvailableAuditTopics()
+		if listErr != nil {
+			return "", fmt.Errorf("audit topic %q not found (also failed to list available topics: %w)", topic, listErr)
+		}
+		return "", fmt.Errorf("audit topic %q not found (available: %s)", topic, strings.Join(avail, ", "))
+	}
+	return string(b), nil
+}
+
+// AvailableAuditTopics returns the topic ids that have dedicated
+// audit packs. Same discovery shape as Available() for language
+// packs — read the embedded directory at runtime so new topics
+// dropped into internal/prompts/audit/ are picked up automatically.
+func AvailableAuditTopics() ([]string, error) {
+	return listMarkdownStems("audit")
+}
+
+// listMarkdownStems is the shared helper behind Available and
+// AvailableAuditTopics: enumerate `.md` files in an embed.FS
+// subdirectory and return their stems (sorted for deterministic
+// CLI output and `--help` listings).
+func listMarkdownStems(dir string) ([]string, error) {
+	entries, err := fs.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -279,5 +329,6 @@ func Available() ([]string, error) {
 			ids = append(ids, name[:len(name)-3])
 		}
 	}
+	sort.Strings(ids)
 	return ids, nil
 }

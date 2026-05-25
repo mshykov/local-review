@@ -173,6 +173,111 @@ func HasMergeableOutput(r ReviewResult) bool {
 	return strings.TrimSpace(r.Output) != ""
 }
 
+// ZeroMergeableReason classifies *why* a result set has no mergeable
+// output. Only meaningful when GateDecision.WithOutput == 0.
+type ZeroMergeableReason int
+
+const (
+	// ZeroMergeableAllFailed: every review's Error is non-nil. The
+	// LLMs crashed or the CLI invocation errored.
+	ZeroMergeableAllFailed ZeroMergeableReason = iota
+
+	// ZeroMergeableAllEmpty: every review's Error is nil, but no
+	// review produced non-blank Output. The CLI exited zero with
+	// empty stdout — historically a real bug (CodeRabbit caught a
+	// case where this slipped past the gate with "all succeeded"
+	// framing). Distinct from AllFailed because "succeeded with
+	// empty output" is an LLM-emitter pathology, not a crash.
+	ZeroMergeableAllEmpty
+
+	// ZeroMergeableMixed: a mix of failures (Error != nil) and
+	// successes-with-empty-output. Pre-consolidation the runner
+	// would print "all returned empty output" here, misleading
+	// users into debugging the wrong problem.
+	ZeroMergeableMixed
+)
+
+// GateDecision is a single-pass summary of a result set, capturing
+// both the "Error == nil" view (Successful) and the "has mergeable
+// output" view (WithOutput). These two views CAN diverge and
+// historically did, producing two distinct bugs:
+//
+//  1. SaveReview-failed-with-output: Error != nil but Output != "".
+//     Counted in WithOutput, not Successful — the merger can still
+//     consolidate the in-memory output even though persistence failed.
+//
+//  2. CLI-exited-zero-with-empty-output: Error == nil but Output == "".
+//     Counted in Successful, not WithOutput — the merger has nothing
+//     to consume even though the per-LLM call "succeeded."
+//
+// Pre-fix the runner threaded both counts through six call sites; this
+// type is the single source so the metrics can't drift again
+// (audit/tech-debt.md "## cmd/local-review [part 2/3]" major finding
+// on runner.go:156, surfaced by `local-review audit --topic tech-debt`).
+type GateDecision struct {
+	Total      int // len(results)
+	Successful int // Error == nil (regardless of Output)
+	WithOutput int // HasMergeableOutput == true (regardless of Error)
+}
+
+// DecideGate computes a GateDecision from a result set in a single pass.
+// The intent: derive both counts at the call site that needs them once,
+// then thread the GateDecision through everything downstream — no second
+// traversal, no possibility of the two metrics observing different
+// snapshots of `results` (results is a slice, so the underlying array
+// won't change, but the historical concern was call-site drift, not
+// data-race drift).
+func DecideGate(results []ReviewResult) GateDecision {
+	g := GateDecision{Total: len(results)}
+	for _, r := range results {
+		if r.Error == nil {
+			g.Successful++
+		}
+		if HasMergeableOutput(r) {
+			g.WithOutput++
+		}
+	}
+	return g
+}
+
+// HasMergeable reports whether at least one review has mergeable output.
+// Use this instead of `WithOutput > 0` at gate sites — the named
+// predicate documents intent ("is there anything for the merger to
+// consume?") instead of leaving the reader to infer it from the count.
+func (g GateDecision) HasMergeable() bool {
+	return g.WithOutput > 0
+}
+
+// Failed returns the count of reviews where Error != nil (regardless
+// of Output). Symmetric with Successful = Total - Failed.
+func (g GateDecision) Failed() int {
+	return g.Total - g.Successful
+}
+
+// ClassifyZero categorises why a result set produced nothing
+// mergeable. Only meaningful when HasMergeable() is false; the runner
+// uses it to pick the right error message ("all N failed" vs "all N
+// returned empty output" vs the mixed-mode case).
+//
+// When HasMergeable() is true the result is meaningless — guard at
+// the call site with `if !g.HasMergeable() { ... ClassifyZero() ... }`.
+//
+// Implementation note: when WithOutput == 0, every Successful entry
+// is by definition "succeeded but produced no output" (no entry can
+// be in WithOutput, so the intersection of Successful and WithOutput
+// is empty). That's why the AllEmpty case compares Successful to
+// Total — it's exact in the only state ClassifyZero is consulted in.
+func (g GateDecision) ClassifyZero() ZeroMergeableReason {
+	switch {
+	case g.Failed() == g.Total:
+		return ZeroMergeableAllFailed
+	case g.Successful == g.Total:
+		return ZeroMergeableAllEmpty
+	default:
+		return ZeroMergeableMixed
+	}
+}
+
 // GetSuccessful returns only successful review results.
 func GetSuccessful(results []ReviewResult) []ReviewResult {
 	var successful []ReviewResult

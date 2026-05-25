@@ -1,0 +1,14 @@
+diff --git a/paginator.py b/paginator.py
+index 1a2b3c4..5d6e7f8 100644
+--- a/paginator.py
++++ b/paginator.py
+@@ -25,7 +25,7 @@ class Paginator:
+         return self.items[start:end]
+
+     @property
+     def num_pages(self) -> int:
+-        return math.ceil(len(self.items) / self.per_page)
++        return len(self.items) // self.per_page
+
+     def page_range(self) -> range:
+         return range(1, self.num_pages + 1)

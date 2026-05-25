@@ -212,6 +212,36 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return fmt.Errorf("prompt+diff is too large for every active agent: ~%d tokens estimated; try a smaller scope (`local-review commit HEAD` or `local-review staged`)", promptDiffTokens)
 	}
 
+	// Pre-flight readiness probe (v0.10.1). Issues a tiny "reply OK"
+	// call to each remaining active LLM with a ~10s per-LLM timeout,
+	// renders a ✓/✗ block immediately, then drops the ✗ agents from
+	// the active set before the real fan-out.
+	//
+	// Why this exists: v0.10.0's first-customer dogfood surfaced
+	// gemini's "exhausted capacity on this model" error AFTER
+	// ~4 minutes — the real-review timeout window is large enough
+	// to hide a doomed LLM for that long. The probe collapses that
+	// signal to seconds and lets the run proceed with the surviving
+	// agents instead of waiting on the doomed one. PreflightFilter
+	// above does a *static* context-window check (cheap, no LLM
+	// call); this is the *dynamic* auth+capacity probe (one tiny
+	// call per LLM).
+	//
+	// --no-preflight bypasses this entirely for callers who don't
+	// want the extra ~10s + ~1k tokens per LLM. Reserved escape
+	// hatch — not the recommended path.
+	if !sf.noPreflight {
+		active = runPreflightProbe(ctx, active)
+		if len(active) == 0 {
+			// Every authenticated LLM failed the probe. The
+			// readiness block above already showed the per-LLM
+			// reason; this final message points the user at
+			// `doctor` for a structured diagnostic instead of
+			// asking them to re-grep the rendered block.
+			return fmt.Errorf("every active LLM failed the pre-flight readiness probe (run `local-review doctor` for status, or `--no-preflight` to skip the probe)")
+		}
+	}
+
 	startTime := time.Now()
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)
@@ -270,34 +300,40 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		fmt.Printf("Per-LLM reviews → %s/\n\n", storageDir)
 	}
 
-	successCount := multi.CountSuccessful(results)
-	mergeable := multi.CountWithOutput(results)
-	rmode := classifyRunMode(results) // computed once here; reused in the report-path block below to avoid a second traversal
+	// Single-pass summary of the result set. Both views (Error == nil
+	// "Successful" and HasMergeableOutput "WithOutput") are derived
+	// once here and threaded through everything downstream, so the
+	// two counts can't drift across call sites the way they did pre-
+	// consolidation (audit/tech-debt.md flagged runner.go:156 as a
+	// `major` finding for exactly that pattern — six call sites
+	// observing the result set independently meant any one updating
+	// the other was a regression risk).
+	gate := multi.DecideGate(results)
+	rmode := classifyRunModeFromGate(gate) // computed once here; reused in the report-path block below to avoid a second traversal
 	metadata := buildMetadata(commit, branch, results, startTime)
 
-	// Short-circuit on "nothing for the merger to consume." Pre-fix
-	// this checked successCount (Error == nil), which let two cases
-	// slip past:
+	// Short-circuit on "nothing for the merger to consume." We branch
+	// on WithOutput (what the merger actually sees via BuildMergeInput),
+	// not Successful (Error == nil), because two cases historically
+	// slipped past a Successful-only check:
 	//
 	//   1. SaveReview-failed-with-output: Error is set but Output is
-	//      populated. successCount drops to 0 even though the merger
+	//      populated. Successful drops to 0 even though the merger
 	//      could still consolidate the in-memory output. Pre-fix we
 	//      aborted with "all N reviews failed" — wrong, the reviews
 	//      ran, only persistence failed.
 	//   2. CLI-exited-zero-with-empty-output: Error is nil but Output
-	//      is "". successCount stays positive but BuildMergeInput
-	//      drops the empty entry, so the merger ran on 0 reviews and
+	//      is "". Successful stays positive but BuildMergeInput drops
+	//      the empty entry, so the merger ran on 0 reviews and
 	//      classifyRunMode fell through to runModeMerge — both giving
 	//      the user a "Merged review" framing for what was actually
 	//      nothing.
 	//
-	// CountWithOutput matches what the merger actually consumes, so
-	// "0 mergeable" is the correct threshold for "stop here." When
-	// successCount disagrees (case 1: 0 successCount but mergeable),
-	// the merge proceeds and the gate runs. When mergeable is 0 we
-	// pick the right error message based on whether anyone "succeeded"
-	// in the loose Error == nil sense.
-	if mergeable == 0 {
+	// HasMergeable() is the gate predicate; ClassifyZero() picks the
+	// right error message when the gate trips. The error taxonomy is
+	// owned by the GateDecision type, not duplicated inline here —
+	// see internal/multi/orchestrator.go ZeroMergeableReason.
+	if !gate.HasMergeable() {
 		metadata.Merge.Status = "skipped"
 		if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
 			// Best-effort: per-LLM markdown saves either succeeded or
@@ -308,23 +344,21 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 			// code, not for metadata.json.
 			fmt.Fprintf(os.Stderr, "Warning: failed to save metadata.json (review markdown still on disk): %v\n", err)
 		}
-		failed := len(results) - successCount
-		empty := successCount // succeeded (Error nil) but no Output; classifier already counted these as non-mergeable
-		switch {
-		case failed == len(results):
-			return fmt.Errorf("all %d LLM reviews failed", len(results))
-		case empty == len(results):
-			return fmt.Errorf("all %d LLM reviews returned empty output (no findings to merge)", len(results))
-		default:
+		switch gate.ClassifyZero() {
+		case multi.ZeroMergeableAllFailed:
+			return fmt.Errorf("all %d LLM reviews failed", gate.Total)
+		case multi.ZeroMergeableAllEmpty:
+			return fmt.Errorf("all %d LLM reviews returned empty output (no findings to merge)", gate.Total)
+		default: // ZeroMergeableMixed
 			// Mixed: some agents crashed, others exited zero with blank
 			// output. Pre-fix this case printed "all returned empty
 			// output" which misled users into debugging the wrong
 			// problem (an empty-output bug vs a crash).
-			return fmt.Errorf("no LLM produced output: %d failed, %d returned empty (nothing to merge)", failed, empty)
+			return fmt.Errorf("no LLM produced output: %d failed, %d returned empty (nothing to merge)", gate.Failed(), gate.Successful)
 		}
 	}
 
-	mergedPath, mergedContent, mergeTokens := mergeAndPrint(ctx, cfg, sf, active, results, storage, commit, branch, metadata)
+	mergedPath, mergedContent, mergeTokens := mergeAndPrint(ctx, cfg, sf, active, results, gate, storage, commit, branch, metadata)
 	if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
 		// Same posture as the no-mergeable-output branch above: review
 		// markdown files are already on disk, the gate's exit code is
@@ -350,17 +384,18 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// mislead users into thinking the call was free.
 	totalTokens := aggregateTokens(results, mergeTokens)
 	if totalTokens > 0 {
-		fmt.Printf("✓ %d/%d LLMs produced output · total %s · ~%s tokens\n", mergeable, len(results), time.Since(startTime).Round(time.Second), humanTokens(totalTokens))
+		fmt.Printf("✓ %d/%d LLMs produced output · total %s · ~%s tokens\n", gate.WithOutput, gate.Total, time.Since(startTime).Round(time.Second), humanTokens(totalTokens))
 	} else {
-		fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", mergeable, len(results), time.Since(startTime).Round(time.Second))
+		fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", gate.WithOutput, gate.Total, time.Since(startTime).Round(time.Second))
 	}
 	if mergedPath != "" {
-		// Report-path label uses `rmode` (computed above alongside `mergeable`)
-		// so we don't call CountWithOutput a second time. Degraded/solo runs
-		// use distinct labels so users can tell single-source from consensus.
+		// Report-path label uses `rmode` (computed above from the same
+		// gate) so we don't traverse `results` again. Degraded/solo
+		// runs use distinct labels so users can tell single-source
+		// from consensus.
 		switch rmode {
 		case runModeDegraded:
-			fmt.Printf("Single-LLM report (%d of %d agents produced no output): %s\n", len(results)-mergeable, len(results), mergedPath)
+			fmt.Printf("Single-LLM report (%d of %d agents produced no output): %s\n", gate.Total-gate.WithOutput, gate.Total, mergedPath)
 		case runModeSolo:
 			fmt.Printf("Report: %s\n", mergedPath)
 		default:
@@ -616,6 +651,91 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 	fmt.Println()
 }
 
+// runPreflightProbe issues a tiny `Reply OK` call to each LLM with a
+// short per-LLM timeout, renders a ✓/✗ readiness block to the user,
+// and returns the subset of LLMs that passed. Empty return ⇒ every
+// LLM failed; the caller handles the all-failed error message.
+//
+// Rendering posture: prints to stdout (not stderr) because the
+// readiness block is informational and sequenced before the real
+// review's progress lines — the user reads them top-to-bottom as a
+// single narrative. stderr would interleave on terminals that line-
+// buffer the two streams differently.
+//
+// Glyph choice: the success glyph mirrors the per-LLM completion
+// line later in the run (`✓` is the same character cli.ClassifyExit
+// avoids and the merged-report footer prints), so a user scanning
+// terminal output for "did all the LLMs work?" sees the same
+// visual at both moments. The `✗` glyph is similarly consistent
+// with the per-LLM failure line.
+//
+// Goroutine + timeout posture: ProbeAll fans out internally with
+// per-LLM cli.DefaultProbeTimeout deadlines. Empirically 10s is
+// generous for a healthy CLI's startup + minimal response;
+// shortening it would catch slow but recoverable CLIs as
+// false-positive timeouts.
+func runPreflightProbe(ctx context.Context, active []cli.LLM) []cli.LLM {
+	fmt.Println("Pre-flight (probing auth + capacity):")
+	probeStart := time.Now()
+	results := cli.ProbeAll(ctx, active, cli.DefaultProbeTimeout)
+	probeDuration := time.Since(probeStart)
+
+	// Build a quick name → index map so we can filter `active`
+	// down to the ready subset without two slice walks. Roster
+	// order is preserved because ProbeAll returns in roster
+	// order and we iterate the same slice.
+	readyByName := make(map[string]bool, len(results))
+	for _, r := range results {
+		// Width-pad the agent name to the longest in the
+		// roster so the glyphs line up in a column — read-at-
+		// a-glance UX, same as the per-LLM completion lines.
+		// printf's %-Ns padding does this in one format call.
+		name := r.LLM
+		switch r.Status {
+		case cli.ProbeReady:
+			fmt.Printf("  %-8s ✓ (%s)\n", name, r.Duration.Round(10*time.Millisecond))
+			readyByName[name] = true
+		case cli.ProbeTimeout:
+			fmt.Printf("  %-8s ✗ timeout after %s\n", name, cli.DefaultProbeTimeout)
+		case cli.ProbeError:
+			// Surface the vendor's own error message (single line
+			// — multi-line stderr tails happen in the real-review
+			// path, not in the readiness block). Strip trailing
+			// whitespace + collapse newlines so a CLI that prints
+			// "error\n at line ..." renders as one tight line.
+			msg := singleLine(r.Err.Error())
+			fmt.Printf("  %-8s ✗ %s\n", name, msg)
+		}
+	}
+	fmt.Printf("Probed %d LLM%s in %s.\n\n", len(active), pluralS(len(active)), probeDuration.Round(10*time.Millisecond))
+
+	// Filter active → ready subset, preserving roster order.
+	ready := make([]cli.LLM, 0, len(active))
+	for _, l := range active {
+		if readyByName[l.Name] {
+			ready = append(ready, l)
+		}
+	}
+	return ready
+}
+
+// singleLine collapses any internal newline / carriage-return
+// runs to single spaces, then trims. Used by the readiness block
+// to keep vendor error messages on one line — a multi-line stderr
+// tail in the readiness column would break the ✓/✗ alignment.
+func singleLine(s string) string {
+	// Replace any \r\n / \n / \r with a space, then collapse
+	// runs of whitespace.
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.TrimSpace(spaceCollapse.ReplaceAllString(s, " "))
+}
+
+// Reused by singleLine. Compiled once at init so the readiness-
+// block render loop doesn't pay a regex-compile per LLM.
+var spaceCollapse = regexp.MustCompile(`\s+`)
+
 func modelFor(name string, cfg config.Config) string {
 	if c, ok := cfg.LLMs[name]; ok {
 		return c.Model
@@ -772,28 +892,31 @@ const (
 	runModeSolo                    // exactly 1 output out of 1 agent; user chose --only, expected
 )
 
-// classifyRunMode picks the framing for the merge step based on how
-// many agents produced output the merger will actually see. We count
-// non-blank Output (matching BuildMergeInput's filter, which uses
-// strings.TrimSpace), not Error == nil:
+// classifyRunModeFromGate picks the framing for the merge step based
+// on how many agents produced output the merger will actually see —
+// derived from a GateDecision so we don't traverse the result set a
+// second time after DecideGate already walked it once. Counts non-
+// blank Output (gate.WithOutput, matching BuildMergeInput's filter
+// via HasMergeableOutput), not Error == nil:
 // a run where the LLM succeeded but SaveReview failed has Error != nil
 // yet Output != "", and the merger will still consume that review, so
-// the framing should reflect that. Pre-fix we used CountSuccessful and
-// would mis-flag such a run as "Degraded, only 1 of 3 succeeded" while
-// the merger was happily consolidating all 3 outputs.
+// the framing should reflect that. Pre-consolidation classifyRunMode
+// derived `mergeable` itself via a fresh CountWithOutput call — the
+// extra walk wasn't a correctness bug but did make the dual-metric
+// pattern that audit/tech-debt.md flagged on runner.go:156 harder to
+// audit (each call site computed counts itself, each had to be kept
+// consistent independently).
 //
 // The merger still runs in every case (it's what produces the structured
 // Recommendation line the gate reads), but the user-facing language is
 // different so nobody mistakes a single-LLM fallback for cross-model
 // consensus. Zero-output runs never reach here — the caller short-
 // circuits with an "all LLMs failed" error.
-func classifyRunMode(results []multi.ReviewResult) runMode {
-	mergeable := multi.CountWithOutput(results)
-	total := len(results)
+func classifyRunModeFromGate(g multi.GateDecision) runMode {
 	switch {
-	case mergeable == 1 && total > 1:
+	case g.WithOutput == 1 && g.Total > 1:
 		return runModeDegraded
-	case mergeable == 1 && total == 1:
+	case g.WithOutput == 1 && g.Total == 1:
 		return runModeSolo
 	default:
 		return runModeMerge
@@ -805,12 +928,19 @@ func classifyRunMode(results []multi.ReviewResult) runMode {
 // the saved path and the merged content; both are "" on skip/failure.
 // The content is returned so the caller can run the blocking-finding
 // gate without re-reading from disk.
-func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) (mergedPath, mergedContent string, mergeTokens cli.TokenUsage) {
-	mode := classifyRunMode(results)
+//
+// Takes the caller's GateDecision rather than recomputing — pre-
+// consolidation this function called classifyRunMode(results) and
+// CountWithOutput(results) independently, each walking the slice
+// again. Same metrics, same intent, two extra walks per invocation
+// and (more importantly) two extra independent observers of the
+// result set the dual-metric-drift bugs were about.
+func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, results []multi.ReviewResult, gate multi.GateDecision, storage *multi.ReviewStorage, commit, branch string, metadata *multi.Metadata) (mergedPath, mergedContent string, mergeTokens cli.TokenUsage) {
+	mode := classifyRunModeFromGate(gate)
 
 	switch mode {
 	case runModeDegraded:
-		fmt.Fprintf(os.Stderr, "⚠ Only %d of %d LLMs produced output — review is single-source, no cross-model consensus.\n", multi.CountWithOutput(results), len(results))
+		fmt.Fprintf(os.Stderr, "⚠ Only %d of %d LLMs produced output — review is single-source, no cross-model consensus.\n", gate.WithOutput, gate.Total)
 		fmt.Println("Reformatting single review...")
 	case runModeSolo:
 		fmt.Println("Formatting review...")

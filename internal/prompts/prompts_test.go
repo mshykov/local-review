@@ -299,3 +299,93 @@ func max(a, b int) int {
 	}
 	return b
 }
+
+// TestGetAuditPack_HappyPath verifies the two day-1 audit topics
+// (security, tech-debt) load via embed.FS and contain the
+// telltale section header. Locks the embed pathing in place so a
+// future refactor that moves the audit packs accidentally surfaces
+// here, not at runtime when a user tries `local-review audit`.
+func TestGetAuditPack_HappyPath(t *testing.T) {
+	for topic, mustContain := range map[string]string{
+		"security":  "Security audit pack",
+		"tech-debt": "Technical-debt audit pack",
+	} {
+		got, err := GetAuditPack(topic)
+		if err != nil {
+			t.Errorf("GetAuditPack(%q): unexpected error: %v", topic, err)
+			continue
+		}
+		if !strings.Contains(got, mustContain) {
+			t.Errorf("GetAuditPack(%q) missing %q in body (first 80 chars: %q)", topic, mustContain, got[:min(80, len(got))])
+		}
+	}
+}
+
+// TestGetAuditPack_EmptyTopicIsAnActionableError covers the
+// required-argument contract: passing "" must produce an error
+// that names the available topics so a CLI user sees the next step.
+func TestGetAuditPack_EmptyTopicIsAnActionableError(t *testing.T) {
+	_, err := GetAuditPack("")
+	if err == nil {
+		t.Fatal("expected error on empty topic; got nil")
+	}
+	if !strings.Contains(err.Error(), "audit topic is required") {
+		t.Errorf("error should mention 'audit topic is required'; got %v", err)
+	}
+}
+
+// TestGetAuditPack_UnknownTopicListsAvailable verifies the
+// unknown-topic error path includes the available topics so users
+// hitting a typo can self-correct without `--help`. Also pins the
+// listing-fails fallback message structure since that was the
+// subject of an earlier CLAUDE.md-rule-4 round of review.
+func TestGetAuditPack_UnknownTopicListsAvailable(t *testing.T) {
+	_, err := GetAuditPack("not-a-real-topic")
+	if err == nil {
+		t.Fatal("expected error on unknown topic; got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "not found") {
+		t.Errorf("error should mention 'not found'; got %v", err)
+	}
+	for _, want := range []string{"security", "tech-debt"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("available-topics list should include %q; got %v", want, err)
+		}
+	}
+}
+
+// TestGetAuditPack_RejectsUnsafeTopicIDs covers the path-traversal
+// guard (same languageIDRE the language packs use). A topic id
+// like "../packs/python" would otherwise let a curious caller
+// read sibling embed entries through the audit-pack API.
+func TestGetAuditPack_RejectsUnsafeTopicIDs(t *testing.T) {
+	for _, bad := range []string{"../packs/python", "foo/bar", ".secret", "with space"} {
+		_, err := GetAuditPack(bad)
+		if err == nil {
+			t.Errorf("expected error on unsafe topic %q; got nil", bad)
+		}
+	}
+}
+
+// TestAvailableAuditTopics_ReturnsBothShippedTopics pins the
+// runtime-discovery API: the loader walks the embedded `audit/`
+// directory and surfaces every `<topic>.md` stem, sorted
+// alphabetically. v1 ships {security, tech-debt}; future
+// additions (drop-in `audit/architecture.md`) appear
+// automatically.
+func TestAvailableAuditTopics_ReturnsBothShippedTopics(t *testing.T) {
+	topics, err := AvailableAuditTopics()
+	if err != nil {
+		t.Fatalf("AvailableAuditTopics: %v", err)
+	}
+	got := map[string]bool{}
+	for _, tt := range topics {
+		got[tt] = true
+	}
+	for _, want := range []string{"security", "tech-debt"} {
+		if !got[want] {
+			t.Errorf("AvailableAuditTopics missing %q; got %v", want, topics)
+		}
+	}
+}
