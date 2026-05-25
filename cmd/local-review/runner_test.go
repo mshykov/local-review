@@ -316,7 +316,7 @@ The change has a major issue worth pushing on before merge.
 `
 
 func TestMergedHasBlocking_RealFixture(t *testing.T) {
-	if !mergedHasBlocking(realMergedReportWithMajorFinding) {
+	if !isBlockingMarkdown(realMergedReportWithMajorFinding) {
 		t.Error("real merged report with a Major finding must trigger the gate")
 	}
 }
@@ -410,8 +410,8 @@ func TestMergedHasBlocking(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := mergedHasBlocking(tc.md); got != tc.want {
-				t.Errorf("mergedHasBlocking: got %v, want %v", got, tc.want)
+			if got := isBlockingMarkdown(tc.md); got != tc.want {
+				t.Errorf("isBlockingMarkdown: got %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -426,7 +426,7 @@ func TestAnyPerLLMHasBlocking_DefendsAgainstMergerTruncation(t *testing.T) {
 	// MaxReviewBytesForMerge truncates each per-LLM review to 8 KB
 	// before feeding the merger. A reviewer that places a Critical
 	// finding on byte 9000+ would have it dropped from the merger
-	// input → merged output → mergedHasBlocking. The on-disk file
+	// input → merged output → isBlockingMarkdown. The on-disk file
 	// still has it, but the gate would exit 0. Independent
 	// pre-truncation scan closes that gap.
 	clean := "## Summary\n- **Recommendation**: APPROVE\n\n## Critical Issues\n*(None)*\n"
