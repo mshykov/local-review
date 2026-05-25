@@ -290,26 +290,66 @@ func TestComplete_LocalURLSkipsKeyRequirement(t *testing.T) {
 }
 
 func TestIsLocalURL(t *testing.T) {
+	// v0.10.4 widened the bypass to RFC1918 LAN ranges so users
+	// running Ollama on a LAN server (e.g. `provider.base_url:
+	// http://192.168.1.50:11434/v1`) don't have to set a dummy
+	// api_key. The auth bypass itself is controlled by Complete's
+	// `if c.APIKey == "" && !isLocalURL(c.BaseURL)` check — when
+	// the user HAS configured an api_key explicitly, it's sent as
+	// the Authorization header regardless of locality. This helper
+	// only gates the "no key set + non-local URL → error" path
+	// for the OPENAI_API_KEY-less Ollama case. (Copilot clarified
+	// this comment on PR #86 — the prior wording cited
+	// `c.APIKey != ""` which controls the header-set step, not
+	// the bypass; corrected.)
 	cases := []struct {
 		in   string
 		want bool
+		why  string
 	}{
-		{"http://localhost:11434/v1", true},
-		{"http://127.0.0.1:8080/v1", true},
-		{"http://127.99.0.1/v1", true},
-		{"http://[::1]:8000/v1", true},
-		{"http://0.0.0.0:11434/v1", true},
-		{"https://api.openai.com/v1", false},
-		{"https://api.anthropic.com/v1", false},
-		{"http://10.0.0.5:8080/v1", false}, // private but not loopback
-		{"http://192.168.1.10/v1", false},
-		{"", false},
-		{"::not a url::", false},
+		// Loopback + named-local — pre-v0.10.4 baseline.
+		{"http://localhost:11434/v1", true, "named-localhost"},
+		{"http://127.0.0.1:8080/v1", true, "ipv4-loopback"},
+		{"http://127.99.0.1/v1", true, "ipv4-loopback-alias-127.0.0.0_8"},
+		{"http://[::1]:8000/v1", true, "ipv6-loopback"},
+		{"http://0.0.0.0:11434/v1", true, "ipv4-wildcard-documented-local"},
+
+		// Private LAN — RFC1918, the v0.10.4 widening.
+		{"http://10.0.0.5:8080/v1", true, "rfc1918-10_8"},
+		{"http://10.255.255.254/v1", true, "rfc1918-10_8-upper-edge"},
+		{"http://172.16.0.1/v1", true, "rfc1918-172.16_12-lower-edge"},
+		{"http://172.31.255.254/v1", true, "rfc1918-172.16_12-upper-edge"},
+		{"http://192.168.1.10/v1", true, "rfc1918-192.168_16"},
+		{"http://192.168.1.50:11434/v1", true, "ollama-on-lan-canonical"},
+
+		// Edges of 172.16/12 — must NOT match outside the /12 window.
+		{"http://172.15.255.254/v1", false, "172.15-outside-12"},
+		{"http://172.32.0.1/v1", false, "172.32-outside-12"},
+
+		// Link-local APIPA + IPv6 unique-local + link-local.
+		{"http://169.254.1.1/v1", true, "ipv4-link-local-169.254_16"},
+		{"http://[fd00::1]:11434/v1", true, "ipv6-unique-local-fc00_7"},
+		{"http://[fe80::1]:11434/v1", true, "ipv6-link-local-fe80_10"},
+		{"http://[fe80::1%25en0]:11434/v1", true, "ipv6-link-local-with-zone-rfc6874"},
+		{"http://[fe80::abcd%25eth0]/v1", true, "ipv6-link-local-with-zone-no-port"},
+
+		// Public — must require auth.
+		{"https://api.openai.com/v1", false, "public-fqdn-openai"},
+		{"https://api.anthropic.com/v1", false, "public-fqdn-anthropic"},
+		{"http://8.8.8.8/v1", false, "public-ipv4"},
+		{"http://[2001:db8::1]/v1", false, "ipv6-documentation-block-treated-remote"},
+
+		// Empty / malformed / mDNS — fail closed (require auth).
+		{"", false, "empty"},
+		{"::not a url::", false, "garbage"},
+		{"http://corp.local/v1", false, "mDNS-.local-can-resolve-anywhere-require-auth"},
 	}
 	for _, tc := range cases {
-		if got := isLocalURL(tc.in); got != tc.want {
-			t.Errorf("isLocalURL(%q) = %v, want %v", tc.in, got, tc.want)
-		}
+		t.Run(tc.why, func(t *testing.T) {
+			if got := isLocalURL(tc.in); got != tc.want {
+				t.Errorf("isLocalURL(%q) = %v, want %v (%s)", tc.in, got, tc.want, tc.why)
+			}
+		})
 	}
 }
 

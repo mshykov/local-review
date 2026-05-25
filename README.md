@@ -243,6 +243,7 @@ local-review speaks the OpenAI chat-completions API — every major provider sup
 | Together | `https://api.together.xyz/v1` | Llama, Mixtral, Qwen — many open-weights options. |
 | OpenRouter | `https://openrouter.ai/api/v1` | One key, all models. |
 | Ollama | `http://localhost:11434/v1` | **Fully offline.** No data leaves your machine. |
+| Ollama on a LAN host | `http://192.168.1.50:11434/v1` *(or any RFC1918 IP)* | **Stays on your network.** Same as local Ollama for one machine, but with the model server on a separate box (typically a GPU host). Set `OLLAMA_HOST=0.0.0.0:11434` on the server so it accepts connections beyond loopback. local-review treats RFC1918 / link-local / IPv6 ULA hosts as auth-free by default (see `isLocalURL`); set `provider.api_key` explicitly if your LAN gateway DOES authenticate. |
 | vLLM | `http://your-host/v1` | Self-hosted. |
 
 The fastest way to set any of these up is `local-review init`, which writes a working `.local-review.yml` from a preset.

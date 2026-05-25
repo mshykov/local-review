@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`isLocalURL` widened to RFC1918 + IPv6 unique/link-local + IPv4 link-local.** Users running Ollama on a LAN server (e.g. `provider.base_url: http://192.168.1.50:11434/v1`) hit a confusing "no API key" error pre-v0.10.4, even though Ollama doesn't authenticate. The pre-fix scope was deliberately narrow — "corporate API gateway at 10.0.0.5 still authenticates and shouldn't bypass the check" — but in practice it shadowed the more common Ollama-on-LAN use case. v0.10.4 extends the bypass to `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` (IPv4 link-local APIPA), `fc00::/7` (IPv6 unique-local), and `fe80::/10` (IPv6 link-local). The corporate-gateway invariant is preserved by gating on `c.APIKey == ""` — the bypass ONLY fires when no key is configured, so an operator who needs auth-enforcement on a LAN host just sets `provider.api_key` (or `api_key_env`) as they would have for any non-local URL. mDNS `.local` hostnames are deliberately NOT included because they can resolve to anywhere. The widened set is pinned by 23 sub-tests in `internal/llm/client_test.go::TestIsLocalURL` covering RFC1918 boundary edges (172.15/172.32 just-outside-the-/12), public IPv4 (8.8.8.8), the IPv6 documentation reserved block 2001:db8::/32 (RFC 3849 — not publicly routable but treated as non-local for this check), IPv6 link-local with RFC 6874 zone identifiers (`fe80::1%en0` shape — needs the `%zone` suffix stripped before `net.ParseIP` to classify correctly), and the mDNS-must-still-require-auth case. README adds an "Ollama on a LAN host" row pointing users at `OLLAMA_HOST=0.0.0.0:11434` server-side config.
+
 ## [0.10.3] - 2026-05-25
 
 **Theme: tighten the install path.**

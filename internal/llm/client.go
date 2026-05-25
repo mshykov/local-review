@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,10 +18,33 @@ import (
 )
 
 // isLocalURL returns true when raw is a URL whose host points at the
-// local machine (localhost, 127.0.0.0/8, ::1, 0.0.0.0). Used to skip
-// the API-key requirement for Ollama / vLLM-style local-only setups
-// where the provider doesn't authenticate. Any non-local URL falls
-// through to the regular auth check.
+// local machine OR a private LAN range. Used to skip the API-key
+// requirement for Ollama / vLLM-style setups where the provider
+// doesn't authenticate.
+//
+// Recognised host shapes:
+//   - localhost / ::1 / 0.0.0.0
+//   - loopback: 127.0.0.0/8
+//   - IPv4 private RFC1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+//   - IPv4 link-local APIPA: 169.254.0.0/16 (rare but legitimate)
+//   - IPv6 unique-local: fc00::/7
+//   - IPv6 link-local: fe80::/10
+//
+// Why RFC1918 was added (v0.10.4): users running Ollama on a LAN
+// server and pointing local-review at it via `provider.base_url:
+// http://192.168.1.50:11434/v1` hit a confusing "no API key" error,
+// even though Ollama doesn't authenticate. The pre-v0.10.4 narrow
+// scope (loopback only) was a deliberate choice — "corporate API
+// gateway at 10.0.0.5 still authenticates and shouldn't bypass the
+// check" — but in practice it shadowed the more common Ollama-on-
+// LAN use case. The fix preserves the gateway-must-authenticate
+// invariant: if the user has explicitly set `provider.api_key` or
+// `provider.api_key_env`, the client uses it (the bypass only fires
+// when api_key is unset). A corporate gateway operator who needs
+// auth-enforcement on RFC1918 hosts therefore just sets api_key as
+// they would have for any non-local URL.
+//
+// Any non-local URL (public IP, FQDN) still requires a key.
 func isLocalURL(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -30,13 +54,42 @@ func isLocalURL(raw string) bool {
 	if host == "" {
 		return false
 	}
+	// Named-host fast path; also catches 0.0.0.0 (which parses as
+	// IP below but is documented as a "local" placeholder).
 	switch host {
-	case "localhost", "127.0.0.1", "0.0.0.0", "::1":
+	case "localhost", "0.0.0.0":
 		return true
 	}
-	// Also catch any 127.x.x.x — kept narrow on purpose; refusing
-	// to extend to RFC1918 ranges because a corporate API gateway
-	// at 10.0.0.5 still authenticates and shouldn't bypass the check.
+	// Strip any IPv6 zone/interface suffix (RFC 6874) before
+	// net.ParseIP, which doesn't accept the `%zone` form. Without
+	// this strip, `[fe80::1%en0]` would fall through to "remote"
+	// and incorrectly require an API key. (Copilot caught this on
+	// PR #86.)
+	if i := strings.Index(host, "%"); i > 0 {
+		host = host[:i]
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		// Non-IP host (FQDN, mDNS .local, etc) that isn't "localhost":
+		// treat as remote, require auth. Falls through.
+		return false
+	}
+	// IPv4 loopback (127.0.0.0/8): includes 127.0.0.1 and any
+	// 127.x.x.x alias for a local listener.
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 127 {
+		return true
+	}
+	if ip.IsLoopback() { // catches ::1
+		return true
+	}
+	if ip.IsPrivate() { // RFC1918 + RFC4193 unique-local
+		return true
+	}
+	if ip.IsLinkLocalUnicast() { // 169.254/16 + fe80::/10
+		return true
+	}
+	// Belt-and-braces fallback for 127.* in case the upstream parse
+	// changes shape: stays consistent with pre-v0.10.4 behaviour.
 	return strings.HasPrefix(host, "127.")
 }
 
@@ -111,8 +164,12 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 		// api_key_env line because Ollama doesn't authenticate. A blank
 		// LOCAL_REVIEW_API_KEY (the legacy default) used to crash the
 		// review here despite the provider needing no key. Skip the
-		// check when base_url points at localhost/127.0.0.1/::1/0.0.0.0;
-		// any non-local URL still requires a key.
+		// check when base_url points at a local-or-LAN host (see
+		// isLocalURL — loopback + RFC1918 + IPv6 unique/link-local);
+		// any public URL still requires a key. A user with a LAN
+		// gateway that DOES authenticate just sets api_key as usual
+		// (the !c.APIKey guard here means the bypass only fires when
+		// no key is configured).
 		envName := c.APIKeyEnv
 		if envName == "" {
 			envName = "LOCAL_REVIEW_API_KEY"
