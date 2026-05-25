@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-05-25
+
+**Theme: close the gaps the audit kept flagging.**
+
+A focused patch release closing three findings the dogfood audit has been re-flagging since v0.10.0:
+
+1. **`prompts.pack_dir` symlink-bypass** (#89, `Security`): v0.10.0's `pathInsideDir` was lexical-only — a symlink inside the config dir pointing outside it would slip through. The defence-in-depth gap was caught by every audit run since v0.10.0; v0.10.5 adds `EvalSymlinks` + deepest-existing-ancestor walk-up + fail-closed posture on resolve errors. Three dogfood round-trips of in-diff catches (codex found the missing-leaf bypass, then the fail-open on baseDir error, then a stale doc comment) — all resolved before merge.
+
+2. **Pre-flight probe wallclock honors the 10s cap on hung CLIs** (#88, `Fixed`): the v0.10.1 feature that was supposed to collapse the 4-minute gemini hang to a 10s `✓`/`✗` signal was *itself* failing on the target case — `cmd.Wait()` blocked on pipe drainage past `exec.CommandContext`'s SIGKILL, so the probe phase wallclock matched the CLI's subprocess-death time, not the per-LLM cap. v0.10.5 races `inv.RunPrompt` against `ctx.Done()`. Live verification on the dogfood: probe phase = **10s exactly** (down from 4m34s on PR #86's dogfood).
+
+3. **`ProbeCanceled` distinct from `ProbeTimeout`** (#88, `Added`): caught by codex on PR #88's own first dogfood. The race-fix above introduced a `case <-ctx.Done()` branch that returned `ProbeTimeout` unconditionally — conflating real timeouts with user Ctrl+C. v0.10.5 adds a fourth `ProbeStatus` enum variant, branches on `ctx.Err()` to distinguish, propagates `context.Canceled` through the runner's signal-handler exit path, and renders canceled probes with a distinct `⊘` glyph.
+
+The session pattern that emerged: every release since v0.10.0 has been driven by the previous release's audit (v0.10.1, v0.10.2, v0.10.4, v0.10.5) or by the dogfood of the PR itself surfacing in-diff catches (every PR since v0.10.3). Three reviewers (3-LLM diff review + Copilot + CodeRabbit) each catch findings the others miss; the redundancy IS the trust signal.
+
 ### Security
 
 - **`pathInsideDir` now resolves symlinks before the containment check.** v0.10.0's PR #75 added the `prompts.pack_dir` traversal guard but the check was lexical only — `filepath.Rel(Clean(base), Clean(target))` catches `..` escapes but admits a path that lexically stays inside `base` while its actual filesystem target (via symlink) points outside. Defence-in-depth gap caught by every audit dogfood run since v0.10.0 and re-confirmed by claude on PR #88's review. v0.10.5 adds a second-pass `EvalSymlinks` on both `base` and `target`, then re-checks containment against the resolved real paths. Missing targets fall through to the lexical-pass result (the file-open path catches "no such file" downstream with a clearer error than this layer could produce); the fail-closed posture is preserved because the lexical pass runs FIRST and the EvalSymlinks pass can only ADD rejections, never admit a path lexical rejected. Three tests pin the invariants: `TestLoadUsesRepoYAML_PromptsPackDir_RejectsSymlinkEscape` (symlink at `<base>/evil-link → /etc` is rejected), `TestLoadUsesRepoYAML_PromptsPackDir_AllowsSymlinkInsideDir` (symlink staying inside `base` is allowed — the `current → versions/v2` legitimate-alias case), and `TestLoadUsesRepoYAML_PromptsPackDir_AllowsNonExistentTarget` (path that doesn't exist yet passes; the user can `mkdir` it later). Windows skipped via `runtime.GOOS` because symlink creation requires Developer Mode or admin privilege there — the hardening itself still applies, only the test exercises the platform-portable case.
