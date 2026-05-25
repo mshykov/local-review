@@ -232,6 +232,17 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// hatch — not the recommended path.
 	if !sf.noPreflight {
 		active = runPreflightProbe(ctx, active)
+		// Short-circuit on user interrupt / parent context cancel.
+		// Pre-fix the runner's only check was len(active) == 0,
+		// which would surface "every active LLM failed pre-flight"
+		// after a Ctrl+C — accurate only in the narrow technical
+		// sense; misleading about the actual cause. Propagate
+		// ctx.Err() directly so the user sees the right reason
+		// (and main()'s signal-handler exit path gets the right
+		// exit code).
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if len(active) == 0 {
 			// Every authenticated LLM failed the probe. The
 			// readiness block above already showed the per-LLM
@@ -708,6 +719,15 @@ func runPreflightProbe(ctx context.Context, active []cli.LLM) []cli.LLM {
 			readyByName[name] = true
 		case cli.ProbeTimeout:
 			fmt.Printf("  %-8s ✗ timeout after %s\n", name, cli.DefaultProbeTimeout)
+		case cli.ProbeCanceled:
+			// Use a distinct glyph (⊘ / "canceled") so the user
+			// can tell "I pressed Ctrl+C" apart from "vendor
+			// timed out" at a glance. The runner short-circuits
+			// on ctx.Err() right after this loop returns, so this
+			// branch is mostly for the user's eyes — they see the
+			// readiness block render mid-cancel, then the run
+			// exits with the right reason.
+			fmt.Printf("  %-8s ⊘ canceled\n", name)
 		case cli.ProbeError:
 			// Surface the vendor's own error message (single line
 			// — multi-line stderr tails happen in the real-review

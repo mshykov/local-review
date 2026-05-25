@@ -42,6 +42,16 @@ const (
 	// clearer "(timeout after Ns)" hint instead of a generic
 	// error string.
 	ProbeTimeout
+
+	// ProbeCanceled: the parent context was canceled — typically
+	// the user pressing Ctrl+C, OR a parent timeout firing across
+	// the whole run rather than the per-LLM probe budget. Distinct
+	// from ProbeTimeout because the user-facing message is different
+	// ("user interrupt" vs "vendor slow today") and the runner's
+	// post-probe error handling needs to short-circuit on cancel
+	// rather than complain about "every LLM failed pre-flight"
+	// when the real cause was a deliberate stop signal.
+	ProbeCanceled
 )
 
 // String returns a one-word identifier suitable for rendering /
@@ -55,6 +65,8 @@ func (s ProbeStatus) String() string {
 		return "error"
 	case ProbeTimeout:
 		return "timeout"
+	case ProbeCanceled:
+		return "canceled"
 	default:
 		return "unknown"
 	}
@@ -116,11 +128,105 @@ const DefaultProbeTimeout = 10 * time.Second
 // invoker (Invoker is an interface and doesn't expose name).
 func Probe(ctx context.Context, inv Invoker, name string) ProbeResult {
 	start := time.Now()
-	out, _, err := inv.RunPrompt(ctx, probePrompt)
+
+	// Run inv.RunPrompt on a background goroutine and race it
+	// against ctx.Done(). v0.10.4 had a real bug here: when the
+	// underlying CLI (typically gemini under capacity-exhausted
+	// auth conditions) hangs past ctx.Deadline, exec.CommandContext
+	// SIGKILLs the subprocess but cmd.Wait() — inside RunPrompt —
+	// still blocks on stdout/stderr pipe drainage until the
+	// subprocess actually exits. For a hung CLI that wedge can be
+	// minutes. Pre-fix the probe phase took 4m34s on the same case
+	// the feature was designed to eliminate (the original ~4 min
+	// gemini hang was the whole reason v0.10.1 introduced the
+	// probe).
+	//
+	// Fix: race RunPrompt against ctx.Done(). When ctx expires
+	// first, return ProbeTimeout immediately. The background
+	// goroutine keeps draining until the OS finally reaps the
+	// subprocess — but the user-visible wall-clock is exactly
+	// the per-LLM timeout the caller set.
+	//
+	// The leaked goroutine is bounded: exec.CommandContext SIGKILLs
+	// the subprocess at ctx.Done, the OS reaps it, the pipe FDs
+	// close, cmd.Wait returns. The goroutine then exits. Worst case
+	// the goroutine outlives Probe by however long the subprocess
+	// takes to actually die — typically milliseconds, occasionally
+	// seconds, but never indefinitely. The send to outcomeCh has
+	// a buffer of 1, so the goroutine doesn't block on send even
+	// if no-one's reading.
+	type probeOutcome struct {
+		out string
+		err error
+	}
+	outcomeCh := make(chan probeOutcome, 1)
+	go func() {
+		out, _, err := inv.RunPrompt(ctx, probePrompt)
+		outcomeCh <- probeOutcome{out: out, err: err}
+	}()
+
+	select {
+	case r := <-outcomeCh:
+		return classifyProbeOutcome(name, start, r.out, r.err, ctx)
+	case <-ctx.Done():
+		// Context expired before RunPrompt returned. Branch on
+		// ctx.Err() to distinguish a deadline (the v0.10.1
+		// feature's intended target — vendor SLOW today) from a
+		// cancel (user Ctrl+C or parent timeout firing across the
+		// whole run). The first build of v0.10.5 returned
+		// ProbeTimeout unconditionally here, which conflated the
+		// two and would surface "every LLM failed pre-flight" on
+		// what was actually a deliberate user interrupt (codex
+		// caught this in PR #88's own dogfood — fixed before
+		// merge).
+		//
+		// The background goroutine keeps draining (see above);
+		// Probe returns immediately on either signal.
+		pr := ProbeResult{
+			LLM:      name,
+			Err:      ctx.Err(),
+			Duration: time.Since(start),
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			pr.Status = ProbeCanceled
+		} else {
+			// DeadlineExceeded or anything else context-shaped:
+			// classify as Timeout. The DeadlineExceeded path is
+			// the v0.10.1 target case; "anything else" is a
+			// defensive default that keeps Probe from ever
+			// returning ProbeReady on a canceled context.
+			pr.Status = ProbeTimeout
+		}
+		return pr
+	}
+}
+
+// classifyProbeOutcome owns the err/output → ProbeStatus mapping
+// for the non-timeout path. Extracted from Probe so the inline
+// flow in Probe reads as "race RunPrompt against ctx; on either
+// outcome, classify and return" — the classification rules are
+// load-bearing enough to deserve their own named function.
+func classifyProbeOutcome(name string, start time.Time, out string, err error, ctx context.Context) ProbeResult {
 	pr := ProbeResult{LLM: name, Duration: time.Since(start)}
 
 	if err != nil {
 		pr.Err = err
+		// Cancellation MUST win over the timeout / generic-error
+		// classification: when ctx is canceled (Ctrl+C, parent
+		// context cancel), the invoker may return ctx.Err() ==
+		// context.Canceled BEFORE Probe's outer `case <-ctx.Done()`
+		// fires — so the result lands here, in classifyProbeOutcome,
+		// rather than in Probe's dedicated ProbeCanceled branch.
+		// Without this guard the canceled case would have fallen
+		// through to ProbeError, which then surfaces as "every LLM
+		// failed pre-flight" instead of propagating cleanly. The
+		// race window is tight but real (claude+codex caught it on
+		// PR #88's second dogfood — the fix for ctx-done in this
+		// same PR opened it).
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			pr.Status = ProbeCanceled
+			return pr
+		}
 		// errors.Is(ctx.Err()) is the structurally-correct check,
 		// but ClassifyExit wraps the underlying context error in
 		// its own formatted message string by the time we see it

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pre-flight probe phase wallclock now actually honours the 10s per-LLM cap on hung CLIs.** v0.10.1's pre-flight readiness probe was designed to collapse the ~4-minute gemini-exhausted-capacity hang to a sub-10s `✓`/`✗` signal — but in practice the probe phase wallclock blew past the cap whenever the underlying CLI's `cmd.Wait()` blocked on stdout/stderr pipe drainage after `exec.CommandContext` SIGKILLed the subprocess. Net result: v0.10.4's PR #86 dogfood reported a 4m34s probe phase against the exact case v0.10.1 was supposed to fix (the gemini-capacity-exhausted hang was re-confirmed twice in this session). v0.10.5 races `inv.RunPrompt` against `ctx.Done()` in `cli.Probe` using a goroutine + select pattern: when ctx expires first, `Probe` returns immediately with `ctx.Err()` as the underlying error, and the background goroutine drains until the OS reaps the subprocess (bounded by SIGKILL — typically ms, occasionally seconds, never indefinitely). The leaked goroutine writes to a buffered channel so it can't deadlock on send. Two regression tests pin the fix: `TestProbe_RespectsCtxDeadlineEvenWhenInvokerHangs` (uses a `hungInvoker` that deliberately ignores `ctx.Done()`, asserts Probe completes within 200ms of a 30ms deadline) and `TestProbeAll_PhaseRespectsTimeoutEvenWhenOneInvokerHangs` (asserts the fan-out phase wallclock is bounded by per-LLM timeout + scheduler slack). Both would have hung indefinitely pre-fix.
+
+### Added
+
+- **`ProbeCanceled` status distinct from `ProbeTimeout`.** Caught by codex during PR #88's own pre-push dogfood: the v0.10.5 timeout-fix above introduced a new `case <-ctx.Done()` branch that returned `ProbeTimeout` unconditionally — conflating real timeouts (`context.DeadlineExceeded`) with user cancellation (`context.Canceled`, e.g. Ctrl+C or a parent context being canceled). On a user interrupt the runner would surface "every active LLM failed pre-flight" when the actual cause was a deliberate stop signal. v0.10.5 adds a fourth `ProbeStatus` enum variant (`ProbeCanceled` — String() returns `"canceled"`) and branches on `ctx.Err()` inside the `Done()` case: `context.Canceled` → `ProbeCanceled`, anything else context-shaped → `ProbeTimeout`. The runner's post-probe handler now checks `ctx.Err()` first and propagates user cancellation directly (so `main()`'s signal-handler exit path gets the right exit code) before falling through to the "every LLM failed" message. The readiness block renders canceled probes with a distinct `⊘` glyph and `canceled` label so users can tell "I pressed Ctrl+C" from "vendor timed out" at a glance. Two pin tests (`TestProbe_CanceledIsDistinctFromTimeout`, `TestProbe_DeadlineExceededStillTimeout`) prevent the two states from collapsing again.
+
 ## [0.10.4] - 2026-05-25
 
 **Theme: Ollama on the network.**
