@@ -212,6 +212,36 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return fmt.Errorf("prompt+diff is too large for every active agent: ~%d tokens estimated; try a smaller scope (`local-review commit HEAD` or `local-review staged`)", promptDiffTokens)
 	}
 
+	// Pre-flight readiness probe (v0.10.1). Issues a tiny "reply OK"
+	// call to each remaining active LLM with a ~10s per-LLM timeout,
+	// renders a ✓/✗ block immediately, then drops the ✗ agents from
+	// the active set before the real fan-out.
+	//
+	// Why this exists: v0.10.0's first-customer dogfood surfaced
+	// gemini's "exhausted capacity on this model" error AFTER
+	// ~4 minutes — the real-review timeout window is large enough
+	// to hide a doomed LLM for that long. The probe collapses that
+	// signal to seconds and lets the run proceed with the surviving
+	// agents instead of waiting on the doomed one. PreflightFilter
+	// above does a *static* context-window check (cheap, no LLM
+	// call); this is the *dynamic* auth+capacity probe (one tiny
+	// call per LLM).
+	//
+	// --no-preflight bypasses this entirely for callers who don't
+	// want the extra ~10s + ~1k tokens per LLM. Reserved escape
+	// hatch — not the recommended path.
+	if !sf.noPreflight {
+		active = runPreflightProbe(ctx, active)
+		if len(active) == 0 {
+			// Every authenticated LLM failed the probe. The
+			// readiness block above already showed the per-LLM
+			// reason; this final message points the user at
+			// `doctor` for a structured diagnostic instead of
+			// asking them to re-grep the rendered block.
+			return fmt.Errorf("every active LLM failed the pre-flight readiness probe (run `local-review doctor` for status, or `--no-preflight` to skip the probe)")
+		}
+	}
+
 	startTime := time.Now()
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)
@@ -620,6 +650,91 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 	}
 	fmt.Println()
 }
+
+// runPreflightProbe issues a tiny `Reply OK` call to each LLM with a
+// short per-LLM timeout, renders a ✓/✗ readiness block to the user,
+// and returns the subset of LLMs that passed. Empty return ⇒ every
+// LLM failed; the caller handles the all-failed error message.
+//
+// Rendering posture: prints to stdout (not stderr) because the
+// readiness block is informational and sequenced before the real
+// review's progress lines — the user reads them top-to-bottom as a
+// single narrative. stderr would interleave on terminals that line-
+// buffer the two streams differently.
+//
+// Glyph choice: the success glyph mirrors the per-LLM completion
+// line later in the run (`✓` is the same character cli.ClassifyExit
+// avoids and the merged-report footer prints), so a user scanning
+// terminal output for "did all the LLMs work?" sees the same
+// visual at both moments. The `✗` glyph is similarly consistent
+// with the per-LLM failure line.
+//
+// Goroutine + timeout posture: ProbeAll fans out internally with
+// per-LLM cli.DefaultProbeTimeout deadlines. Empirically 10s is
+// generous for a healthy CLI's startup + minimal response;
+// shortening it would catch slow but recoverable CLIs as
+// false-positive timeouts.
+func runPreflightProbe(ctx context.Context, active []cli.LLM) []cli.LLM {
+	fmt.Println("Pre-flight (probing auth + capacity):")
+	probeStart := time.Now()
+	results := cli.ProbeAll(ctx, active, cli.DefaultProbeTimeout)
+	probeDuration := time.Since(probeStart)
+
+	// Build a quick name → index map so we can filter `active`
+	// down to the ready subset without two slice walks. Roster
+	// order is preserved because ProbeAll returns in roster
+	// order and we iterate the same slice.
+	readyByName := make(map[string]bool, len(results))
+	for _, r := range results {
+		// Width-pad the agent name to the longest in the
+		// roster so the glyphs line up in a column — read-at-
+		// a-glance UX, same as the per-LLM completion lines.
+		// printf's %-Ns padding does this in one format call.
+		name := r.LLM
+		switch r.Status {
+		case cli.ProbeReady:
+			fmt.Printf("  %-8s ✓ (%s)\n", name, r.Duration.Round(10*time.Millisecond))
+			readyByName[name] = true
+		case cli.ProbeTimeout:
+			fmt.Printf("  %-8s ✗ timeout after %s\n", name, cli.DefaultProbeTimeout)
+		case cli.ProbeError:
+			// Surface the vendor's own error message (single line
+			// — multi-line stderr tails happen in the real-review
+			// path, not in the readiness block). Strip trailing
+			// whitespace + collapse newlines so a CLI that prints
+			// "error\n at line ..." renders as one tight line.
+			msg := singleLine(r.Err.Error())
+			fmt.Printf("  %-8s ✗ %s\n", name, msg)
+		}
+	}
+	fmt.Printf("Probed %d LLM%s in %s.\n\n", len(active), pluralS(len(active)), probeDuration.Round(10*time.Millisecond))
+
+	// Filter active → ready subset, preserving roster order.
+	ready := make([]cli.LLM, 0, len(active))
+	for _, l := range active {
+		if readyByName[l.Name] {
+			ready = append(ready, l)
+		}
+	}
+	return ready
+}
+
+// singleLine collapses any internal newline / carriage-return
+// runs to single spaces, then trims. Used by the readiness block
+// to keep vendor error messages on one line — a multi-line stderr
+// tail in the readiness column would break the ✓/✗ alignment.
+func singleLine(s string) string {
+	// Replace any \r\n / \n / \r with a space, then collapse
+	// runs of whitespace.
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.TrimSpace(spaceCollapse.ReplaceAllString(s, " "))
+}
+
+// Reused by singleLine. Compiled once at init so the readiness-
+// block render loop doesn't pay a regex-compile per LLM.
+var spaceCollapse = regexp.MustCompile(`\s+`)
 
 func modelFor(name string, cfg config.Config) string {
 	if c, ok := cfg.LLMs[name]; ok {

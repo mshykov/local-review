@@ -88,6 +88,16 @@ type sharedFlags struct {
 	// because their values are typically multi-line — config-only
 	// is the right ergonomic choice for those.
 	promptPackDir string
+
+	// v0.10.1 pre-flight readiness probe. When true, skip the
+	// per-LLM `Reply OK` probe and proceed straight to the real
+	// review — same behaviour as v0.10.0 and earlier. Reserved for
+	// CI/scripting use cases where the probe's extra ~10s and
+	// minor token cost are worse than tolerating a 4-min hang on
+	// a doomed LLM (the case the probe was designed to prevent).
+	// Default is to run the probe; the flag exists as an escape
+	// hatch, not as a routine knob.
+	noPreflight bool
 }
 
 func main() {
@@ -171,6 +181,27 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	// Both end up as absolute paths in the resolved Config; the
 	// difference is what each form is interpreted relative to.
 	root.PersistentFlags().StringVar(&sf.promptPackDir, "prompt-pack-dir", "", "override directory for language pack files (e.g. .local-review/prompts); falls through to embedded packs for missing files. Resolved relative to CWD; YAML's prompts.pack_dir resolves relative to the config file.")
+
+	// pre-flight readiness probe (v0.10.1).
+	//
+	// The probe makes a tiny "reply OK" call to each LLM with a 10s
+	// timeout before the real review fan-out. Mainly here to catch
+	// the failure mode that surfaced after v0.10.0: gemini's
+	// "exhausted capacity on this model" error took ~4 minutes to
+	// surface inside the real review's much longer timeout window,
+	// leaving the user staring at a frozen terminal for 4 minutes
+	// before learning gemini was a no-op. The probe shifts that
+	// signal to seconds and lets the run proceed without the
+	// doomed LLM.
+	//
+	// --no-preflight is an escape hatch for the few callers who
+	// actually want the v0.10.0 behaviour: CI jobs where the ~10s
+	// probe adds wallclock without value (the probe-failures would
+	// surface anyway during the real call, and the run is non-
+	// interactive so no terminal-staring concern), or scripts that
+	// can't afford the ~1k probe tokens per LLM. Not a routine
+	// knob; the default-on behaviour is the recommended path.
+	root.PersistentFlags().BoolVar(&sf.noPreflight, "no-preflight", false, "skip the per-LLM readiness probe before review (default: probe enabled)")
 
 	// Group commands so --help reads as three sections (Review / Setup /
 	// Other) instead of one alphabetical wall. Cobra renders any command

@@ -797,3 +797,32 @@ func TestSortByRoster_UnknownAgentSinksStable(t *testing.T) {
 		}
 	}
 }
+
+func TestSingleLine_CollapsesAndTrims(t *testing.T) {
+	// singleLine renders into the readiness block, where any
+	// internal newlines would break the ✓/✗ column alignment.
+	// Cover the shapes we'd actually see from a real CLI's
+	// ClassifyExit output: trailing newline, CRLF, embedded
+	// blank lines, mixed whitespace runs.
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"no whitespace", "ready", "ready"},
+		{"trailing newline", "ready\n", "ready"},
+		{"crlf wrapped", "\r\nready\r\n", "ready"},
+		{"embedded newline", "line one\nline two", "line one line two"},
+		{"multi-newline run", "line one\n\n\nline two", "line one line two"},
+		{"tabs and spaces", "line\tone   line\ttwo", "line one line two"},
+		{"only whitespace", "   \n\t ", ""},
+		{"vendor capacity error", "You have exhausted your capacity on this model.\n    at line 42", "You have exhausted your capacity on this model. at line 42"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := singleLine(tc.in); got != tc.want {
+				t.Errorf("singleLine(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
