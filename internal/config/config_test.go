@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -470,6 +471,194 @@ prompts:
 				t.Errorf("PackDir should be set; got empty")
 			}
 		})
+	}
+}
+
+// v0.10.5 hardening: a symlink inside the config dir pointing
+// outside it must NOT pass the containment check, even though the
+// lexical path stays inside. Pre-fix `pathInsideDir` was
+// filepath.Rel-only and would have admitted this; with
+// EvalSymlinks the real path is checked and rejected.
+//
+// Skip on Windows — symlink creation needs Developer Mode or
+// admin privilege, neither of which CI runners reliably have.
+// The hardening still applies on Windows; we just can't exercise
+// it portably from a test.
+func TestLoadUsesRepoYAML_PromptsPackDir_RejectsSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires admin/Developer Mode on Windows; covered on linux+darwin")
+	}
+	baseDir := t.TempDir()
+	// Target lives outside baseDir — this is what the symlink will
+	// point at. EvalSymlinks must resolve through the link and
+	// flag the escape.
+	outside := t.TempDir()
+
+	// Create a symlink INSIDE baseDir that points OUTSIDE. The
+	// lexical containment check on `pack_dir: evil-link` will
+	// pass (rel == "evil-link", no `..`). The symlink resolution
+	// pass must catch it.
+	linkPath := filepath.Join(baseDir, "evil-link")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	repoCfg := filepath.Join(baseDir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: evil-link
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(repoCfg)
+	if err == nil {
+		t.Fatalf("Load: expected symlink-escape error, got nil (the symlink pointed at %q, outside the config dir %q)", outside, baseDir)
+	}
+	if !strings.Contains(err.Error(), "escapes config directory") {
+		t.Errorf("error message = %q, want it to mention 'escapes config directory'", err.Error())
+	}
+}
+
+// Counter-test: a symlink INSIDE the config dir pointing to
+// another directory INSIDE the config dir must still pass. This
+// is the legitimate "I want to alias a deeper path" case (e.g.
+// pack_dir: current → versions/v2).
+func TestLoadUsesRepoYAML_PromptsPackDir_AllowsSymlinkInsideDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires admin/Developer Mode on Windows; covered on linux+darwin")
+	}
+	baseDir := t.TempDir()
+
+	// Real target lives inside baseDir.
+	realTarget := filepath.Join(baseDir, "versions", "v2")
+	if err := os.MkdirAll(realTarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlink at baseDir/current → baseDir/versions/v2
+	linkPath := filepath.Join(baseDir, "current")
+	if err := os.Symlink(realTarget, linkPath); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	repoCfg := filepath.Join(baseDir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: current
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v (symlink staying inside config dir should be allowed)", err)
+	}
+	if cfg.Prompts.PackDir == "" {
+		t.Errorf("PackDir should be set; got empty")
+	}
+}
+
+// v0.10.5-RC had a real bypass: if `<base>/evil-link` symlinked
+// to /etc and pack_dir was `evil-link/new-leaf`, EvalSymlinks on
+// the full path failed (new-leaf doesn't exist), my fallback
+// returned true. But the PARENT already resolved outside base —
+// the leaf being missing didn't change that. Codex caught this
+// on PR #90's own dogfood. The walk-up fix in deepestExistingAncestor
+// closes the bypass: even when the final component doesn't exist,
+// the deepest existing ancestor (the symlink) is what we check.
+func TestLoadUsesRepoYAML_PromptsPackDir_RejectsSymlinkEscapeThroughMissingLeaf(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires admin/Developer Mode on Windows")
+	}
+	baseDir := t.TempDir()
+	outside := t.TempDir() // /private/var/.../TestXxx/001 — exists, outside baseDir
+
+	linkPath := filepath.Join(baseDir, "evil-link")
+	if err := os.Symlink(outside, linkPath); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+	// new-leaf does NOT exist. The bypass: lexical pass admits
+	// `evil-link/new-leaf` (no `..` segments), and a naive
+	// EvalSymlinks-on-full-path returns ENOENT, which the
+	// first-pass fix treated as "fall through to allowed."
+	// The walk-up fix must reject it.
+
+	repoCfg := filepath.Join(baseDir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: evil-link/new-leaf
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(repoCfg)
+	if err == nil {
+		t.Fatalf("Load: expected escape-through-missing-leaf to be rejected, got nil (evil-link resolves to %q, outside %q)", outside, baseDir)
+	}
+	if !strings.Contains(err.Error(), "escapes config directory") {
+		t.Errorf("error message = %q, want 'escapes config directory'", err.Error())
+	}
+}
+
+// Counter-test: pack_dir points at a deep path under a legitimate
+// inside-base symlink, with the leaf not yet existing. Walk-up
+// must terminate at the symlink (which resolves inside base) and
+// admit the path.
+func TestLoadUsesRepoYAML_PromptsPackDir_AllowsMissingLeafUnderInsideSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires admin/Developer Mode on Windows")
+	}
+	baseDir := t.TempDir()
+
+	realInside := filepath.Join(baseDir, "real-prompts")
+	if err := os.MkdirAll(realInside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(baseDir, "prompts")
+	if err := os.Symlink(realInside, linkPath); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	repoCfg := filepath.Join(baseDir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: prompts/v3
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v (deep path under an inside-base symlink should be allowed even if the leaf doesn't exist yet)", err)
+	}
+	if cfg.Prompts.PackDir == "" {
+		t.Errorf("PackDir should be set; got empty")
+	}
+}
+
+// Edge case: pack_dir points at a path that doesn't exist yet
+// (user plans to create it after first run). EvalSymlinks errors
+// on missing paths, but the lexical check already passed, so we
+// fall through to "allowed." The file-open path will surface its
+// own "no such file" error if/when the user actually invokes
+// review without creating the directory.
+func TestLoadUsesRepoYAML_PromptsPackDir_AllowsNonExistentTarget(t *testing.T) {
+	baseDir := t.TempDir()
+	repoCfg := filepath.Join(baseDir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  pack_dir: not-yet-created
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v (non-existent target should be allowed; downstream file-open will catch missing)", err)
+	}
+	if cfg.Prompts.PackDir == "" {
+		t.Errorf("PackDir should be set; got empty")
 	}
 }
 

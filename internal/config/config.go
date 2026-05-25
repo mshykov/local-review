@@ -279,14 +279,21 @@ func mergeFrom(dst *Config, path string) error {
 // `--prompt-pack-dir ./prompts`).
 //
 // Returns an error when a YAML-supplied relative path escapes
-// baseDir via `..` segments. This is the defence the audit feature
-// caught missing in v0.10.0-c's own dogfood: a malicious or
-// accidentally-shared `.local-review.yml` with
-// `pack_dir: ../../../../etc` would previously resolve outside
-// the intended directory, letting any subsequent override read
-// touch files in arbitrary locations. Absolute paths still pass
-// through (explicit user opt-in to a specific location is fine);
-// only relative escapes are rejected.
+// baseDir — either via `..` segments (the v0.10.0 lexical check) OR
+// via symlinks that resolve outside baseDir (v0.10.5 hardening:
+// the pre-fix `pathInsideDir` was lexical only, so a path that
+// stayed inside baseDir on paper but pointed via symlink to /etc
+// would have slipped through). Absolute paths still pass through
+// (explicit user opt-in to a specific location is fine); only
+// relative escapes are rejected.
+//
+// This is the defence the audit feature caught missing in
+// v0.10.0-c's own dogfood: a malicious or accidentally-shared
+// `.local-review.yml` with `pack_dir: ../../../../etc` would
+// previously resolve outside the intended directory, letting any
+// subsequent override read touch files in arbitrary locations. The
+// symlink hardening closes the second-pass finding from PR #88's
+// own dogfood (single reviewer, but real defence-in-depth gap).
 func resolveRelativePaths(layer *Config, baseDir string) error {
 	if p := layer.Prompts.PackDir; p != "" && !filepath.IsAbs(p) {
 		resolved := filepath.Join(baseDir, p)
@@ -303,21 +310,130 @@ func resolveRelativePaths(layer *Config, baseDir string) error {
 	return nil
 }
 
-// pathInsideDir returns true when filePath, after lexical cleaning,
-// sits inside dir. Mirrors the helper in internal/prompts; we
-// re-implement here rather than import to keep the dependency
-// shape of internal/config minimal (nothing else in this package
-// imports prompts, and adding the dep just for a 6-line helper is
-// over-coupling).
+// pathInsideDir returns true when filePath sits inside dir, AFTER
+// resolving symlinks on both sides. Mirrors the helper in
+// internal/prompts; we re-implement here rather than import to
+// keep the dependency shape of internal/config minimal (nothing
+// else in this package imports prompts, and adding the dep just
+// for the helper is over-coupling).
+//
+// Symlink handling (v0.10.5):
+//
+//   - When EvalSymlinks succeeds on BOTH paths, the check is done
+//     against the resolved real paths. This catches the case
+//     where filePath lexically sits inside dir but a symlink
+//     inside dir points outside (e.g. dir/link → /etc).
+//
+//   - When EvalSymlinks FAILS on filePath (typical: pack_dir
+//     points at a directory that doesn't exist yet — the user
+//     plans to create it), we fall through to the lexical check
+//     on the cleaned paths. The file-open path will catch the
+//     "missing target" case downstream with a clearer error than
+//     this layer could produce.
+//
+//   - When EvalSymlinks fails on dir, something is wrong with the
+//     config-dir layout itself — fall back to lexical too rather
+//     than reject every load. (In practice baseDir is the config
+//     file's dir, which exists by definition since we just read
+//     a YAML out of it.)
+//
+// Fail-closed posture is preserved overall: any rel-path-with-..
+// is rejected lexically before the EvalSymlinks branch even runs,
+// and the EvalSymlinks branch can only ADD rejections (it never
+// admits a path that lexical rejected). So a fallback-to-lexical
+// on EvalSymlinks error never weakens the check.
 func pathInsideDir(filePath, dir string) bool {
-	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(filePath))
+	cleanedDir := filepath.Clean(dir)
+	cleanedPath := filepath.Clean(filePath)
+
+	// Lexical containment first — cheap, fails fast on `..` escapes.
+	rel, err := filepath.Rel(cleanedDir, cleanedPath)
 	if err != nil {
 		return false
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false
 	}
+
+	// Symlink resolution second — catches the
+	// lexically-inside-but-symlinks-out case. EvalSymlinks errors
+	// on missing targets (the common pack_dir-not-created-yet case),
+	// so we walk UP filePath until we find an existing ancestor,
+	// then check THAT against the resolved baseDir.
+	//
+	// First-pass v0.10.5 had a bypass here: if `<base>/evil-link
+	// → /etc` and pack_dir was `evil-link/new-leaf`, the leaf
+	// didn't exist on disk, EvalSymlinks failed, and the function
+	// returned true. But the PARENT (`<base>/evil-link`) already
+	// resolved outside the base — admitting the leaf was wrong.
+	// Codex caught this on PR #90's own dogfood. The walk-up
+	// approach closes the bypass: it resolves the deepest existing
+	// ancestor, which always exists (worst case: baseDir itself),
+	// and rejects when THAT resolves outside.
+	resolvedDir, derr := filepath.EvalSymlinks(cleanedDir)
+	if derr != nil {
+		// baseDir doesn't resolve. Highly unusual — baseDir is
+		// the config file's own directory and Load just read a
+		// YAML out of it. But fail closed in a security-
+		// sensitive function: if we can't verify the symlink
+		// chain, we shouldn't admit the path on the strength of
+		// the (weaker) lexical pass alone. A permissions race
+		// between YAML-read and this resolve is the kind of
+		// transient that we'd rather reject loudly (the user
+		// sees the load fail and can investigate) than admit
+		// silently. Codex caught the prior fail-open posture on
+		// PR #90's own dogfood — fixed before merge.
+		return false
+	}
+	resolvedAncestor := deepestExistingAncestor(cleanedPath)
+	if resolvedAncestor == "" {
+		// Even the root resolved to nothing — no existing
+		// filesystem state to check against. Same fail-closed
+		// posture as the baseDir-error branch above.
+		return false
+	}
+	relReal, err := filepath.Rel(resolvedDir, resolvedAncestor)
+	if err != nil {
+		return false
+	}
+	if relReal == ".." || strings.HasPrefix(relReal, ".."+string(filepath.Separator)) {
+		return false
+	}
 	return true
+}
+
+// deepestExistingAncestor returns the EvalSymlinks-resolved real
+// path of the deepest existing prefix of `path`. Used by
+// pathInsideDir to close the v0.10.5-RC bypass where a non-
+// existent leaf hid the fact that the parent already resolved
+// outside the base.
+//
+// Algorithm: starting from `path`, walk up via filepath.Dir until
+// EvalSymlinks succeeds. The walk always terminates because
+// filepath.Dir eventually returns "/" (or "." for relative
+// inputs), both of which exist on a working filesystem. Returns
+// "" only on the truly degenerate case where even the root fails
+// to resolve — the caller treats this as fail-closed (rejects
+// the path), matching the security-sensitive posture of
+// pathInsideDir itself. Codex caught a stale "fall back to
+// lexical" claim in this comment on PR #90's final dogfood;
+// updated to match the fail-closed behaviour the caller actually
+// implements.
+func deepestExistingAncestor(path string) string {
+	cur := path
+	for {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			return resolved
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			// Reached filesystem root or stable cycle —
+			// EvalSymlinks failed at every level. Surface "".
+			return ""
+		}
+		cur = parent
+	}
 }
 
 // merge does a shallow overlay: any non-zero field in src replaces dst.
