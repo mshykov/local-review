@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-25
+
+**Theme: reach beyond the diff.**
+
+v0.10.0 grows the tool past the one shape it has carried since v0: *review a diff, exit.* Three customer-driven additions break that frame. `audit --topic <security|tech-debt>` runs the same reviewer against the **whole committed codebase**, surfacing pre-existing issues no diff would catch — closes the solo-dev gap that `review` couldn't reach. New language packs for **Swift / Kotlin / Liquid** activate auto-detection on the 60% of users' daily code that previously fell through to the generic pack. And `bench --swe-bench` measures the reviewer against **real bugs from projects we did not author** — closing v0.9.0's "circular benchmark" critique with a SWE-bench-lite catch-rate leaderboard alongside the existing F1/uplift tables. Plus first-user dogfood of `audit` itself surfaced two real security issues in `internal/config/` (path traversal in `pack_dir` resolution, deprecated YAML keys winning over env vars) — both fixed before the tag, both committed in [`audit/security.md`](audit/security.md) and [`audit/tech-debt.md`](audit/tech-debt.md) as the second public trust artifact next to `bench/RESULTS.md`.
+
 ### Security
 
 - **Reject `prompts.pack_dir` paths that escape the config directory.** First-user dogfood of the new `local-review audit --topic security` (PR #73) surfaced a real defence-in-depth gap in `internal/config/config.go`: a `.local-review.yml` with `pack_dir: ../../../etc` would resolve outside the config's own directory and let the override-resolver touch files there. Now `resolveRelativePaths` rejects any relative `pack_dir` that resolves outside `<config-dir>` via `..` segments. Absolute paths still pass through unchanged (explicit-opt-in to a specific location remains supported). Tests cover both directions: traversal rejection AND paths-with-`..`-that-stay-inside (`foo/../bar`) still passing.
