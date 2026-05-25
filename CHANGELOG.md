@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Consolidated the dual-metric gate pattern in `cmd/local-review/runner.go` into a single `multi.GateDecision` type.** v0.10.0's first audit dogfood (`audit/tech-debt.md`) flagged `runner.go:156` as a `major` finding: six call sites in the runner each computed `CountSuccessful` (Error == nil) and/or `CountWithOutput` (HasMergeableOutput) independently, with load-bearing comments cataloguing two distinct historical bugs (SaveReview-failed-with-output, CLI-exited-zero-with-empty-output) where the two metrics had drifted apart. The new shape: `multi.DecideGate(results)` returns a `GateDecision` summarising both views in a single pass; the runner threads that one value through the zero-mergeable short-circuit, the run-mode classifier (renamed `classifyRunMode` → `classifyRunModeFromGate`), the merge-step framing, and the progress display lines. Error taxonomy for the zero-mergeable case moved onto the type as `GateDecision.ClassifyZero() ZeroMergeableReason` with three named cases (`ZeroMergeableAllFailed`, `ZeroMergeableAllEmpty`, `ZeroMergeableMixed`) — the runner picks the error message by switch, the categories themselves are pinned by tests in `internal/multi/orchestrator_test.go` (`TestDecideGate_*`) named for the underlying scenarios (`AllFailed`, `AllSucceededButEmpty`, `MixedFailedAndEmpty`, `SaveReviewFailedWithOutput_StillMergeable`, …) so a future regression makes the failing line readable without re-reading the body (CLAUDE.md rule 9). No user-facing behavior change — exit codes, error strings, and console output are byte-identical to v0.10.0; the change is structural, eliminating the surface area that historically drifted. `multi.CountSuccessful` and `multi.CountWithOutput` are retained as public helpers (still used in tests and stable callers), but the runner no longer uses them directly.
+
 ## [0.10.0] - 2026-05-25
 
 **Theme: reach beyond the diff.**

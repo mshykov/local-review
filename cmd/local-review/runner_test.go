@@ -525,7 +525,13 @@ func TestClassifyRunMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyRunMode(tc.results); got != tc.want {
+			// classifyRunModeFromGate consumes a pre-computed
+			// GateDecision instead of walking results itself, but
+			// the cases here are written in terms of the underlying
+			// result sets so the test data stays readable. Compute
+			// the gate locally to bridge.
+			gate := multi.DecideGate(tc.results)
+			if got := classifyRunModeFromGate(gate); got != tc.want {
 				t.Errorf("got %d, want %d", got, tc.want)
 			}
 		})
