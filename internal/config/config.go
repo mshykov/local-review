@@ -504,7 +504,17 @@ func warnDeprecatedAPIKeys(cfg *Config) {
 	for name, llmCfg := range cfg.LLMs {
 		if llmCfg.APIKey != "" {
 			fmt.Fprintf(os.Stderr, "WARNING: api_key for %s in YAML config is deprecated and insecure.\n", name)
-			fmt.Fprintf(os.Stderr, "         Use environment variable %s instead (when set, it takes precedence over this YAML key).\n", llmCfg.APIKeyEnv)
+			// If the user set api_key but not api_key_env, our
+			// previous warning printed "Use environment variable
+			// instead..." with an empty name — actively
+			// unhelpful (Copilot caught this on PR #75). Emit a
+			// concrete-next-step message instead, pointing at the
+			// per-LLM config field they need to add.
+			if llmCfg.APIKeyEnv == "" {
+				fmt.Fprintf(os.Stderr, "         Set llms.%s.api_key_env to an env var name and export the key in your shell instead.\n", name)
+			} else {
+				fmt.Fprintf(os.Stderr, "         Use environment variable %s instead (when set, it takes precedence over this YAML key).\n", llmCfg.APIKeyEnv)
+			}
 		}
 	}
 }
