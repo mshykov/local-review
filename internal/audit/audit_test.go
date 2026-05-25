@@ -3,6 +3,8 @@ package audit
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -280,5 +282,222 @@ func TestWriteMarkdown_StructureForMixedPackageStatuses(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("markdown missing %q\n--- output ---\n%s", want, out)
 		}
+	}
+}
+
+// TestSplitChunk_FitsInOnePackageWhenUnderCap verifies the
+// no-split happy path: a package whose total body fits under
+// maxBytes emits a single chunk with the package name unchanged.
+// No "[part N/M]" suffix when the package wasn't split.
+func TestSplitChunk_FitsInOnePackageWhenUnderCap(t *testing.T) {
+	root := t.TempDir()
+	mkFile(t, root, "a.go", "package a\n")
+	mkFile(t, root, "b.go", "package a\n")
+	chunks, err := splitChunk(root, ".", []string{"a.go", "b.go"}, 64*1024, nil)
+	if err != nil {
+		t.Fatalf("splitChunk: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 chunk; got %d", len(chunks))
+	}
+	if chunks[0].Package != "." {
+		t.Errorf("single chunk should keep package name; got %q", chunks[0].Package)
+	}
+	if !strings.Contains(chunks[0].Body, "// === FILE: a.go ===") {
+		t.Errorf("body missing file marker for a.go: %q", chunks[0].Body)
+	}
+}
+
+// TestSplitChunk_SplitsAcrossBinsWhenOverCap verifies the
+// headline fix: a package whose body exceeds maxBytes is
+// auto-split into multiple chunks labelled `pkg [part N/M]`, each
+// at-or-below the cap, with file adjacency preserved (greedy
+// bin-pack in input order).
+//
+// Reproduces the user-reported failure shape from PR #73 dogfood
+// where 321 of 343 Android packages errored with prompt_too_long
+// because the runner just shipped oversized chunks to Claude.
+func TestSplitChunk_SplitsAcrossBinsWhenOverCap(t *testing.T) {
+	root := t.TempDir()
+	// Each file ~30 KiB; cap 50 KiB → expect 4 bins for 4 files
+	// (one file per bin since two would exceed the cap).
+	body := strings.Repeat("// filler\n", 3000) // ~30 KiB each
+	mkFile(t, root, "a.go", body)
+	mkFile(t, root, "b.go", body)
+	mkFile(t, root, "c.go", body)
+	mkFile(t, root, "d.go", body)
+	wantFiles := []string{"a.go", "b.go", "c.go", "d.go"}
+	chunks, err := splitChunk(root, "pkg", wantFiles, 50*1024, nil)
+	if err != nil {
+		t.Fatalf("splitChunk: %v", err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks for over-cap package; got %d", len(chunks))
+	}
+	// Each chunk must be labelled with the [part N/M] suffix.
+	for _, c := range chunks {
+		if !strings.Contains(c.Package, "pkg [part ") {
+			t.Errorf("split chunk missing [part N/M] suffix: %q", c.Package)
+		}
+		// Each individual chunk should be at-or-under the cap.
+		// (Single oversized files are the exception covered by
+		// the other test; here all files are 30 KiB and the cap
+		// is 50 KiB so all bins must fit.)
+		if c.SizeBytes > 50*1024 {
+			t.Errorf("split bin exceeded cap: %s (%d bytes)", c.Package, c.SizeBytes)
+		}
+	}
+	// Flatten chunks back into the file list and assert exact
+	// equality with the input — splitChunk must preserve every
+	// file in input order, never drop or duplicate. CodeRabbit
+	// caught the prior shape as too lax (would have passed even
+	// if files were dropped). Hardened on PR #74 review.
+	gotFiles := make([]string, 0, len(wantFiles))
+	for _, c := range chunks {
+		gotFiles = append(gotFiles, c.Files...)
+	}
+	if len(gotFiles) != len(wantFiles) {
+		t.Fatalf("expected %d files across split chunks; got %d (%v)", len(wantFiles), len(gotFiles), gotFiles)
+	}
+	for i := range wantFiles {
+		if gotFiles[i] != wantFiles[i] {
+			t.Errorf("split file at index %d: got %q, want %q (full flattened: %v)", i, gotFiles[i], wantFiles[i], gotFiles)
+		}
+	}
+}
+
+// TestWalk_RejectsNegativeMaxBytesPerChunk pins the fail-loud
+// guard added in PR #74: a negative cap would make every file
+// appear oversized in the bin-packer and produce nonsense
+// warnings, so Walk refuses up-front with an actionable error.
+// Zero stays valid (means "use the default"). CLAUDE.md rule 4:
+// fail loud, fail closed.
+func TestWalk_RejectsNegativeMaxBytesPerChunk(t *testing.T) {
+	_, err := Walk(WalkOptions{Root: t.TempDir(), MaxBytesPerChunk: -1})
+	if err == nil {
+		t.Fatal("expected Walk to reject negative MaxBytesPerChunk; got nil error")
+	}
+	if !strings.Contains(err.Error(), "MaxBytesPerChunk must be >= 0") {
+		t.Errorf("error should mention the constraint; got %v", err)
+	}
+}
+
+// TestSplitChunk_AdjacencyPreserved verifies the greedy-pack
+// invariant: files end up bin-mates with their input neighbours,
+// not interleaved. Important because the audit pack treats a
+// chunk as a "coherent unit of scope" — interleaved files would
+// degrade LLM reasoning about cross-file relationships within a
+// package.
+func TestSplitChunk_AdjacencyPreserved(t *testing.T) {
+	root := t.TempDir()
+	// 2 files of 30 KiB each → fit together in a 70 KiB cap.
+	// A third 30 KiB file forces a new bin.
+	body := strings.Repeat("// filler\n", 3000)
+	mkFile(t, root, "a.go", body)
+	mkFile(t, root, "b.go", body)
+	mkFile(t, root, "c.go", body)
+	chunks, err := splitChunk(root, "pkg", []string{"a.go", "b.go", "c.go"}, 70*1024, nil)
+	if err != nil {
+		t.Fatalf("splitChunk: %v", err)
+	}
+	// Expected packing: [a, b] [c]. Verify the first bin contains
+	// a and b (in that order), the second contains c.
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks for 3×30KiB files in 70KiB cap; got %d", len(chunks))
+	}
+	if len(chunks[0].Files) != 2 || chunks[0].Files[0] != "a.go" || chunks[0].Files[1] != "b.go" {
+		t.Errorf("first chunk should hold [a.go, b.go] in order; got %v", chunks[0].Files)
+	}
+	if len(chunks[1].Files) != 1 || chunks[1].Files[0] != "c.go" {
+		t.Errorf("second chunk should hold [c.go]; got %v", chunks[1].Files)
+	}
+}
+
+// TestSplitChunk_OversizedSingleFileEmitsOneChunkAndWarns
+// covers the no-split-mid-file invariant: a file individually
+// over maxBytes goes through as a single chunk (over the cap)
+// and surfaces a warning via the writer. The LLM will probably
+// reject it with prompt_too_long but splitting a source file at
+// an arbitrary line boundary would produce semantically broken
+// chunks (split mid-function, no scope context) — worse than
+// failing loudly. Caller can `--include` around the bad file.
+func TestSplitChunk_OversizedSingleFileEmitsOneChunkAndWarns(t *testing.T) {
+	root := t.TempDir()
+	// 200 KiB file; cap 50 KiB.
+	big := strings.Repeat("// huge\n", 25000)
+	mkFile(t, root, "huge.go", big)
+	mkFile(t, root, "small.go", "package x\n")
+	var warn bytes.Buffer
+	chunks, err := splitChunk(root, "pkg", []string{"huge.go", "small.go"}, 50*1024, &warn)
+	if err != nil {
+		t.Fatalf("splitChunk: %v", err)
+	}
+	// Expect: huge.go in its own bin (oversized), small.go in
+	// another bin. So 2 chunks, both labelled with [part N/M].
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks (oversized huge.go + sibling small.go); got %d", len(chunks))
+	}
+	// One of the chunks must contain just huge.go and exceed the
+	// cap. Locate it by index first, then read fields off the
+	// slice — avoids holding a pointer-to-slice-element across
+	// the assertions (anti-idiomatic in Go even when safe here).
+	hugeIdx := -1
+	for i, c := range chunks {
+		for _, f := range c.Files {
+			if f == "huge.go" {
+				hugeIdx = i
+			}
+		}
+	}
+	if hugeIdx == -1 {
+		t.Fatal("no chunk contained huge.go")
+	}
+	huge := chunks[hugeIdx]
+	if len(huge.Files) != 1 {
+		t.Errorf("oversized file should be alone in its chunk; got %v", huge.Files)
+	}
+	if huge.SizeBytes <= 50*1024 {
+		t.Errorf("oversized chunk should exceed cap by definition; got %d", huge.SizeBytes)
+	}
+	// Warning must mention the oversized file by name.
+	if !strings.Contains(warn.String(), "huge.go") {
+		t.Errorf("warning should name the oversized file; got %q", warn.String())
+	}
+	if !strings.Contains(warn.String(), "cannot split") {
+		t.Errorf("warning should explain why we can't split; got %q", warn.String())
+	}
+}
+
+// TestSplitChunk_NoWarningWhenWriterIsNil pins the contract that
+// tests can pass nil for the warn writer without triggering a nil
+// deref. The audit Run path passes os.Stderr, but library
+// consumers may not want progress noise.
+func TestSplitChunk_NoWarningWhenWriterIsNil(t *testing.T) {
+	root := t.TempDir()
+	big := strings.Repeat("// huge\n", 25000)
+	mkFile(t, root, "huge.go", big)
+	// Should not panic.
+	chunks, err := splitChunk(root, "pkg", []string{"huge.go"}, 50*1024, nil)
+	if err != nil {
+		t.Fatalf("splitChunk with nil warn: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Errorf("expected 1 chunk; got %d", len(chunks))
+	}
+}
+
+// mkFile writes a file under root with the given relative path
+// and contents. Used by the splitChunk tests to fabricate input
+// trees of controlled size.
+func mkFile(t *testing.T, root, name, body string) {
+	t.Helper()
+	full := filepath.Join(root, name)
+	if dir := filepath.Dir(full); dir != root {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", full, err)
 	}
 }
