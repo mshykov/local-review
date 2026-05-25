@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-25
+
+**Theme: fail fast on the slow path.**
+
+A focused follow-up to v0.10.0 driven by the same first-customer dogfood run that produced v0.10.0's `audit/` reports. Two changes — one user-facing, one structural — both pointed at the same problem: the real-review code path was tolerating failure modes it should have been catching upfront.
+
+The user-visible win is the **pre-flight LLM readiness probe**. v0.10.0's first run surfaced gemini's `"You have exhausted your capacity on this model."` error after **~4 minutes** of dead air. claude (32s) and codex (53s) had long since finished; the real-review timeout window was large enough to hide a doomed gemini for 240s. v0.10.1 inserts a `Reply OK` probe per LLM (10s per-LLM timeout) before the real fan-out and renders a `✓`/`✗` block immediately — the same signal in seconds, not minutes, and the run proceeds with only the surviving agents.
+
+The structural win is the **`multi.GateDecision` consolidation** — the first cleanup landed against an `audit/tech-debt.md` finding from v0.10.0's dogfood. The dual-metric pattern that drove the gate decisions in `runner.go` lived in six call sites and had a documented history of drifting; consolidating into one type means future runs of `audit --topic tech-debt` won't keep flagging it. Both PRs ran through `local-review review main` self-review with 0 blocking findings before merge.
+
 ### Added
 
 - **Pre-flight LLM readiness probe — `✓`/`✗` status in seconds, no more 4-minute hangs on doomed LLMs.** v0.10.0's first customer run surfaced gemini's `"You have exhausted your capacity on this model."` after **~4 minutes** of dead air inside the real-review timeout window — claude (32s) and codex (53s) had long since finished, but the user was stuck waiting for gemini's error to propagate. v0.10.1 adds a tiny `Reply OK` probe to every active LLM with a 10s per-LLM timeout *before* the real fan-out: the readiness block renders top-to-bottom as `claude  ✓ (1.2s)` / `gemini  ✗ You have exhausted your capacity on this model.` / `codex   ✓ (0.8s)` and the run proceeds with only the surviving agents. `--no-preflight` is an escape hatch for callers who want the v0.10.0 behaviour (CI jobs where the ~10s + ~1k tokens per LLM aren't worth it). The probe lives in `internal/cli/probe.go` as `cli.Probe` (single-LLM) / `cli.ProbeAll` (parallel fan-out preserving roster order) / `cli.SplitReady`; the runner wires it in after the existing static `PreflightFilter` (context-window check, no LLM call) and before `orch.RunParallel`. Hard fail with a `doctor` hint when every active LLM probe-fails — same posture as "all reviews failed" in the GateDecision path. Tests in `internal/cli/probe_test.go` pin per-status outcomes (`Ready`, `ErrorOnInvokerError`, `TimeoutOnDeadlineExceeded`, `TimeoutFromWrappedErrorString` covering the ClassifyExit-wrapped message-text match), `ProbeAll` roster-order preservation, mixed-shape outcomes (one ready / one capacity-exhausted / one timeout — the actual v0.10.0 dogfood shape), and a parallelism check (3×50ms probes must complete in <100ms wall-clock or the fan-out has serialised).
