@@ -11,8 +11,11 @@ import (
 // invokes `emit` with the open file, and propagates either the emit
 // error OR a close-failure-on-otherwise-success error. Centralises the
 // directory-prepare + create + deferred-close-with-error-check sequence
-// that three writers (bench markdown / bench json / audit markdown |
-// json) implemented identically pre-consolidation.
+// that three writers — `writeAuditFile` (cmd/local-review/audit.go),
+// `writeBenchToFile` and `writeSWEBenchToFile` (cmd/local-review/bench.go)
+// — implemented identically pre-consolidation. Each writer picks its
+// own wire format (markdown vs JSON) inside the `emit` closure it
+// passes in.
 //
 // audit/tech-debt.md flagged the duplication on bench.go:195 with the
 // suggestion: "Extract to a shared writeFileWithDirs(path string,
