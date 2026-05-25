@@ -137,30 +137,25 @@ type BaselineScore struct {
 	OutputTokens   int   `json:"output_tokens,omitempty"`
 }
 
-// Precision = TP / (TP + FP). Returns 0 when no findings produced.
+// Precision returns TP / (TP + FP). See scorePrecision for semantics
+// (BaselineScore and CaseScore share one formula via the package
+// helper so the scoring math has a single source of truth — fix it
+// once, both score types pick up the change).
 func (b BaselineScore) Precision() float64 {
-	if b.TruePositives+b.FalsePositives == 0 {
-		return 0
-	}
-	return float64(b.TruePositives) / float64(b.TruePositives+b.FalsePositives)
+	return scorePrecision(b.TruePositives, b.FalsePositives)
 }
 
-// Recall = TP / (TP + FN). Returns 1 when no expected findings
-// (clean case), matching the CaseScore.Recall convention.
+// Recall returns TP / (TP + FN). See scoreRecall for semantics —
+// notably the "1 when no expected findings" convention that matters
+// for clean cases.
 func (b BaselineScore) Recall() float64 {
-	if b.TruePositives+b.FalseNegatives == 0 {
-		return 1
-	}
-	return float64(b.TruePositives) / float64(b.TruePositives+b.FalseNegatives)
+	return scoreRecall(b.TruePositives, b.FalseNegatives)
 }
 
-// F1 = 2*P*R / (P+R). Returns 0 when both are zero.
+// F1 is the harmonic mean of Precision and Recall. Returns 0 when
+// both are zero (see scoreF1).
 func (b BaselineScore) F1() float64 {
-	p, r := b.Precision(), b.Recall()
-	if p+r == 0 {
-		return 0
-	}
-	return 2 * p * r / (p + r)
+	return scoreF1(b.Precision(), b.Recall())
 }
 
 // CaseScore is the per-case scoring outcome.
@@ -299,32 +294,22 @@ type MatchPair struct {
 	Produced ProducedFinding `json:"produced"`
 }
 
-// Precision = TP / (TP + FP). Returns 0 when no findings were produced.
+// Precision returns TP / (TP + FP). See scorePrecision for semantics.
 func (s CaseScore) Precision() float64 {
-	if s.TruePositives+s.FalsePositives == 0 {
-		return 0
-	}
-	return float64(s.TruePositives) / float64(s.TruePositives+s.FalsePositives)
+	return scorePrecision(s.TruePositives, s.FalsePositives)
 }
 
-// Recall = TP / (TP + FN). Returns 1 when there were no expected
-// findings (clean cases) — semantically: "the reviewer caught all of
-// the (zero) bugs we expected." Noise on clean cases is captured
-// separately in CaseReport.NoiseRate.
+// Recall returns TP / (TP + FN). See scoreRecall for semantics — the
+// "1 when no expected findings" convention applies to clean cases.
+// Noise on clean cases is captured separately in CaseReport.NoiseRate.
 func (s CaseScore) Recall() float64 {
-	if s.TruePositives+s.FalseNegatives == 0 {
-		return 1
-	}
-	return float64(s.TruePositives) / float64(s.TruePositives+s.FalseNegatives)
+	return scoreRecall(s.TruePositives, s.FalseNegatives)
 }
 
-// F1 = 2*P*R / (P+R). Returns 0 when both are zero.
+// F1 is the harmonic mean of Precision and Recall. Returns 0 when
+// both are zero (see scoreF1).
 func (s CaseScore) F1() float64 {
-	p, r := s.Precision(), s.Recall()
-	if p+r == 0 {
-		return 0
-	}
-	return 2 * p * r / (p + r)
+	return scoreF1(s.Precision(), s.Recall())
 }
 
 // LanguageScore is the per-(LLM, language) aggregate. Phase 2 added

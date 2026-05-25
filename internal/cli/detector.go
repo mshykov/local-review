@@ -112,7 +112,7 @@ func detectWithBinary(name, binaryName string) LLM {
 	}
 
 	// Extract version (may return "unknown" if version detection fails)
-	version := detectVersion(name, path)
+	version := detectVersion(path)
 
 	return LLM{
 		Name:      name,

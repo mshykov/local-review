@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-05-25
+
+**Theme: clear the deck.**
+
+A no-features patch release whose job is to make v0.10.0's audit dogfood pay off — burn down the `major` findings `audit/tech-debt.md` surfaced on this codebase. Four of the six majors closed across PRs #80–#82; the remaining two (parallel `bench` / `swe-bench` code paths ~250 lines, and a `GeminiInvoker.run` / `ClaudeInvoker.run` extraction ~80 lines) deferred as needs-design rather than cleanup.
+
+No user-visible behaviour change in any commit. Every PR shipped behind 0-blocking `local-review review main` self-review before merge; the burn-down also caught two genuine Copilot doc-clarity issues (vague "three writers" wording, wrong file-perm assertion — `os.Create` uses `0o666` masked by umask, not a guaranteed `0o644`) that landed as follow-up fixes inside the same PR.
+
+Pattern worth noting: the v0.10.0 audit was the source for the entire v0.10.1 + v0.10.2 cleanup roadmap. The tool's own deep-codebase output is the project's roadmap now; not a one-time artifact.
+
+### Removed
+
+- **Dead code + dead parameters surfaced by v0.10.0's `audit/tech-debt.md`.** Three small deletions, no user-visible behavior change, opens the v0.10.2 burn-down on the audit's outstanding findings. (1) `internal/review/review.go` — removed the unused `matchGlob(path, pattern string) bool` function. It was lower-case (private), claimed in its doc comment to be "kept for back-compat with any external caller," but private functions have no external callers; production filtering goes through `compileGlobs` + `matchesAnyCompiled` (amortises regex compilation across the diff), tests go through `matchesAny`. Audit flagged it as dead code on `review.go:306-315`; the audit's framing was right. (2) `internal/cli/invoker.go` — removed the unused `errLabel string` parameter from `ClaudeInvoker.run` and its two callers (`Review`, `RunPrompt`). Pre-fix the parameter was passed in by every caller and explicitly discarded via `_ = errLabel` — a vestige of a pre-v0.7 "claude review failed:" prefix that the runner's per-LLM completion line now owns. CodexInvoker's `runExec` retains its `errLabel` parameter because it still distinguishes pre-invocation errors (temp-file creation) from post-success errors (output-file read), neither of which the runner's per-LLM line covers. (3) `internal/cli/version.go` — removed the unused `name` parameter from `detectVersion(name, path string)`. The function never read `name`; the audit's warning that "parameter suggests the function is name-aware when it's not" was accurate. Doc comment now points future maintainers at the right discriminator (`path`'s basename) if a CLI ever needs version-flag-specific branching.
+
+### Changed
+
+- **File-write boilerplate consolidated into `writeFileWithDirs` (audit/tech-debt #2).** `cmd/local-review/audit.go:writeAuditFile`, `bench.go:writeBenchToFile`, and `bench.go:writeSWEBenchToFile` all implemented the same `mkdir + create + deferred-close-with-error-check` sequence. New helper in `cmd/local-review/iohelpers.go` takes `(path string, emit func(io.Writer) error)` and owns that contract; the three call sites become one-line wrappers that close over their report value. No user-visible behavior change — file creation still calls `os.Create` (open mode `0o666`, masked down to typically `0o644` by the process umask), directory mode is `0o755`, and the close-error-doesn't-shadow-emit-error precedence is preserved exactly.
+
+- **`mergedHasBlocking` → `isBlockingMarkdown` (audit/tech-debt #3).** Same function, clearer name. The audit flagged `runner.go:478` as duplication; the duplication claim was a false positive (there's only one implementation), but the function name was misleading enough that the auditor couldn't tell — it's called both against the merged report AND against each per-LLM Output (via `anyPerLLMHasBlocking` as the truncation-safe backstop). The rename makes the symmetry visible at the call site without changing behavior. Doc comment now spells out both call contexts so the next reader doesn't have to grep.
+
+- **Scoring math deduplicated into package-private helpers (audit/tech-debt #4).** `internal/bench/types.go` had identical `Precision()` / `Recall()` / `F1()` methods on both `BaselineScore` (from --uplift) and `CaseScore` (the primary treatment pass) — six methods, three pairs, exactly the same formulas. Any improvement to the math had to land in two places, and a missed update would silently produce divergent leaderboard numbers for "the same" metric on the same case. v0.10.2 extracts `scorePrecision(tp, fp)`, `scoreRecall(tp, fn)`, `scoreF1(p, r)` into `internal/bench/score_helpers.go`; both score types' methods delegate. The asymmetric "0 on empty precision / 1 on empty recall" convention is documented at the helper (it's load-bearing for the per-language aggregator on clean-case slices) and pinned by tests, including a `TestScoreTypes_ShareSameMath` sentinel that runs the same `(tp, fp, fn)` triples through both `BaselineScore` and `CaseScore` so a future delegation-edit-on-only-one-type can't ship green.
+
 ## [0.10.1] - 2026-05-25
 
 **Theme: fail fast on the slow path.**

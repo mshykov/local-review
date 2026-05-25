@@ -272,16 +272,17 @@ func FilterDiffs(diffs []git.Diff, include, exclude []string) []git.Diff {
 // matching any ExcludeGlob.
 //
 // Compiles each pattern to a regex exactly once before the per-file
-// loop. Pre-fix matchGlob did regexp.Compile inside the inner loop —
-// for a 500-file repo with 5 globs that's 2,500 compiles. Now it's
-// at most len(include)+len(exclude).
+// loop. A naive "compile inside the inner loop" implementation on a
+// 500-file repo with 5 globs would do 2,500 compiles; this is at
+// most len(include)+len(exclude).
 //
 // Include semantics deliberately fail closed: if `include` was
 // non-empty but every pattern failed to compile, we drop everything.
-// The legacy matchGlob path also fail-closed (compile error → no
-// match → file excluded by the include test). Without this guard a
-// user typo'ing the only include rule would silently *expand* the
-// review to every file in the diff.
+// (compileGlobs silently skips uncompilable patterns — see its doc
+// for why; the fail-closed behaviour falls out of "no patterns
+// match" rather than being implemented separately.) Without this
+// guard a user typo'ing the only include rule would silently
+// *expand* the review to every file in the diff.
 func filter(diffs []git.Diff, include, exclude []string) []git.Diff {
 	includeRE := compileGlobs(include)
 	excludeRE := compileGlobs(exclude)
@@ -300,11 +301,11 @@ func filter(diffs []git.Diff, include, exclude []string) []git.Diff {
 }
 
 // compileGlobs converts each pattern to a regex via globToRegex.
-// Patterns that fail to compile are silently dropped (same fail-open
-// behavior as the legacy matchGlob, which returned false on compile
-// error). A failing pattern is invariably a config typo we can't fix
-// from this layer; the user-visible signal is that the glob doesn't
-// match anything.
+// Patterns that fail to compile are silently dropped — a failing
+// pattern is invariably a config typo we can't fix from this layer;
+// the user-visible signal is that the glob doesn't match anything,
+// which combines with filter()'s "include fails closed" semantics
+// to drop everything (rather than silently expand the review).
 func compileGlobs(patterns []string) []*regexp.Regexp {
 	if len(patterns) == 0 {
 		return nil
@@ -327,34 +328,13 @@ func matchesAnyCompiled(path string, res []*regexp.Regexp) bool {
 	return false
 }
 
-// matchesAny is the un-compiled variant kept for tests and any caller
-// that has a string slice handy and doesn't care about per-call regex
-// compile cost. Production filtering goes through compileGlobs +
-// matchesAnyCompiled.
+// matchesAny is the un-compiled variant kept for tests and one-off
+// callers that have a string slice handy and don't care about per-
+// call regex compile cost. Production filtering goes through
+// compileGlobs + matchesAnyCompiled. The glob dialect (anchoring,
+// `**`, character classes) is documented on globToRegex below.
 func matchesAny(path string, patterns []string) bool {
 	return matchesAnyCompiled(path, compileGlobs(patterns))
-}
-
-// matchGlob is a tiny glob matcher with `**` support. Kept for tests
-// and back-compat with any external caller; production filtering uses
-// compileGlobs + matchesAnyCompiled to amortize regex compilation
-// across all paths in a diff.
-//
-// Semantics:
-//
-//   - `*` matches any chars except '/'
-//   - `**/` matches zero or more path segments (anchored to a path
-//     boundary, so `**/dist/**` does NOT match src/mydist/file)
-//   - `**` matches any chars (including '/'); only at end of pattern
-//   - `?` matches one char except '/'
-//   - `[ab]` / `[a-z]` / `[!ab]` character classes (glob-native,
-//     `[!...]` → `[^...]`)
-func matchGlob(path, pattern string) bool {
-	re, err := regexp.Compile(globToRegex(pattern))
-	if err != nil {
-		return false
-	}
-	return re.MatchString(path)
 }
 
 func globToRegex(pattern string) string {

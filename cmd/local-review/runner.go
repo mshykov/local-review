@@ -438,13 +438,13 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s and showed no blocking findings, but the merged report is unavailable", cfg.Storage.BasePath)
 	}
 
-	if mergedHasBlocking(mergedContent) || perLLMBlocking {
+	if isBlockingMarkdown(mergedContent) || perLLMBlocking {
 		return errBlockingFindings
 	}
 	return nil
 }
 
-// anyPerLLMHasBlocking runs the same heuristic mergedHasBlocking uses
+// anyPerLLMHasBlocking runs the same heuristic isBlockingMarkdown uses
 // against each per-LLM Output, BEFORE the 8 KB truncation that
 // BuildMergeInput applies. If any reviewer raised a Critical / Major
 // finding (or BLOCK MERGE / REQUEST CHANGES verdict), the gate fires
@@ -454,16 +454,27 @@ func anyPerLLMHasBlocking(results []multi.ReviewResult) bool {
 		if r.Output == "" {
 			continue
 		}
-		if mergedHasBlocking(r.Output) {
+		if isBlockingMarkdown(r.Output) {
 			return true
 		}
 	}
 	return false
 }
 
-// mergedHasBlocking returns true when the merged markdown report
-// indicates blocking findings. We use two independent signals so that
-// LLM drift on one shape doesn't silently disable the gate:
+// isBlockingMarkdown returns true when the given markdown report
+// indicates blocking findings. Used in two contexts — against the
+// merged report (the primary signal the gate consults) and against
+// each per-LLM Output (the truncation-safe backstop, applied via
+// anyPerLLMHasBlocking). Pre-rename this was called mergedHasBlocking
+// which read as merge-specific; the renamed function makes both call
+// sites read as applying the same heuristic to whatever markdown
+// they have, matching what the code already does (audit/tech-debt.md
+// flagged runner.go:478 with this concern — the duplication finding
+// was a false positive since there's only one implementation, but
+// the misleading name was real).
+//
+// We use two independent signals so LLM drift on one shape doesn't
+// silently disable the gate:
 //
 //  1. The Recommendation line in the Summary block. The merge prompt
 //     pins this to "BLOCK MERGE" / "REQUEST CHANGES" / "APPROVE" — both
@@ -478,7 +489,7 @@ func anyPerLLMHasBlocking(results []multi.ReviewResult) bool {
 // preferred to false negatives — this is a security gate, the cost
 // of over-blocking is a re-run, the cost of under-blocking is a
 // shipped bug.
-func mergedHasBlocking(markdown string) bool {
+func isBlockingMarkdown(markdown string) bool {
 	if markdown == "" {
 		return false
 	}
@@ -498,7 +509,7 @@ func mergedHasBlocking(markdown string) bool {
 
 // recommendationRE matches the "**Recommendation**: <verdict>" line
 // the merge prompt emits in the Summary block. Pre-compiled at
-// package level so anyPerLLMHasBlocking + mergedHasBlocking don't
+// package level so anyPerLLMHasBlocking + isBlockingMarkdown don't
 // pay regexp.MustCompile on every per-LLM output (one call per
 // reviewer, but adds up in tests and on big PRs).
 var recommendationRE = regexp.MustCompile(`(?im)^\s*-?\s*\**Recommendation\**\s*:\s*(.+?)\s*$`)
@@ -507,7 +518,7 @@ var recommendationRE = regexp.MustCompile(`(?im)^\s*-?\s*\**Recommendation\**\s*
 // line the merge prompt emits in the Summary block. Returns true when
 // the verdict is BLOCK MERGE or REQUEST CHANGES (case-insensitive).
 // APPROVE / unrecognized verdicts return false — the section-content
-// backstop in mergedHasBlocking still runs.
+// backstop in isBlockingMarkdown still runs.
 func recommendationIsBlocking(markdown string) bool {
 	m := recommendationRE.FindStringSubmatch(markdown)
 	if m == nil {

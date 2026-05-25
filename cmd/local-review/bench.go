@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -375,24 +374,12 @@ func writeBenchMarkdownFile(path string, rep bench.Report) error {
 }
 
 // writeBenchToFile is the shared driver for the two file sinks. The
-// emitter callback decides the wire format; this function owns the
-// directory-creation, open, deferred-close-with-error-check pattern.
-func writeBenchToFile(path string, rep bench.Report, emit func(io.Writer, bench.Report) error) (retErr error) {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("close %s: %w", path, cerr)
-		}
-	}()
-	return emit(f, rep)
+// emitter callback decides the wire format; the directory + create +
+// close-error plumbing lives in writeFileWithDirs (cmd/local-review/
+// iohelpers.go) so the three writers (this, writeSWEBenchToFile,
+// writeAuditFile) share that contract.
+func writeBenchToFile(path string, rep bench.Report, emit func(io.Writer, bench.Report) error) error {
+	return writeFileWithDirs(path, func(w io.Writer) error { return emit(w, rep) })
 }
 
 // runSWEBench is the SWE-bench-lite dispatcher: load SWE cases, pick
@@ -479,22 +466,8 @@ func writeSWEBenchMarkdownFile(path string, rep bench.SWEBenchReport) error {
 	return writeSWEBenchToFile(path, rep, bench.WriteMarkdownSWE)
 }
 
-func writeSWEBenchToFile(path string, rep bench.SWEBenchReport, emit func(io.Writer, bench.SWEBenchReport) error) (retErr error) {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := f.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("close %s: %w", path, cerr)
-		}
-	}()
-	return emit(f, rep)
+func writeSWEBenchToFile(path string, rep bench.SWEBenchReport, emit func(io.Writer, bench.SWEBenchReport) error) error {
+	return writeFileWithDirs(path, func(w io.Writer) error { return emit(w, rep) })
 }
 
 // checkSWEStrictFailures is the SWE-bench counterpart of

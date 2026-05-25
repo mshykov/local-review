@@ -8,10 +8,15 @@ import (
 	"time"
 )
 
-// detectVersion runs the version command for each CLI and extracts the version number.
-// Returns "unknown" if version detection fails.
-// All supported CLIs use --version flag.
-func detectVersion(name, path string) string {
+// detectVersion runs the version command for the CLI at `path` and
+// extracts a parseable version number. Returns "unknown" if the
+// command fails or the output doesn't match any pattern.
+//
+// All supported CLIs use the `--version` flag; if a future CLI
+// diverges (e.g. `--ver`, `version` subcommand), branch here on
+// path's basename rather than the agent name — the path is what
+// determines which binary's flag format we're calling.
+func detectVersion(path string) string {
 	return runVersionCmd(path, "--version")
 }
 
