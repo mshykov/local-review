@@ -60,6 +60,14 @@ func isLocalURL(raw string) bool {
 	case "localhost", "0.0.0.0":
 		return true
 	}
+	// Strip any IPv6 zone/interface suffix (RFC 6874) before
+	// net.ParseIP, which doesn't accept the `%zone` form. Without
+	// this strip, `[fe80::1%en0]` would fall through to "remote"
+	// and incorrectly require an API key. (Copilot caught this on
+	// PR #86.)
+	if i := strings.Index(host, "%"); i > 0 {
+		host = host[:i]
+	}
 	ip := net.ParseIP(host)
 	if ip == nil {
 		// Non-IP host (FQDN, mDNS .local, etc) that isn't "localhost":

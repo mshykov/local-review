@@ -293,10 +293,15 @@ func TestIsLocalURL(t *testing.T) {
 	// v0.10.4 widened the bypass to RFC1918 LAN ranges so users
 	// running Ollama on a LAN server (e.g. `provider.base_url:
 	// http://192.168.1.50:11434/v1`) don't have to set a dummy
-	// api_key. Auth still fires when api_key IS explicitly
-	// configured — see the c.APIKey != "" guard in Complete; this
-	// helper only gates the "no key set + non-local URL = error"
-	// path.
+	// api_key. The auth bypass itself is controlled by Complete's
+	// `if c.APIKey == "" && !isLocalURL(c.BaseURL)` check — when
+	// the user HAS configured an api_key explicitly, it's sent as
+	// the Authorization header regardless of locality. This helper
+	// only gates the "no key set + non-local URL → error" path
+	// for the OPENAI_API_KEY-less Ollama case. (Copilot clarified
+	// this comment on PR #86 — the prior wording cited
+	// `c.APIKey != ""` which controls the header-set step, not
+	// the bypass; corrected.)
 	cases := []struct {
 		in   string
 		want bool
@@ -325,6 +330,8 @@ func TestIsLocalURL(t *testing.T) {
 		{"http://169.254.1.1/v1", true, "ipv4-link-local-169.254_16"},
 		{"http://[fd00::1]:11434/v1", true, "ipv6-unique-local-fc00_7"},
 		{"http://[fe80::1]:11434/v1", true, "ipv6-link-local-fe80_10"},
+		{"http://[fe80::1%25en0]:11434/v1", true, "ipv6-link-local-with-zone-rfc6874"},
+		{"http://[fe80::abcd%25eth0]/v1", true, "ipv6-link-local-with-zone-no-port"},
 
 		// Public — must require auth.
 		{"https://api.openai.com/v1", false, "public-fqdn-openai"},
