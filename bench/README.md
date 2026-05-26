@@ -62,6 +62,8 @@ Useful flags:
 | `--repeat N` | sample each (case, LLM) N times for Jaccard consistency (live mode only; Phase 2) |
 | `--uplift` | also run each (case, LLM) with a minimal generic system prompt and report treatment-vs-baseline deltas (live mode only; Phase 3) |
 | `--strict` | exit non-zero on any per-case error; default ON in `--replay` |
+| `--swe-bench` | switch to SWE-bench-lite catch-rate mode (binary `caught`/`missed` scoring against bug-introducing diffs). Mutually exclusive with `--uplift` and `--repeat > 1`. See the "SWE-bench-lite catch-rate mode" section below. |
+| `--swe-bench-dataset <dir>` | override the SWE-bench dataset root (default `bench/swe-bench-lite`) |
 
 ## Scoring rules
 
@@ -176,6 +178,63 @@ review bench` + copy outputs) when prompt packs or expected
 behaviour changes meaningfully — otherwise replay scores measure
 "how the v0.6 prompt pack scored on cached v0.6 outputs," which is
 not what a v0.7 release actually ships.
+
+## SWE-bench-lite catch-rate mode (v0.10+)
+
+The primary bench (above) measures precision/recall/F1 on a curated
+labelled dataset where we wrote both the diff and the expected
+findings. That's deliberate — the dataset is small, every case is
+auditable, and per-language splits are stable. But it's also a
+circular trust signal: we wrote both the question and the answer
+key.
+
+`local-review bench --swe-bench` runs against **bug-introducing
+diffs in the SWE-bench-lite format** — diffs adapted by
+reverse-applying a known fix patch, scored by case-insensitive
+keyword match between the reviewer's markdown and the task's
+`expected_keywords`. The mode + scorer + report shape are the
+permanent infrastructure; the *credibility* depends entirely on
+what's in the dataset.
+
+**v0.10.0 status (current):** the shipped `bench/swe-bench-lite/`
+dataset contains **3 synthetic SWE-bench-shaped examples**
+(paginator off-by-one, retry loop swallowing the wrong exception
+class, ORM SQL injection). These are clearly labelled as examples
+in the dataset README — useful for exercising the harness, but
+they don't yet close the "circular benchmark" critique because
+*we* still wrote both the diff and the keyword answer key.
+
+**Roadmap:** real-task curation from the upstream SWE-bench-lite
+dataset (target N=10) lands as a follow-up. At that point the
+catch-rate measures performance against real bugs from real
+projects we did not author — the credibility signal the v0.8 /
+v0.9 leaderboard couldn't provide on its own.
+
+```sh
+local-review bench --swe-bench                     # use default dataset (bench/swe-bench-lite/)
+local-review bench --swe-bench --swe-bench-dataset <dir>   # custom
+local-review bench --swe-bench --only claude       # restrict agents
+```
+
+Scoring is binary (`caught` / `missed`) in v1 — a partial-credit
+LLM-as-judge tier is tracked for a later release. **Error frames
+count toward the catch-rate denominator** by design: a reviewer
+that crashes catches no bugs, and silently shrinking the denominator
+to the surviving subset would inflate the apparent catch rate
+exactly when reviewers are flakiest.
+
+`--uplift` and `--repeat > 1` are rejected with `--swe-bench`:
+neither concept maps onto binary catch scoring without additional
+design.
+
+When a `--swe-bench` run with `--markdown <path>` is committed, the
+generated "SWE-bench-lite catch rate" section appears in the
+leaderboard markdown next to the F1 / uplift / overhead tables —
+one report, two complementary signals. As of the current
+`bench/RESULTS.md` snapshot, the SWE-bench section is **not yet
+populated** (the harness ships; the section lands on the first
+catch-rate run committed against a real dataset, alongside the
+real-task curation tracked above).
 
 ## Updating the leaderboard
 
