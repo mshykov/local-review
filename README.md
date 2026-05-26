@@ -364,7 +364,9 @@ Common flags (review):
 | `--base-url <url>` | Override `provider.base_url` (single-LLM fallback only) |
 | `--min-severity <tier>` | `nit` / `info` / `warning` / `major` / `critical` (single-LLM fallback only) |
 | `--max-findings <n>` | Cap output (single-LLM fallback only) |
-| `--json` | Emit JSON (single-LLM fallback only — see below) |
+| `--json` | Emit JSON in the single-LLM fallback path. **Note:** `--json` is ALSO a root-level flag picked up by `audit` and `bench`, where it emits JSON instead of markdown. In multi-LLM `review` it's ignored (see paragraph below the audit flag table). |
+
+In multi-LLM `review` mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the post-v0.8 roadmap — no fixed date; we'll unpark it when the third user asks for it.
 
 Audit-specific flags:
 
@@ -377,7 +379,7 @@ Audit-specific flags:
 | `--exclude <prefixes>` | Comma-separated path prefixes to exclude |
 | `--max-bytes-per-chunk <N>` | Per-chunk input cap; packages above the cap auto-split into `pkg [part N/M]` sub-chunks (default: 96 KiB) |
 
-In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the post-v0.8 roadmap — no fixed date; we'll unpark it when the third user asks for it.
+The root-level `--json` flag is honoured by `audit` (emits the report as JSON on stdout) and by `bench` (same shape). It's only ignored by multi-LLM `review`, per the paragraph above.
 
 Config wins by default; flags override config at runtime (e.g., `--only codex` runs codex even if your config sets `codex.enabled: false`).
 

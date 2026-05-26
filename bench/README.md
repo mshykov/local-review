@@ -190,8 +190,23 @@ key.
 diffs in the SWE-bench-lite format** — diffs adapted by
 reverse-applying a known fix patch, scored by case-insensitive
 keyword match between the reviewer's markdown and the task's
-`expected_keywords`. Closes the credibility gap by measuring
-against bugs from projects we did NOT author.
+`expected_keywords`. The mode + scorer + report shape are the
+permanent infrastructure; the *credibility* depends entirely on
+what's in the dataset.
+
+**v0.10.0 status (current):** the shipped `bench/swe-bench-lite/`
+dataset contains **3 synthetic SWE-bench-shaped examples**
+(paginator off-by-one, retry loop swallowing the wrong exception
+class, ORM SQL injection). These are clearly labelled as examples
+in the dataset README — useful for exercising the harness, but
+they don't yet close the "circular benchmark" critique because
+*we* still wrote both the diff and the keyword answer key.
+
+**Roadmap:** real-task curation from the upstream SWE-bench-lite
+dataset (target N=10) lands as a follow-up. At that point the
+catch-rate measures performance against real bugs from real
+projects we did not author — the credibility signal the v0.8 /
+v0.9 leaderboard couldn't provide on its own.
 
 ```sh
 local-review bench --swe-bench                     # use default dataset (bench/swe-bench-lite/)
