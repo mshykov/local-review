@@ -62,6 +62,8 @@ Useful flags:
 | `--repeat N` | sample each (case, LLM) N times for Jaccard consistency (live mode only; Phase 2) |
 | `--uplift` | also run each (case, LLM) with a minimal generic system prompt and report treatment-vs-baseline deltas (live mode only; Phase 3) |
 | `--strict` | exit non-zero on any per-case error; default ON in `--replay` |
+| `--swe-bench` | switch to SWE-bench-lite catch-rate mode (binary `caught`/`missed` scoring against bug-introducing diffs). Mutually exclusive with `--uplift` and `--repeat > 1`. See the "SWE-bench-lite catch-rate mode" section below. |
+| `--swe-bench-dataset <dir>` | override the SWE-bench dataset root (default `bench/swe-bench-lite`) |
 
 ## Scoring rules
 
@@ -225,9 +227,14 @@ exactly when reviewers are flakiest.
 neither concept maps onto binary catch scoring without additional
 design.
 
-The leaderboard's "SWE-bench-lite catch rate" section sits next to
-the existing F1 / uplift / overhead tables in [`bench/RESULTS.md`](RESULTS.md)
-— same report, two complementary signals.
+When a `--swe-bench` run with `--markdown <path>` is committed, the
+generated "SWE-bench-lite catch rate" section appears in the
+leaderboard markdown next to the F1 / uplift / overhead tables —
+one report, two complementary signals. As of the current
+`bench/RESULTS.md` snapshot, the SWE-bench section is **not yet
+populated** (the harness ships; the section lands on the first
+catch-rate run committed against a real dataset, alongside the
+real-task curation tracked above).
 
 ## Updating the leaderboard
 

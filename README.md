@@ -276,7 +276,7 @@ Prints the chunk plan (count, file count per chunk, total bytes) without invokin
 **Save the report:**
 
 ```sh
-local-review audit --topic security  --out audit/security.md
+local-review audit --topic security --out audit/security.md
 local-review audit --topic tech-debt --out audit/tech-debt.md
 ```
 
