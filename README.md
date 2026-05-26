@@ -173,8 +173,11 @@ local-review review --merge-with claude
 | LLM | Free Option | Installation |
 |-----|-------------|--------------|
 | **Claude** | ✅ Free tier via `claude login` (claude.ai account) | `npm install -g @anthropic-ai/claude-code` |
-| **Gemini** | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` |
+| **Gemini** *(deprecated — stops serving 2026-06-18)* | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` |
+| **Antigravity** *(detected — review integration experimental)* | Google OAuth (`agy` login) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (binary: `agy`) |
 | **Codex** | ⚠️ ChatGPT Plus ($20/mo) **or** OpenAI API key (pay-per-token) | `npm install -g @openai/codex` |
+
+> **Gemini is deprecated.** Google's Gemini CLI stops serving Pro/Ultra/free-tier requests on **2026-06-18**. Antigravity (`agy`) is Google's successor and `local-review doctor` will detect it, but **agy is not yet wired into the review fan-out**: its headless `--print` mode runs an autonomous agent loop (explores the repo, rebuilds its own diff, emits step-narration) instead of returning a clean review, so it's surfaced as *experimental* until a structured-output path is found. Until then, keep using Gemini (until the cutoff) or any of the other CLIs.
 
 **How it works:**
 1. Detects installed LLM CLIs and which are authenticated (`local-review doctor`)
@@ -223,7 +226,7 @@ The probe gives you back the time the v0.10.0 build spent waiting on doomed LLMs
 | LLM | Default (preferred) | Alternative |
 |---|---|---|
 | **Claude** | `claude login` — Anthropic OAuth, works with the free tier on a claude.ai account | `export ANTHROPIC_API_KEY=...` (paid API access) |
-| **Gemini** | `export GEMINI_API_KEY=...` — free key from [Google AI Studio](https://aistudio.google.com/apikey) | `gemini /auth` for Google OAuth |
+| **Gemini** *(deprecated — stops serving 2026-06-18)* | `export GEMINI_API_KEY=...` — free key from [Google AI Studio](https://aistudio.google.com/apikey) | `gemini /auth` for Google OAuth |
 | **Codex** | `codex login` — uses your ChatGPT Plus subscription ($20/mo) | `export OPENAI_API_KEY=...` — pay-per-token; usually **cheaper** for occasional review use |
 
 Run `local-review doctor` to see which CLIs you have installed and authenticated. Each row that isn't ✓ ready tells you exactly what to fix.

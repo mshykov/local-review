@@ -8,7 +8,7 @@ import (
 
 // LLM represents a detected CLI tool with its metadata.
 type LLM struct {
-	Name    string // "claude", "gemini", "codex"
+	Name    string // "claude", "gemini", "codex", "antigravity"
 	Path    string // full path to the binary (e.g., "/usr/local/bin/claude")
 	Version string // version string (e.g., "2.1.0"), or "unknown" if version probe failed
 	// Available is true only when both the binary is in PATH AND the
@@ -33,6 +33,27 @@ type LLM struct {
 	// still authenticates.
 	APIKey     string
 	TimeoutSec int // timeout in seconds for this LLM (from config)
+}
+
+// experimentalLLMs are detected (and surfaced in `doctor`) but kept
+// OUT of the review fan-out. antigravity (`agy`) is here because its
+// `--print` mode runs an autonomous agent loop — it explores the repo,
+// reconstructs its own diff instead of using the one it's handed, and
+// emits tool-step narration rather than a clean review — so it can't
+// yet serve as a stateless reviewer backend the way claude / gemini /
+// codex do. Confirmed by the 2026-05 authenticated dogfood (see
+// CLAUDE.md "Multi-LLM model — non-obvious facts"). Remove the entry
+// once a structured-output invocation contract for agy is found.
+var experimentalLLMs = map[string]bool{
+	"antigravity": true,
+}
+
+// IsReviewCapable reports whether a detected LLM may join the review
+// fan-out. Detection (binary present + authenticated) is necessary but
+// not sufficient: an experimental CLI can be detected yet excluded —
+// see experimentalLLMs.
+func IsReviewCapable(name string) bool {
+	return !experimentalLLMs[name]
 }
 
 // CanonicalAPIKeyEnv is the env var each CLI itself reads to find its
@@ -68,11 +89,12 @@ func DetectAll() []LLM {
 // escape hatch.
 func DetectAllWithOverrides(overrides map[string]string) []LLM {
 	defaults := map[string]string{
-		"claude": "claude",
-		"gemini": "gemini",
-		"codex":  "codex",
+		"claude":      "claude",
+		"gemini":      "gemini",
+		"codex":       "codex",
+		"antigravity": "agy", // Google's Gemini-CLI successor; binary is `agy`
 	}
-	llms := []string{"claude", "gemini", "codex"}
+	llms := []string{"claude", "gemini", "codex", "antigravity"}
 	results := make([]LLM, len(llms))
 	var wg sync.WaitGroup
 

@@ -15,6 +15,9 @@
 .env
 .env.local
 
+# Antigravity CLI (`agy`) drops a per-project working dir on invocation
+.antigravitycli/
+
 # Go
 /coverage.out
 /coverage.html

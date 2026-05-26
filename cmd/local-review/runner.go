@@ -58,7 +58,11 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 // that were authed-but-disabled-in-config so the caller can show a
 // discoverability hint. Decision tree, top-down:
 //
-//  1. If --only is set, that wins absolutely (overrides config disable).
+//  1. If --only is set, that wins absolutely (overrides config disable)
+//     — EXCEPT for review-incapable experimental CLIs (cli.IsReviewCapable),
+//     which are excluded even under --only because they can't produce a
+//     usable review (e.g. antigravity's agentic `--print` mode). Honoring
+//     `--only antigravity` would ship a broken run, not user intent.
 //  2. An LLM is "active" only if its readiness map says so (caller
 //     supplies; in production this comes from doctor's classify).
 //  3. If config explicitly sets enabled:false, skip — but report it
@@ -67,6 +71,9 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 	if want := parseOnlyList(sf.only); len(want) > 0 {
 		for _, llm := range detected {
 			if !want[llm.Name] {
+				continue
+			}
+			if !cli.IsReviewCapable(llm.Name) {
 				continue
 			}
 			if !ready[llm.Name] {
@@ -78,6 +85,9 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 	}
 
 	for _, llm := range detected {
+		if !cli.IsReviewCapable(llm.Name) {
+			continue
+		}
 		if !ready[llm.Name] {
 			continue
 		}
@@ -1253,6 +1263,11 @@ func sortByRoster(results []multi.ReviewResult, available []cli.LLM) []multi.Rev
 
 // selectMergeLLM picks which agent merges findings. Priority:
 // caller-preferred → auto (claude > codex > gemini) → first eligible.
+//
+// antigravity is intentionally absent from the auto chain: it never
+// enters the review fan-out (cli.IsReviewCapable == false) so it can't
+// produce mergeable output, and the merge prompt would hit the same
+// agentic `--print` failure that excluded it as a reviewer.
 //
 // Eligibility is "produced mergeable output" (matching CountWithOutput),
 // not "Error == nil". Pre-fix a SaveReview-failed-with-output run

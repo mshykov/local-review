@@ -86,6 +86,8 @@ func NewInvoker(llm LLM) Invoker {
 		return &GeminiInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}
 	case "codex":
 		return &CodexInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}
+	case "antigravity":
+		return &AntigravityInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}
 	default:
 		return nil
 	}
@@ -364,4 +366,117 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt string) (string, TokenUs
 	}
 	text, usage := parseClaudeJSON(stdout.Bytes())
 	return text, usage, nil
+}
+
+// AntigravityInvoker runs Google's Antigravity CLI (`agy`), the
+// successor to the Gemini CLI. Google announced (2026-05) that the
+// Gemini CLI stops serving Pro/Ultra/free-tier requests on
+// 2026-06-18, with Antigravity as the replacement.
+//
+// NOT WIRED INTO THE REVIEW FAN-OUT (cli.IsReviewCapable("antigravity")
+// == false). The 2026-05 authenticated dogfood found agy's `--print`
+// mode runs a full autonomous agent loop: it explores the repo, runs
+// git/python, reconstructs its OWN diff (ignoring the one we hand it),
+// and streams tool-step narration ("I will run git diff…") to stdout
+// rather than a clean review. A real `local-review review --only
+// antigravity` produced 6.5 KB of narration, zero findings, and an
+// empty merged report. So agy is detected + surfaced in `doctor`
+// (statusExperimental) but excluded from the active set. This invoker
+// is retained as the starting point for a future structured-output
+// integration; until then it's only reachable via NewInvoker for the
+// type/interface tests, never from a real review run.
+//
+// Three ways agy differs from the other invokers, all confirmed by
+// probing `agy --help` / `agy --version` on v1.0.2:
+//
+//  1. The prompt is a POSITIONAL ARG to `-p`, not stdin. agy's
+//     `-p` flag "needs an argument" — piping a prompt to it errors.
+//     So unlike claude/gemini/codex (all stdin-fed), agy gets the
+//     whole prompt+diff on argv. macOS ARG_MAX is 1 MiB; run() guards
+//     with an explicit 256 KiB ceiling so an oversized prompt fails
+//     with a clear message instead of a cryptic "argument list too
+//     long" from exec. (In real review runs PreflightFilter would cap
+//     prompt size first, but agy is excluded from the fan-out, so that
+//     backstop never runs here — hence the in-invoker guard.)
+//
+//  2. No structured-output flag. agy has no `-o json` /
+//     `--output-format` (verified against `agy --help` v1.0.2), so
+//     there's nothing to parse token usage from — RunPrompt returns
+//     TokenUsage{}. Display callers already handle the zero case
+//     ("we couldn't determine usage"); agy reviews render without
+//     a token count, same as codex pre-v0.128.
+//
+//  3. `--dangerously-skip-permissions` is passed so the headless
+//     call doesn't hang on a tool-permission prompt. Our prompt is
+//     self-contained (the diff is in the prompt text; agy doesn't
+//     need filesystem tools to review it), but agy is agentic and
+//     may still try to read files / run tools unless told to
+//     auto-approve. Without the flag a `-p` run can block forever
+//     waiting on a permission prompt that has no TTY to answer it.
+//
+// Auth is OAuth (Google login via `agy`), like claude — there's no
+// API-key env var, so CanonicalAPIKeyEnv has no "antigravity"
+// entry and apiKey is unused here. An unauthenticated agy surfaces
+// "Authentication required. Please visit the URL..." which the
+// pre-flight probe captures and renders as the readiness-block
+// reason; no special-casing needed.
+type AntigravityInvoker struct {
+	path   string
+	model  string // agy currently exposes no --model flag; reserved for when it does
+	apiKey string // unused (OAuth auth); kept for NewInvoker symmetry
+
+	// Embedded partial-stderr capture (v0.10.6) — same as the
+	// other invokers; lets the probe surface agy's own diagnostic
+	// (e.g. the OAuth "Authentication required" message) on timeout.
+	partialStderrField
+}
+
+func (a *AntigravityInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
+	prompt := buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff
+	return a.run(ctx, prompt)
+}
+
+func (a *AntigravityInvoker) RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error) {
+	return a.run(ctx, prompt)
+}
+
+// run drives `agy -p <prompt> --dangerously-skip-permissions`.
+// The prompt rides on argv (agy doesn't read stdin — see the type
+// doc). No JSON output to parse, so the assistant's reply is the
+// raw trimmed stdout and usage is always zero.
+//
+// NOTE: this code path is NOT used by real reviews (see the type
+// doc — agy is excluded from the fan-out). The 2026-05 dogfood
+// showed `-p` does NOT print a clean response: agy runs an agentic
+// loop and emits step-narration, and on short prompts can return
+// empty stdout entirely. A future integration will need a different
+// invocation contract (structured output and/or suppressing the
+// agent loop) before this can drive a review. Kept as scaffolding.
+func (a *AntigravityInvoker) run(ctx context.Context, prompt string) (string, TokenUsage, error) {
+	// Explicit argv ceiling. The prompt rides on argv (agy doesn't read
+	// stdin), so a pathologically large prompt would hit the OS ARG_MAX
+	// (1 MiB on macOS) and surface as a cryptic "argument list too long"
+	// from exec. In real review runs PreflightFilter caps prompt size at
+	// the model's context window long before this — but agy is excluded
+	// from the fan-out, so that backstop never runs here; this guard
+	// makes the scaffolding fail with a clear message regardless of how
+	// it's driven. The 256 KiB ceiling leaves generous headroom below
+	// ARG_MAX (env + other argv share the budget).
+	const maxPromptBytes = 256 << 10
+	if len(prompt) > maxPromptBytes {
+		return "", TokenUsage{}, fmt.Errorf("antigravity prompt too large: %d bytes (max %d)", len(prompt), maxPromptBytes)
+	}
+	args := []string{"-p", prompt, "--dangerously-skip-permissions"}
+	cmd := exec.CommandContext(ctx, a.path, args...)
+	// No stdin: agy reads the prompt from argv. Leave cmd.Stdin nil.
+	cmd.Env = os.Environ() // OAuth session lives in agy's own config dir; no key to inject
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = a.teeStderr(&stderr)
+	if err := cmd.Run(); err != nil {
+		combined := append(stdout.Bytes(), stderr.Bytes()...)
+		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "antigravity"))
+	}
+	// No structured output → return trimmed stdout, zero usage.
+	return strings.TrimSpace(stdout.String()), TokenUsage{}, nil
 }
