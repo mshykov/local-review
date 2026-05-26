@@ -137,13 +137,16 @@ All three apply to both the multi-LLM CLI path and the single-LLM fallback so cu
 
 ---
 
-> ✨ **What's new in v0.9.** *Make the tool sell itself.* Three things driven by direct customer feedback on v0.8:
+> ✨ **What's new in v0.10.x.** Six patches since v0.9 — the biggest themes:
 >
-> - **Overhead deltas in the leaderboard.** [`bench/RESULTS.md`](bench/RESULTS.md) now carries an "Overhead vs raw model" table next to the existing uplift block — extra seconds and extra tokens the tool costs you per review, with signed deltas vs. the raw-LLM baseline. The trade-off ("quality wins vs. cost") now reads on one page.
-> - **README leads with positioning, not commands.** Why it exists / what it is / how good it is — *then* install. The action-first ordering shipped in v0.8 buried the trust signal under copy-pasteable shell blocks.
-> - **`bench` is internal now.** The harness still exists; the subcommand is hidden from `--help` and isn't a user surface. The committed [`bench/RESULTS.md`](bench/RESULTS.md) is the user-facing artifact, refreshed before each release.
+> - **Whole-codebase audit.** New `local-review audit --topic <security|tech-debt>` walks every tracked file, groups by package, and runs each chunk through the LLM with a topic-specific prompt. Surfaces accumulated issues no diff-time review would catch. Reports committed under [`audit/`](audit/) as a second trust artifact next to [`bench/RESULTS.md`](bench/RESULTS.md). See `local-review audit --topic security --dry-run` to preview cost before paying tokens.
+> - **Pre-flight LLM readiness probe.** Before fanning out to every LLM, `local-review review` now issues a tiny `Reply OK` probe per agent with a 10s timeout. Printed as a ✓/✗ block at the top of the run — and when an LLM times out, the probe surfaces the vendor's actual diagnostic (`gemini ✗ timeout after 10s — Error: You have exhausted your capacity on this model.`) instead of leaving you to guess. `--no-preflight` opts out for CI/scripting.
+> - **Swift / Kotlin / Liquid prompt packs.** Activates automatically on `.swift`, `.kt`, `.kts`, `.liquid` files. Same shape as the existing Go / TS / Python / Rust packs (language-specific pitfalls, security, idioms).
+> - **`bench --swe-bench`** — catch-rate measurements against bug-introducing diffs from the SWE-bench-lite dataset (real bugs from projects we didn't author). New section in [`bench/RESULTS.md`](bench/RESULTS.md) alongside the existing F1 leaderboard.
+> - **Ollama on a LAN host now works without dummy api_key.** Point `provider.base_url` at `http://192.168.x.x:11434/v1` and it Just Works — RFC1918 + IPv6 ULA / link-local hosts are treated as auth-free. Corporate-gateway invariant preserved (set `provider.api_key` if your LAN endpoint authenticates).
+> - **`install.sh` prompts before skipping checksum verification when a TTY is available.** Closes the env-var-only-opt-out gap the v0.10.0 audit dogfood flagged.
 >
-> Full notes in [CHANGELOG](CHANGELOG.md).
+> Full notes in [CHANGELOG](CHANGELOG.md). The session pattern worth noting: every v0.10.x release was driven by either the previous release's `audit/` output or by reviewers (3-LLM / Copilot / CodeRabbit) catching real findings inside the PR. The multi-reviewer redundancy IS the trust signal.
 
 ---
 
@@ -175,10 +178,45 @@ local-review review --merge-with claude
 
 **How it works:**
 1. Detects installed LLM CLIs and which are authenticated (`local-review doctor`)
-2. Runs every authenticated CLI in parallel
-3. Saves each review to `.local-review/reviews/<branch>/<commit>_<llm>_<version>.md`
-4. Merges findings (dedup, consensus tagging) into one report
-5. Prints the merged report to stdout (also saved as `<commit>_merged.md`)
+2. **Pre-flight probe** — issues a tiny `Reply OK` call per LLM (10s timeout) before the real fan-out. Surfaces auth / capacity / network issues as `✓`/`✗` in seconds, with the vendor's actual error inline on timeout. Skips ✗ agents from the real run.
+3. Runs every surviving authenticated CLI in parallel
+4. Saves each review to `.local-review/reviews/<branch>/<commit>_<llm>_<version>.md`
+5. Merges findings (dedup, consensus tagging) into one report
+6. Prints the merged report to stdout (also saved as `<commit>_merged.md`)
+
+**Expected output shape** (with the v0.10.x pre-flight block):
+
+```
+Reviewing feature/foo (abc1234) with 3 LLMs...
+  • claude_claude-haiku-4-5 (CLI v2.1.149) | timeout: 600s
+  • gemini_gemini-2.5-pro (CLI v0.43.0) | timeout: 600s
+  • codex_gpt-5.3-codex (CLI v0.133.0) | timeout: 600s
+
+Pre-flight (probing auth + capacity):
+  claude   ✓ (3.5s)
+  gemini   ✗ timeout after 10s — Error: You have exhausted your capacity on this model.
+  codex    ✓ (2.5s)
+Probed 3 LLMs in 10s.
+
+claude ✓ (58s) · 80.8k in / 5.4k out
+codex ✓ (1m12s) · 67.6k total
+
+Merging reviews...
+Using claude for merge...
+✓ Merged review (12.8s)
+
+─── Findings ───
+# Code Review — Consolidated Report
+... merged markdown ...
+─── End ───
+
+✓ 2/3 LLMs produced output · total 1m32s · ~206k tokens
+Merged report: .local-review/reviews/feature-foo/abc1234_merged.md
+```
+
+The probe gives you back the time the v0.10.0 build spent waiting on doomed LLMs — a ~4-minute gemini hang becomes a sub-10-second skip with the actual reason inline.
+
+`--no-preflight` skips the probe phase. Use it in CI / non-interactive contexts where you don't mind the original v0.10.0 wait-and-see behaviour, or when the probe's tiny token cost matters.
 
 **Authentication — what each LLM needs:**
 
@@ -210,6 +248,41 @@ merge:
 ```
 
 See [`examples/.local-review-multi.yml`](examples/.local-review-multi.yml) for full schema.
+
+## Audit — whole-codebase deep analysis (v0.10+)
+
+`local-review review` operates on a diff. **`local-review audit` operates on the whole committed tree** — surfacing pre-existing issues no diff-time review would catch (accumulated security gaps, dead code, duplicated logic, leaky abstractions). Topic-driven and opt-in; pick a focus per run.
+
+```sh
+local-review audit --topic security    # OWASP-aligned sweep
+local-review audit --topic tech-debt   # dead code, duplication, leaky abstractions
+```
+
+How it works:
+
+1. `git ls-files` walks every tracked source file.
+2. Files are grouped by directory into chunks (one per package). Packages above the per-chunk cap (96 KiB by default) auto-split into `pkg [part N/M]` sub-chunks preserving file adjacency.
+3. Each chunk goes to the LLM with the topic's audit pack as the system prompt (audit packs deliberately skip the `nit` severity tier — whole-codebase reading produces enough signal that nits dilute the report).
+4. Findings merged into one report; emit text/markdown/JSON.
+
+**Preview cost before paying tokens:**
+
+```sh
+local-review audit --topic security --dry-run
+```
+
+Prints the chunk plan (count, file count per chunk, total bytes) without invoking the LLM. Useful for the first audit of an unfamiliar codebase.
+
+**Save the report:**
+
+```sh
+local-review audit --topic security  --out audit/security.md
+local-review audit --topic tech-debt --out audit/tech-debt.md
+```
+
+Single-LLM in v1 — picks the first authenticated agent (claude when available). Audit cost is per-package × per-topic; running multi-LLM would multiply spend without obvious quality return.
+
+This project audits itself: [`audit/security.md`](audit/security.md) and [`audit/tech-debt.md`](audit/tech-debt.md) are the live reports the tool produced on its own source tree. They're the trust artifact for `audit` the way [`bench/RESULTS.md`](bench/RESULTS.md) is for `review`. See [`audit/README.md`](audit/README.md) for methodology + how to triage findings.
 
 ## Configure
 
@@ -268,6 +341,10 @@ local-review staged                  # review git diff --cached (pre-commit)
 local-review commit [<rev>]          # review one commit (default: HEAD)
 local-review branch [<base>]         # alias of `review` for muscle-memory
 
+# Audit — whole-codebase deep analysis (v0.10+)
+local-review audit --topic security      # OWASP-aligned sweep
+local-review audit --topic tech-debt     # dead code, duplication, leaky abstractions
+
 # Utilities
 local-review init                    # interactive setup (writes .local-review.yml)
 local-review doctor                  # check LLM installations + auth state
@@ -275,18 +352,30 @@ local-review config                  # print resolved config (API keys masked)
 local-review version                 # print version
 ```
 
-Common flags:
+Common flags (review):
 
 | Flag | Purpose |
 |---|---|
 | `--only <list>` | Comma-separated agents to run (e.g. `claude,gemini`); overrides config |
 | `--claude-model <id>` | Override claude's model (same for `--gemini-model`, `--codex-model`) |
 | `--merge-with <agent>` | Pick which agent merges findings (default: auto) |
+| `--no-preflight` | Skip the pre-flight readiness probe; go straight to the real fan-out (v0.10.1+). Use in CI / non-interactive scripts where the ~10s probe budget isn't worth it. |
 | `--model <id>` | Override `provider.model` (single-LLM fallback only) |
 | `--base-url <url>` | Override `provider.base_url` (single-LLM fallback only) |
 | `--min-severity <tier>` | `nit` / `info` / `warning` / `major` / `critical` (single-LLM fallback only) |
 | `--max-findings <n>` | Cap output (single-LLM fallback only) |
 | `--json` | Emit JSON (single-LLM fallback only — see below) |
+
+Audit-specific flags:
+
+| Flag | Purpose |
+|---|---|
+| `--topic <id>` | **Required.** `security` or `tech-debt`. |
+| `--out <path>` | Write the report to a file (`.md` → markdown, `.json` → JSON). Without `--out`, the report prints to stdout. |
+| `--dry-run` | Print the chunk plan (file count + size per package, total bytes) without invoking the LLM. Preview cost before paying tokens. |
+| `--include <prefixes>` | Comma-separated path prefixes to include (default: all auditable tracked files) |
+| `--exclude <prefixes>` | Comma-separated path prefixes to exclude |
+| `--max-bytes-per-chunk <N>` | Per-chunk input cap; packages above the cap auto-split into `pkg [part N/M]` sub-chunks (default: 96 KiB) |
 
 In multi-LLM mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the post-v0.8 roadmap — no fixed date; we'll unpark it when the third user asks for it.
 

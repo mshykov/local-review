@@ -105,6 +105,24 @@ part of the release PR. The commands are above. Expect ~20-30 min
 per topic on a codebase this size against an authenticated Claude
 CLI.
 
+**Cadence in practice.** Patch releases that only refactor code
+under existing review-path packages (the v0.10.2 / v0.10.5 / v0.10.6
+shape) do NOT regenerate; the trust artifact stays accurate because
+no new code surface was added. Regen on minor releases or whenever
+the audit walker / chunker / prompts themselves change — that's the
+case where stale reports would be misleading.
+
+**Pre-flight probe note** (v0.10.6+). When `audit` runs against an
+LLM, it goes through the same pre-flight readiness probe the diff-
+review path uses. If the LLM is unavailable, you'll see a vendor-
+specific error (e.g. `gemini ✗ timeout after 10s — Error: You have
+exhausted your capacity on this model.`) before any chunks are
+processed — so a half-finished audit run won't burn tokens on
+chunks that were going to fail anyway. `audit` picks the first
+authenticated LLM, so this almost always means "claude failed
+the probe, audit can't proceed, here's why." Run `local-review
+doctor` to investigate.
+
 If you fork this project and want to publish your own reports
 here, replace these files with the output of `local-review audit`
 on your fork; the methodology section above stays accurate.

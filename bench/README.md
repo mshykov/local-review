@@ -177,6 +177,43 @@ behaviour changes meaningfully — otherwise replay scores measure
 "how the v0.6 prompt pack scored on cached v0.6 outputs," which is
 not what a v0.7 release actually ships.
 
+## SWE-bench-lite catch-rate mode (v0.10+)
+
+The primary bench (above) measures precision/recall/F1 on a curated
+labelled dataset where we wrote both the diff and the expected
+findings. That's deliberate — the dataset is small, every case is
+auditable, and per-language splits are stable. But it's also a
+circular trust signal: we wrote both the question and the answer
+key.
+
+`local-review bench --swe-bench` runs against **bug-introducing
+diffs in the SWE-bench-lite format** — diffs adapted by
+reverse-applying a known fix patch, scored by case-insensitive
+keyword match between the reviewer's markdown and the task's
+`expected_keywords`. Closes the credibility gap by measuring
+against bugs from projects we did NOT author.
+
+```sh
+local-review bench --swe-bench                     # use default dataset (bench/swe-bench-lite/)
+local-review bench --swe-bench --swe-bench-dataset <dir>   # custom
+local-review bench --swe-bench --only claude       # restrict agents
+```
+
+Scoring is binary (`caught` / `missed`) in v1 — a partial-credit
+LLM-as-judge tier is tracked for a later release. **Error frames
+count toward the catch-rate denominator** by design: a reviewer
+that crashes catches no bugs, and silently shrinking the denominator
+to the surviving subset would inflate the apparent catch rate
+exactly when reviewers are flakiest.
+
+`--uplift` and `--repeat > 1` are rejected with `--swe-bench`:
+neither concept maps onto binary catch scoring without additional
+design.
+
+The leaderboard's "SWE-bench-lite catch rate" section sits next to
+the existing F1 / uplift / overhead tables in [`bench/RESULTS.md`](RESULTS.md)
+— same report, two complementary signals.
+
 ## Updating the leaderboard
 
 `bench/RESULTS.md` is the human-readable leaderboard. To refresh it
