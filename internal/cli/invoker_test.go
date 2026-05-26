@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -55,6 +56,9 @@ func TestNewInvoker(t *testing.T) {
 			} else {
 				if invoker == nil {
 					t.Errorf("NewInvoker() = nil, want non-nil")
+				}
+				if gotType := fmt.Sprintf("%T", invoker); gotType != tt.wantType {
+					t.Errorf("NewInvoker() type = %s, want %s", gotType, tt.wantType)
 				}
 			}
 		})
