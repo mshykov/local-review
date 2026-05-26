@@ -87,7 +87,7 @@ npm install -g @anthropic-ai/claude-code
 claude login
 ```
 
-Or use Gemini (free key) or Codex (ChatGPT Plus / OpenAI API). Any combination works — every authenticated LLM joins the review automatically. `local-review doctor` shows the state.
+Or use Gemini (free key — *deprecated, stops serving 2026-06-18*) or Codex (ChatGPT Plus / OpenAI API). Any combination works — every authenticated LLM joins the review automatically. `local-review doctor` shows the state.
 
 **3. (Optional) Add a `.local-review.yml` to your repo** for house rules:
 
@@ -137,7 +137,11 @@ All three apply to both the multi-LLM CLI path and the single-LLM fallback so cu
 
 ---
 
-> ✨ **What's new in v0.10.x.** Six patches since v0.9 — the biggest themes:
+> ✨ **What's new in v0.11.** Google retires the Gemini CLI on **2026-06-18**; v0.11 gets you ahead of the sunset:
+>
+> - **Antigravity (`agy`) detection + Gemini deprecation.** `local-review doctor` now detects Google's Gemini-CLI successor `agy` and flags Gemini as deprecated with a migration notice. Caveat: `agy` is **detected but not yet a reviewer** — its headless `--print` runs an autonomous agent loop (explores the repo, rebuilds its own diff, emits narration) instead of returning a clean review, so it's gated out of the fan-out as `◐ experimental` until a structured-output contract lands. Keep using Claude / Codex (and Gemini until the cutoff).
+>
+> **Plus the v0.10.x themes** (six patches since v0.9):
 >
 > - **Whole-codebase audit.** New `local-review audit --topic <security|tech-debt>` walks every tracked file, groups by package, and runs each chunk through the LLM with a topic-specific prompt. Surfaces accumulated issues no diff-time review would catch. Reports committed under [`audit/`](audit/) as a second trust artifact next to [`bench/RESULTS.md`](bench/RESULTS.md). See `local-review audit --topic security --dry-run` to preview cost before paying tokens.
 > - **Pre-flight LLM readiness probe.** Before fanning out to every LLM, `local-review review` now issues a tiny `Reply OK` probe per agent with a 10s timeout. Printed as a ✓/✗ block at the top of the run — and when an LLM times out, the probe surfaces the vendor's actual diagnostic (`gemini ✗ timeout after 10s — Error: You have exhausted your capacity on this model.`) instead of leaving you to guess. `--no-preflight` opts out for CI/scripting.
