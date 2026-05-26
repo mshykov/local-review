@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-05-26
+
+**Theme: catch the docs up to the code.**
+
+Six v0.10.x feature releases shipped between v0.10.0 and v0.10.6 — audit subcommand, pre-flight readiness probe (timeout fix + vendor-error surfacing + ProbeCanceled distinction), Swift / Kotlin / Liquid prompt packs, SWE-bench-lite mode, Ollama-on-LAN auth bypass, install.sh TTY prompt. The user-facing docs (README, website, audit/bench READMEs, CLAUDE.md) were last refreshed for v0.9 and progressively fell out of sync. v0.10.7 catches them up across all five surfaces in one focused docs-only release.
+
+No code changes — `internal/` and `cmd/` are untouched. The release tag exists for cadence continuity (the website's footer links a current version; bumping the tag keeps the footer accurate).
+
+Three Copilot findings + four CodeRabbit findings were resolved in-PR before merge — accuracy claims (`--json` scope, multi-LLM-ignored paragraph placement, SWE-bench credibility-gap overstatement), discoverability (missing `--swe-bench` flags in bench's flag table), accessibility (WCAG contrast on the new Audit feature card), and a trailing-space typo. Same multi-reviewer pattern that drove the v0.10.x code releases.
+
+### Documentation
+
+- **`README.md`** rewritten for v0.10.x: replaced the v0.9 "What's new" callout with a v0.10.x summary covering six themes; added a pre-flight probe step to the "Multi-LLM is the default" how-it-works list plus a full expected-output code block showing the readiness block + per-LLM lines + merged-report tail; new "Audit — whole-codebase deep analysis" section between Multi-LLM and Configure with `--dry-run` cost-preview, `--out` flag, and methodology pointer; CLI section adds `local-review audit` to the command list, a new audit-specific flag table, and `--no-preflight` in the common-flags table.
+- **`docs/index.html`**: Multi-LLM feature card mentions the pre-flight probe; new "Whole-Codebase Audit" feature card with the right WCAG-compliant code styling; 4th Quick Start step for `local-review audit --topic security --dry-run`.
+- **`audit/README.md`**: "Regenerating" section spells out the patch-vs-minor cadence that emerged from v0.10.x sessions (patch releases that only refactor existing review-path code don't regen; minor or audit-walker-touching releases do). New "Pre-flight probe note" explains the probe's behaviour inside audit + the `doctor` escape hatch.
+- **`bench/README.md`**: new "SWE-bench-lite catch-rate mode (v0.10+)" section — explains the credibility-loop motivation, the v0.10.0 current state (3 synthetic shipped examples vs. real-task curation as deferred follow-up), and the binary-scoring rationale including why error frames count toward the denominator. Adds `--swe-bench` and `--swe-bench-dataset` rows to the Useful flags table.
+- **`CLAUDE.md`** "Multi-LLM model — non-obvious facts" extended with 6 new bullets covering pre-flight probe semantics, partial-stderr capture with `Unwrap`-chain preservation, `ProbeCanceled` vs `ProbeTimeout`, audit's invoker path, `isLocalURL` widening with the IPv6 zone-suffix detail, `pathInsideDir` symlink resolution with the missing-leaf bypass.
+
 ## [0.10.6] - 2026-05-26
 
 **Theme: tell the user why.**
