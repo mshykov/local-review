@@ -506,3 +506,114 @@ func TestProbe_CanceledOutcomeFromInvokerStillClassifiesAsCanceled(t *testing.T)
 		t.Errorf("Status = %s, want ProbeCanceled (canceled invoker return must not fall through to ProbeError)", r.Status)
 	}
 }
+
+// hungInvokerWithPartial extends hungInvoker with a
+// PartialStderrCapturer impl, returning a canned vendor message.
+// Mirrors what the real ClaudeInvoker / GeminiInvoker / CodexInvoker
+// expose: while RunPrompt is blocked on the subprocess pipe drain,
+// the partial-stderr buffer already holds whatever the CLI wrote
+// before hanging.
+type hungInvokerWithPartial struct {
+	hungInvoker
+	partialMsg string
+}
+
+func (h *hungInvokerWithPartial) PartialStderr() string {
+	return h.partialMsg
+}
+
+// v0.10.6 timeout-classification invariants — table-driven so
+// the shared "hung invoker + tight ctx + Probe call" scaffolding
+// lives once, and each row pins one observable property of the
+// resulting ProbeResult. Sonar flagged duplication across the
+// four-test layout the first build had; consolidating here lands
+// the same coverage with the setup in one place.
+//
+// Each case asserts whatever subset of (Status, Err-must-contain,
+// Err-must-NOT-contain, errors.Is-unwrap) is meaningful for the
+// scenario; empty fields are skipped. Test names follow CLAUDE.md
+// rule 9 — each case encodes an invariant, not a call shape.
+func TestProbe_TimeoutClassification(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+
+	vendorMsg := "Error: You have exhausted your capacity on this model."
+
+	cases := []struct {
+		name            string
+		invoker         Invoker
+		wantContains    []string // every substring must appear in Err.Error()
+		wantNotContains []string // none of these may appear in Err.Error()
+		wantUnwraps     error    // errors.Is(Err, this) must hold; nil = skip
+	}{
+		{
+			name: "partial_stderr_surfaces_as_reason",
+			invoker: &hungInvokerWithPartial{
+				hungInvoker: hungInvoker{release: release},
+				partialMsg:  vendorMsg,
+			},
+			wantContains: []string{"exhausted your capacity", "timeout after"},
+			wantUnwraps:  context.DeadlineExceeded,
+		},
+		{
+			// Plain hungInvoker doesn't implement PartialStderrCapturer.
+			// Probe must fall through to the generic ctx.Err() path —
+			// never panic on the missing optional interface.
+			name:        "no_partial_capturer_falls_back_to_ctxerr",
+			invoker:     &hungInvoker{release: release},
+			wantUnwraps: context.DeadlineExceeded,
+		},
+		{
+			// Whitespace-only partial → fall back, else we'd render
+			// `gemini ✗ timeout after 10s — ` with trailing dash.
+			name: "whitespace_partial_falls_back_to_ctxerr",
+			invoker: &hungInvokerWithPartial{
+				hungInvoker: hungInvoker{release: release},
+				partialMsg:  "   \n\t  ",
+			},
+			wantUnwraps: context.DeadlineExceeded,
+		},
+		{
+			// The rendered Error() must NOT include "context
+			// deadline exceeded" — display stays clean, the
+			// unwrap chain is for programmatic checks (see
+			// previous case which pins the unwrap).
+			name: "rendered_text_omits_unwrap_target_string",
+			invoker: &hungInvokerWithPartial{
+				hungInvoker: hungInvoker{release: release},
+				partialMsg:  vendorMsg,
+			},
+			wantNotContains: []string{"context deadline exceeded"},
+			wantUnwraps:     context.DeadlineExceeded,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			defer cancel()
+
+			r := Probe(ctx, tc.invoker, "test-llm")
+			if r.Status != ProbeTimeout {
+				t.Fatalf("Status = %s, want ProbeTimeout", r.Status)
+			}
+			if r.Err == nil {
+				t.Fatal("Err is nil; expected ctx-Err or partial-stderr error")
+			}
+			errStr := r.Err.Error()
+			for _, sub := range tc.wantContains {
+				if !strings.Contains(errStr, sub) {
+					t.Errorf("Err = %q, want it to contain %q", errStr, sub)
+				}
+			}
+			for _, sub := range tc.wantNotContains {
+				if strings.Contains(errStr, sub) {
+					t.Errorf("Err = %q, want it NOT to contain %q (display should stay clean)", errStr, sub)
+				}
+			}
+			if tc.wantUnwraps != nil && !errors.Is(r.Err, tc.wantUnwraps) {
+				t.Errorf("errors.Is(Err, %v) = false, want true", tc.wantUnwraps)
+			}
+		})
+	}
+}

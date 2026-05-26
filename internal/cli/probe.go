@@ -89,6 +89,47 @@ func (r ProbeResult) IsReady() bool {
 	return r.Status == ProbeReady
 }
 
+// probeTimeoutErr is the error type Probe returns on a ctx-
+// deadline expiry when partial-stderr surfaced a vendor message.
+// Custom type so:
+//
+//   - Error() returns the display-friendly "timeout after Ns —
+//     <vendor message>" — what the readiness block renders.
+//   - Unwrap() returns the underlying context.DeadlineExceeded
+//     so callers using `errors.Is(err, context.DeadlineExceeded)`
+//     keep working as they did pre-v0.10.6, when ProbeTimeout's
+//     Err was just ctx.Err() directly.
+//
+// Codex caught the missing Unwrap chain on PR #91's own dogfood —
+// without this type, my fmt.Errorf("timeout after %s — %s", ...)
+// produced a plain string error that broke the errors.Is path.
+type probeTimeoutErr struct {
+	display string
+	cause   error // typically context.DeadlineExceeded
+}
+
+func (p *probeTimeoutErr) Error() string { return p.display }
+func (p *probeTimeoutErr) Unwrap() error { return p.cause }
+
+// PartialStderrCapturer is an OPTIONAL interface invokers can
+// implement to expose whatever's been written to the subprocess's
+// stderr so far — without waiting for the subprocess to actually
+// exit. Used by Probe to surface the vendor's diagnostic line
+// (e.g. "You have exhausted your capacity on this model.") in
+// the readiness block when a probe times out, instead of the
+// generic "timeout after 10s" we'd otherwise have to print
+// because the subprocess is hung past SIGKILL on pipe drain.
+//
+// The current production invokers (Claude / Gemini / Codex) all
+// implement this — they buffer up to 4 KiB of stderr via a
+// stderrCapture written in parallel to the normal cmd.Stderr
+// destination. The interface is optional so tests + future
+// invokers can opt out by simply not implementing it; Probe
+// falls back to the generic timeout text in that case.
+type PartialStderrCapturer interface {
+	PartialStderr() string
+}
+
 // probePrompt is the smallest payload that exercises an LLM's
 // auth + capacity without burning measurable tokens. "Reply with
 // exactly: OK" is short, unambiguous, and produces a deterministic
@@ -196,6 +237,35 @@ func Probe(ctx context.Context, inv Invoker, name string) ProbeResult {
 			// defensive default that keeps Probe from ever
 			// returning ProbeReady on a canceled context.
 			pr.Status = ProbeTimeout
+			// v0.10.6: peek the invoker's partial stderr (if it
+			// supports the capability). When a CLI prints its
+			// error to stderr BEFORE hanging on a network call —
+			// gemini's "exhausted capacity" pattern, codex's
+			// auth-failure messages — the relevant text is
+			// already in the partial buffer at this point.
+			// Surface it as the readiness block's reason text
+			// instead of the generic "timeout after 10s." Limit
+			// to 240 chars so a misbehaving CLI dumping a
+			// stack trace doesn't blow up the line; the runner's
+			// singleLine() collapses any internal newlines.
+			if capturer, ok := inv.(PartialStderrCapturer); ok {
+				if partial := strings.TrimSpace(capturer.PartialStderr()); partial != "" {
+					if len(partial) > 240 {
+						partial = partial[:240] + "…"
+					}
+					// Use probeTimeoutErr (custom type) instead
+					// of fmt.Errorf so the rendered text stays
+					// clean ("timeout after Ns — <vendor>") while
+					// errors.Is(err, context.DeadlineExceeded)
+					// still works — the original ctx.Err() chain
+					// is preserved via Unwrap.
+					pr.Err = &probeTimeoutErr{
+						display: fmt.Sprintf("timeout after %s — %s",
+							time.Since(start).Round(10*time.Millisecond), partial),
+						cause: ctx.Err(),
+					}
+				}
+			}
 		}
 		return pr
 	}
