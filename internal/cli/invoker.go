@@ -125,6 +125,14 @@ type CodexInvoker struct {
 	path   string
 	model  string // codex exec -m <model>; empty = CLI default
 	apiKey string // injected as OPENAI_API_KEY into subprocess env
+
+	// Embedded partial-stderr capture (v0.10.6). Provides the
+	// PartialStderr() method via Go struct-method promotion;
+	// run() stores a fresh stderrCapture into the embedded
+	// `capture` field on every invocation. See
+	// internal/cli/stderr_capture.go partialStderrField for the
+	// shared implementation.
+	partialStderrField
 }
 
 func (c *CodexInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
@@ -173,8 +181,18 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 	cmd := exec.CommandContext(ctx, c.path, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["codex"], c.apiKey)
-	combined, err := cmd.CombinedOutput()
-	if err != nil {
+	// Switched from CombinedOutput() to separate stdout/stderr
+	// streams (v0.10.6) so we can tee stderr through a partial
+	// buffer for the probe layer. We reconstruct the same
+	// combined-bytes contract the existing code downstream
+	// expects (token parsing + ClassifyExit input) by
+	// concatenating manually after Run.
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = c.teeStderr(&stderrBuf)
+	runErr := cmd.Run()
+	combined := append(stdoutBuf.Bytes(), stderrBuf.Bytes()...)
+	if runErr != nil {
 		// ClassifyExit produces the user-facing summary with an
 		// actionable hint (smaller diff for SIGKILL, raise timeout for
 		// deadline, surface stderr tail for non-zero exit). The
@@ -182,7 +200,7 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 		// already prefixes the agent name, so prefixing it again would
 		// just produce "codex ✗ codex review failed: ..." duplication.
 		_ = errLabel
-		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "codex"))
+		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, runErr, combined, "codex"))
 	}
 
 	out, err := os.ReadFile(tmpPath)
@@ -203,6 +221,13 @@ type GeminiInvoker struct {
 	path   string
 	model  string // gemini -m <model>; empty = CLI default
 	apiKey string // injected as GEMINI_API_KEY into subprocess env
+
+	// Embedded partial-stderr capture (v0.10.6). Gemini is the
+	// CLI this feature primarily targets — its "You have
+	// exhausted your capacity on this model." message lands in
+	// stderr long before the network call finally times out. See
+	// partialStderrField in stderr_capture.go.
+	partialStderrField
 }
 
 func (g *GeminiInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
@@ -252,7 +277,10 @@ func (g *GeminiInvoker) run(ctx context.Context, prompt string) (string, TokenUs
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["gemini"], g.apiKey)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Tee stderr through a live partial buffer (see ClaudeInvoker
+	// for the rationale). The MultiWriter ensures the existing
+	// post-run `stderr.Bytes()` path is unaffected.
+	cmd.Stderr = g.teeStderr(&stderr)
 	if err := cmd.Run(); err != nil {
 		combined := append(stdout.Bytes(), stderr.Bytes()...)
 		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "gemini"))
@@ -267,6 +295,14 @@ type ClaudeInvoker struct {
 	path   string
 	model  string // claude --model <id>; empty = CLI default
 	apiKey string // injected as ANTHROPIC_API_KEY into subprocess env
+
+	// Embedded partial-stderr capture (v0.10.6). The probe layer
+	// peeks the captured bytes via the auto-promoted
+	// PartialStderr() method when ctx expires, surfacing the
+	// vendor's diagnostic even while the subprocess is hung past
+	// SIGKILL on pipe drain. See partialStderrField in
+	// stderr_capture.go.
+	partialStderrField
 }
 
 func (c *ClaudeInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
@@ -312,7 +348,11 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt string) (string, TokenUs
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["claude"], c.apiKey)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Tee stderr through a live partial buffer so the probe layer
+	// can peek mid-flight (v0.10.6). teeStderr installs a fresh
+	// capture and returns a MultiWriter to the existing stderr
+	// destination — additive, no change to post-run handling.
+	cmd.Stderr = c.teeStderr(&stderr)
 	if err := cmd.Run(); err != nil {
 		// No error-label prefix here: the runner's per-LLM completion
 		// line already names the agent ("claude ✗ ..."), so a second

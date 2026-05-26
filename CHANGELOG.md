@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pre-flight probe timeout now surfaces the vendor's actual error message instead of generic "timeout after 10s".** When a CLI hangs past the 10s probe deadline, v0.10.5 rendered the readiness line as `gemini ✗ timeout after 10s` — accurate but unhelpful: the user still had to run `doctor` or read CLI logs to find out *why* (exhausted capacity? auth failed? network?). v0.10.6 adds **live partial-stderr capture** via a new `stderrCapture` ring buffer (capped at 4 KiB, goroutine-safe, first-bytes-wins because vendors print the diagnostic line BEFORE hanging on the network call) tied to each invoker via `io.MultiWriter`. The probe layer peeks the buffer when ctx expires via a new optional `cli.PartialStderrCapturer` interface; Claude / Gemini / Codex invokers all implement it. Readiness block now renders: `gemini ✗ timeout after 10s — Error: You have exhausted your capacity on this model.` Empty / whitespace-only partial-stderr falls back to the generic "timeout after Ns" message (so we never produce `gemini ✗ timeout after 10s — ` with trailing dash). Invokers that don't implement the optional interface fall through to the same generic message — additive change, no breakage. Five new tests pin the invariants: concurrent Write/Snapshot under `-race`, cap discards excess bytes correctly, empty Snapshot for unused buffer, zero-cap-falls-back-to-4-KiB-default, and the probe-layer "vendor message surfaces" case + two defensive fallbacks (no-interface, whitespace-only). 240-char cap on the rendered text (with `…` ellipsis past the cut) so a misbehaving CLI dumping a stack trace doesn't blow up the readiness column.
+
 ## [0.10.5] - 2026-05-25
 
 **Theme: close the gaps the audit kept flagging.**

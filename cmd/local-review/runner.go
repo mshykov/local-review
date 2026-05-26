@@ -718,7 +718,18 @@ func runPreflightProbe(ctx context.Context, active []cli.LLM) []cli.LLM {
 			fmt.Printf("  %-8s ✓ (%s)\n", name, r.Duration.Round(10*time.Millisecond))
 			readyByName[name] = true
 		case cli.ProbeTimeout:
-			fmt.Printf("  %-8s ✗ timeout after %s\n", name, cli.DefaultProbeTimeout)
+			// v0.10.6: if the probe captured a partial-stderr
+			// message (vendor printed its diagnostic before the
+			// hang), Probe will have populated r.Err with the
+			// vendor text in a "timeout after Ns — <vendor msg>"
+			// shape. Surface that message instead of the generic
+			// "timeout after 10s" so users see the actual cause
+			// (capacity exhausted, auth failed, etc.).
+			if r.Err != nil && strings.Contains(r.Err.Error(), "timeout after") {
+				fmt.Printf("  %-8s ✗ %s\n", name, singleLine(r.Err.Error()))
+			} else {
+				fmt.Printf("  %-8s ✗ timeout after %s\n", name, cli.DefaultProbeTimeout)
+			}
 		case cli.ProbeCanceled:
 			// Use a distinct glyph (⊘ / "canceled") so the user
 			// can tell "I pressed Ctrl+C" apart from "vendor
