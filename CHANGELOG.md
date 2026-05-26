@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--preflight-timeout <duration>` flag.** First-customer dogfood on the v0.10.6 build showed `claude ✗ timeout after 10s` with no vendor diagnostic — claude-code's cold-start on a loaded host can exceed the 10s probe cap before the CLI writes anything to stderr. Bumping with `--preflight-timeout 20s` rescues those runs without forcing `--no-preflight` (which loses the readiness signal entirely). Default unchanged (10s); the flag exists as the "cold-start escape hatch" — `--no-preflight` is still the "CI / scripting" escape hatch.
+
+### Changed
+
+- **Bare-timeout readiness line now includes a "no diagnostic captured" hint.** Pre-fix `claude ✗ timeout after 10s` read identically to a vendor-message-present timeout, leaving users unable to tell silent-claude apart from gemini-with-vendor-message. The readiness block now appends `(no diagnostic captured — run \`local-review doctor\`, or raise --preflight-timeout)` to bare-timeout lines, pointing at the two most common fixes. Vendor-message-present timeouts (the v0.10.6 path) are unchanged — they already surface the vendor's actual text. Also the rendered timeout now reflects the configured `--preflight-timeout` value instead of always saying "10s"; pinned by `TestFormatProbeLine/timeout_renders_configured_timeout_not_default`.
+
 ## [0.10.7] - 2026-05-26
 
 **Theme: catch the docs up to the code.**

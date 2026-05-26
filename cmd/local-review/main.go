@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -98,6 +99,17 @@ type sharedFlags struct {
 	// Default is to run the probe; the flag exists as an escape
 	// hatch, not as a routine knob.
 	noPreflight bool
+
+	// v0.10.8 per-LLM probe deadline override. Zero falls back to
+	// cli.DefaultProbeTimeout (10s) — the empirical balance for a
+	// healthy CLI's startup + minimal response. Raise via
+	// `--preflight-timeout 20s` when claude-code is cold-starting
+	// on a slow disk / loaded host and consistently times out at
+	// 10s with no diagnostic captured (the silent-claude case the
+	// first-customer dogfood surfaced). 0 stays as "use the
+	// package default" rather than "infinite" — the probe always
+	// needs SOME cap or the v0.10.1 4-minute-gemini-hang regresses.
+	preflightTimeout time.Duration
 }
 
 func main() {
@@ -202,6 +214,17 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	// can't afford the ~1k probe tokens per LLM. Not a routine
 	// knob; the default-on behaviour is the recommended path.
 	root.PersistentFlags().BoolVar(&sf.noPreflight, "no-preflight", false, "skip the per-LLM readiness probe before review (default: probe enabled)")
+
+	// Per-LLM probe deadline override (v0.10.8). The 10s default
+	// is tight on purpose — too long defeats the "fast feedback"
+	// point of the probe. But some environments (corporate
+	// laptops with slow disks, cold-cache claude-code) consistently
+	// time out at 10s with NO vendor diagnostic captured because
+	// the CLI hasn't written anything to stderr yet. Letting the
+	// user bump to 15-20s rescues those runs without forcing
+	// --no-preflight (which loses the readiness signal entirely).
+	// Zero / unset falls back to cli.DefaultProbeTimeout.
+	root.PersistentFlags().DurationVar(&sf.preflightTimeout, "preflight-timeout", 0, "per-LLM probe deadline (default: 10s); raise when CLIs cold-start past the default")
 
 	// Group commands so --help reads as three sections (Review / Setup /
 	// Other) instead of one alphabetical wall. Cobra renders any command
