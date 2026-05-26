@@ -476,3 +476,27 @@ func TestCheckPromptOverride_StrayMarkdownDoesNotCount(t *testing.T) {
 		t.Errorf("README.md / TODO.md should not count as override files; expected warning, got: %q", buf.String())
 	}
 }
+
+// A detected-but-review-incapable CLI (antigravity) must classify as
+// statusExperimental — never statusReady — regardless of auth state,
+// so doctor surfaces it as "detected, experimental" and the runner
+// keeps it out of the fan-out. This pins the dogfood decision: agy's
+// agentic `--print` mode can't serve as a stateless reviewer backend.
+func TestClassify_AntigravityIsExperimentalNotReady(t *testing.T) {
+	llm := cli.LLM{Name: "antigravity", Path: "/usr/bin/agy", Version: "1.0.2", Available: true}
+	status, _ := classify(llm, "")
+	if status != statusExperimental {
+		t.Fatalf("antigravity should classify as statusExperimental, got %v", status)
+	}
+}
+
+// An experimental CLI that isn't even installed should still report
+// "not installed" (classify checks Availability first), so users get
+// install instructions rather than a confusing experimental notice.
+func TestClassify_AntigravityNotInstalledStillReportsNotInstalled(t *testing.T) {
+	llm := cli.LLM{Name: "antigravity", Available: false}
+	status, _ := classify(llm, "")
+	if status != statusNotInstalled {
+		t.Fatalf("uninstalled antigravity should be statusNotInstalled, got %v", status)
+	}
+}

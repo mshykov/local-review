@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -32,6 +33,12 @@ func TestNewInvoker(t *testing.T) {
 			wantType: "*cli.ClaudeInvoker",
 		},
 		{
+			name:     "antigravity invoker",
+			llm:      LLM{Name: "antigravity", Path: "/usr/bin/agy"},
+			wantNil:  false,
+			wantType: "*cli.AntigravityInvoker",
+		},
+		{
 			name:    "unknown invoker",
 			llm:     LLM{Name: "unknown", Path: "/usr/bin/unknown"},
 			wantNil: true,
@@ -49,6 +56,11 @@ func TestNewInvoker(t *testing.T) {
 			} else {
 				if invoker == nil {
 					t.Errorf("NewInvoker() = nil, want non-nil")
+				} else if gotType := fmt.Sprintf("%T", invoker); gotType != tt.wantType {
+					// Pin the dispatch: a non-nil invoker of the WRONG
+					// concrete type (e.g. NewInvoker routing "codex" to
+					// the gemini invoker) would otherwise pass silently.
+					t.Errorf("NewInvoker() type = %s, want %s", gotType, tt.wantType)
 				}
 			}
 		})
@@ -60,6 +72,35 @@ func TestInvokerInterface(t *testing.T) {
 	var _ Invoker = (*CodexInvoker)(nil)
 	var _ Invoker = (*GeminiInvoker)(nil)
 	var _ Invoker = (*ClaudeInvoker)(nil)
+	var _ Invoker = (*AntigravityInvoker)(nil)
+	// Antigravity must also expose its partial stderr (probe surfaces
+	// the OAuth "Authentication required" message on timeout).
+	var _ PartialStderrCapturer = (*AntigravityInvoker)(nil)
+}
+
+func TestAntigravityInvoker_Review(t *testing.T) {
+	invoker := &AntigravityInvoker{path: "/nonexistent/agy"}
+
+	if _, _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
+		t.Error("Expected error with non-existent path, got nil")
+	}
+}
+
+func TestAntigravityInvoker_RejectsOversizedPrompt(t *testing.T) {
+	// The prompt rides on argv (agy doesn't read stdin), so run()
+	// enforces a 256 KiB ceiling to fail loud instead of letting exec
+	// emit a cryptic "argument list too long". A >256 KiB prompt must
+	// be rejected before exec is even attempted — note the path is
+	// nonexistent, so reaching exec would surface a DIFFERENT error.
+	invoker := &AntigravityInvoker{path: "/nonexistent/agy"}
+	big := strings.Repeat("x", (256<<10)+1)
+	_, _, err := invoker.RunPrompt(context.Background(), big)
+	if err == nil {
+		t.Fatal("expected oversized-prompt rejection, got nil")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Errorf("expected size-limit error, got: %v", err)
+	}
 }
 
 func TestCodexInvoker_Review(t *testing.T) {

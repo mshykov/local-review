@@ -31,11 +31,13 @@ func doctorCmd() *cobra.Command {
 
 It detects:
   - Claude CLI (claude) — auth via 'claude login' or ANTHROPIC_API_KEY
-  - Gemini CLI (gemini) — auth via GEMINI_API_KEY (preferred) or 'gemini /auth' (Google OAuth)
+  - Gemini CLI (gemini) — auth via GEMINI_API_KEY (preferred) or 'gemini /auth' (Google OAuth). DEPRECATED: stops serving 2026-06-18; migrate to Antigravity.
   - OpenAI Codex CLI (codex) — auth via 'codex login' (ChatGPT Plus) or OPENAI_API_KEY
+  - Antigravity CLI (agy) — Google's Gemini-CLI successor; auth via Google OAuth ('agy' to log in)
 
 For each CLI, doctor prints one of:
   ✓ ready                — installed, version detected, authenticated
+  ◐ experimental         — detected but excluded from the review fan-out (e.g. agy)
   ⚠ install broken       — binary in PATH but version probe failed
   ⚠ not authenticated    — installed and working, but no credentials/key found
   ✗ not installed        — binary not in PATH
@@ -101,7 +103,11 @@ func runDoctor(out io.Writer) error {
 	llms := cli.DetectAllWithOverrides(overrides)
 
 	readyCount := 0
+	reviewCapable := 0
 	for _, llm := range llms {
+		if cli.IsReviewCapable(llm.Name) {
+			reviewCapable++
+		}
 		status, auth := classify(llm, customEnvVars[llm.Name])
 		if status == statusReady {
 			readyCount++
@@ -110,7 +116,11 @@ func runDoctor(out io.Writer) error {
 	}
 
 	fmt.Fprintln(w)
-	fmt.Fprintf(w, "%d/%d LLMs ready for multi-review.\n", readyCount, len(llms))
+	// Denominator is the review-capable count, not len(llms): an
+	// experimental CLI (e.g. antigravity) is detected but can't join
+	// the fan-out, so counting it would make "3/4 ready" read like a
+	// fixable gap when nothing is wrong.
+	fmt.Fprintf(w, "%d/%d LLMs ready for multi-review.\n", readyCount, reviewCapable)
 
 	// Issue #55: warn when prompts.pack_dir is configured but the
 	// directory is missing/empty. A misconfigured override is silent
@@ -265,6 +275,7 @@ const (
 	statusBrokenInstall                  // binary found, version probe failed
 	statusNotAuthed                      // installed + version-detected, but no credentials
 	statusNotInstalled                   // binary not in PATH
+	statusExperimental                   // installed but excluded from the review fan-out (cli.IsReviewCapable == false)
 )
 
 // classify returns both the bucket and the underlying authStatus so
@@ -280,6 +291,13 @@ func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 			return statusBrokenInstall, authStatus{}
 		}
 		return statusNotInstalled, authStatus{}
+	}
+	// Detected but review-incapable (e.g. antigravity): surface it as
+	// experimental without running an auth check — it never joins the
+	// fan-out, so its auth state is moot, and agy has no API-key env
+	// var to probe anyway.
+	if !cli.IsReviewCapable(llm.Name) {
+		return statusExperimental, authStatus{}
 	}
 	auth := checkAuth(llm.Name, customEnvVar)
 	if !auth.authenticated {
@@ -329,10 +347,37 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 		fmt.Fprintln(out, "    note:      version probe failed; reinstall the CLI")
 		printInstallInstructions(out, llm.Name)
 
+	case statusExperimental:
+		// Detected and usable as an interactive agent, but excluded
+		// from the review fan-out: agy's `--print` mode runs an
+		// autonomous agent loop (explores the repo, rebuilds its own
+		// diff, emits step-narration) rather than returning a clean
+		// review, so wiring it into the parallel fan-out ships an
+		// empty/garbled report. Surfaced so users know it's recognised
+		// and why it isn't reviewing — not a misconfiguration to fix.
+		fmt.Fprintf(out, "◐ %-15s v%-10s detected (review integration: experimental)\n", displayName, llm.Version)
+		fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
+		fmt.Fprintln(out, "    note:          agy is an autonomous agent; its --print mode does not yet")
+		fmt.Fprintln(out, "                   emit a clean review, so it is excluded from the review")
+		fmt.Fprintln(out, "                   fan-out. Tracked for a future release.")
+
 	case statusNotInstalled:
 		fmt.Fprintf(out, "✗ %-15s not installed\n", displayName)
 		printInstallInstructions(out, llm.Name)
 	}
+
+	// Gemini deprecation notice (added during the Antigravity
+	// succession work). Google's Gemini CLI stops serving
+	// Pro/Ultra/free-tier requests on 2026-06-18; Antigravity
+	// (`agy`) is the replacement. Surface this on every gemini row
+	// — ready or not — so users see the migration path before the
+	// cutoff strands their config. Removed once gemini support is
+	// dropped in a post-cutoff release.
+	if llm.Name == "gemini" {
+		fmt.Fprintln(out, "    ⚠ deprecated:  Gemini CLI stops serving on 2026-06-18. Migrate to Antigravity:")
+		fmt.Fprintln(out, "                   curl -fsSL https://antigravity.google/cli/install.sh | bash  (then `agy` to log in)")
+	}
+
 	fmt.Fprintln(out)
 }
 
@@ -344,6 +389,8 @@ func getDisplayName(name string) string {
 		return "Gemini CLI"
 	case "codex":
 		return "Codex CLI"
+	case "antigravity":
+		return "Antigravity CLI"
 	default:
 		return name
 	}
@@ -362,6 +409,9 @@ func printInstallInstructions(out io.Writer, name string) {
 		fmt.Fprintln(out, "    install:   npm install -g @openai/codex")
 		fmt.Fprintln(out, "    then:      codex login   (ChatGPT Plus subscription, $20/mo)")
 		fmt.Fprintln(out, "    or:        export OPENAI_API_KEY=...   (pay-per-token; usually cheaper for occasional use)")
+	case "antigravity":
+		fmt.Fprintln(out, "    install:   curl -fsSL https://antigravity.google/cli/install.sh | bash")
+		fmt.Fprintln(out, "    then:      agy   (Google OAuth login — successor to the Gemini CLI, which stops serving 2026-06-18)")
 	}
 }
 
@@ -392,6 +442,10 @@ func checkAuth(name, customEnvVar string) authStatus {
 	case "codex":
 		return checkCodexAuth(customEnvVar)
 	default:
+		// antigravity has no auth case: classify() short-circuits it to
+		// statusExperimental before reaching checkAuth (it never joins
+		// the fan-out, and agy authenticates via Google OAuth with no
+		// API-key env var to probe).
 		return authStatus{}
 	}
 }

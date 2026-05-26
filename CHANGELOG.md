@@ -7,13 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-05-26
+
+**Theme: prepare for the Gemini-CLI sunset.**
+
+Google retires the Gemini CLI (and Gemini Code Assist IDE extensions) for Pro/Ultra/free-tier requests on **2026-06-18**, with Antigravity (`agy`) as the successor. v0.11.0 detects `agy`, deprecates Gemini with an in-tool migration notice, and bundles the two unreleased v0.10.x probe-UX improvements (`--preflight-timeout` + the bare-timeout hint).
+
+The honest headline: `agy` is **detected but not yet a reviewer**. The authenticated dogfood showed its headless `--print` mode runs a full autonomous agent loop rather than answering with a review, so it's gated out of the fan-out until a structured-output invocation contract exists.
+
 ### Added
+
+- **Antigravity CLI (`agy`) detection — Google's Gemini-CLI successor (experimental).** `local-review doctor` now detects `agy` and shows it as a `◐ experimental` row. It is **deliberately excluded from the review fan-out** (`cli.IsReviewCapable("antigravity") == false`): an authenticated dogfood showed agy's headless `--print` mode runs a full autonomous agent loop — it explores the repo, reconstructs its own diff instead of using the one it's handed, and streams tool-step narration rather than returning a clean review (`review --only antigravity` produced 6.5 KB of narration, zero findings, and an empty merged report). The `AntigravityInvoker` ships as scaffolding for a future structured-output integration; `--only antigravity` refuses cleanly with an explicit "detected but excluded" note rather than running the broken path. Motivation: Google sunsets the Gemini CLI on **2026-06-18**, so detecting the successor early lets us iterate toward a working integration before the cutoff.
 
 - **`--preflight-timeout <duration>` flag.** First-customer dogfood on the v0.10.6 build showed `claude ✗ timeout after 10s` with no vendor diagnostic — claude-code's cold-start on a loaded host can exceed the 10s probe cap before the CLI writes anything to stderr. Bumping with `--preflight-timeout 20s` rescues those runs without forcing `--no-preflight` (which loses the readiness signal entirely). Default unchanged (10s); the flag exists as the "cold-start escape hatch" — `--no-preflight` is still the "CI / scripting" escape hatch.
 
 ### Changed
 
 - **Bare-timeout readiness line now includes a "no diagnostic captured" hint.** Pre-fix `claude ✗ timeout after 10s` read identically to a vendor-message-present timeout, leaving users unable to tell silent-claude apart from gemini-with-vendor-message. The readiness block now appends `(no diagnostic captured — run \`local-review doctor\`, or raise --preflight-timeout)` to bare-timeout lines, pointing at the two most common fixes. Vendor-message-present timeouts (the v0.10.6 path) are unchanged — they already surface the vendor's actual text. Also the rendered timeout now reflects the configured `--preflight-timeout` value instead of always saying "10s"; pinned by `TestFormatProbeLine/timeout_renders_configured_timeout_not_default`.
+
+### Deprecated
+
+- **Gemini CLI — stops serving 2026-06-18.** Google is retiring the Gemini CLI (and Gemini Code Assist IDE extensions) for Pro/Ultra/free-tier requests. `local-review doctor` now prints a migration notice on every gemini row pointing at Antigravity. Gemini keeps working until the cutoff; it will be removed in a later release. (Note: the migration target, `agy`, is detected but not yet a working reviewer — see Added.)
 
 ## [0.10.7] - 2026-05-26
 

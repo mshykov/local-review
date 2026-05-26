@@ -359,6 +359,14 @@ func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref s
 	applyFlagsToConfig(&cfg, sf)
 
 	active, configDisabled := pickAgents(cfg, sf)
+
+	// If --only named an experimental (non-review-capable) CLI, say so
+	// explicitly. Otherwise its absence — or an empty active set — reads
+	// like an auth failure rather than the intentional gate it is.
+	if excluded := experimentalOnlyNames(sf.only); len(excluded) > 0 {
+		fmt.Fprintf(os.Stderr, "Note: --only named experimental CLI(s) %v — detected but excluded from reviews (their agentic CLIs can't yet produce a clean review). See `local-review doctor`.\n\n", excluded)
+	}
+
 	if len(active) == 0 {
 		// `--only` is an explicit allow-list. If the user typed
 		// `--only clude` (typo) or named an unauthenticated agent, the

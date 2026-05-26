@@ -54,16 +54,19 @@ func TestDetect(t *testing.T) {
 func TestDetectAll(t *testing.T) {
 	llms := DetectAll()
 
-	// Should return exactly 3 LLMs (claude, gemini, codex)
-	if len(llms) != 3 {
-		t.Errorf("DetectAll() returned %d LLMs, want 3", len(llms))
+	// Should return exactly 4 LLMs (claude, gemini, codex, antigravity).
+	// antigravity (the `agy` binary) was added in the v0.10.x Gemini-CLI
+	// succession work — Google's Gemini CLI stops serving 2026-06-18.
+	if len(llms) != 4 {
+		t.Errorf("DetectAll() returned %d LLMs, want 4", len(llms))
 	}
 
 	// Check that all expected names are present
 	expectedNames := map[string]bool{
-		"claude": false,
-		"gemini": false,
-		"codex":  false,
+		"claude":      false,
+		"gemini":      false,
+		"codex":       false,
+		"antigravity": false,
 	}
 
 	for _, llm := range llms {
@@ -102,6 +105,51 @@ func TestDetect_UnknownVersionMarksUnavailable(t *testing.T) {
 	}
 	if llm.Available {
 		t.Errorf("Available = true for unknown-version CLI, want false")
+	}
+}
+
+func TestDetect_AntigravityResolvesAgyBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub uses /bin/sh; skip on windows")
+	}
+	// Detect("antigravity") must probe the `agy` binary, not a literal
+	// `antigravity` executable (which doesn't exist). A stub named `agy`
+	// on PATH that prints a parseable version proves the mapping: if
+	// Detect probed the raw key it would report not-installed.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "agy")
+	script := "#!/bin/sh\necho 'agy version 1.0.2'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir)
+
+	llm := Detect("antigravity")
+	if llm.Path == "" {
+		t.Fatalf("Detect(antigravity) probed the wrong binary — expected to resolve `agy`, got empty path")
+	}
+	if llm.Name != "antigravity" {
+		t.Errorf("Name = %q, want antigravity", llm.Name)
+	}
+}
+
+func TestIsReviewCapable(t *testing.T) {
+	// The review-capable CLIs may join the fan-out; antigravity is
+	// detected but excluded (its agentic --print can't produce a clean
+	// review — see the 2026-05 dogfood note in invoker.go). This pins
+	// the gate so a future "add agy to the fan-out" change has to
+	// consciously flip it.
+	tests := map[string]bool{
+		"claude":      true,
+		"gemini":      true,
+		"codex":       true,
+		"antigravity": false,
+		"unknown":     true, // unknown names default to capable (no false-exclusion of custom agents)
+	}
+	for name, want := range tests {
+		if got := IsReviewCapable(name); got != want {
+			t.Errorf("IsReviewCapable(%q) = %v, want %v", name, got, want)
+		}
 	}
 }
 

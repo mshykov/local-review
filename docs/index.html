@@ -512,9 +512,9 @@
       box-shadow: 0 2px 8px rgba(0,0,0,0.1);
       text-align: center;
       /* Flex column with centred main axis so the shorter cards
-         (Claude, Gemini) vertically centre their content within the
-         row's stretched height instead of leaving whitespace at the
-         bottom relative to the taller Codex card. */
+         (Claude, Antigravity, Gemini) vertically centre their content
+         within the row's stretched height instead of leaving whitespace
+         at the bottom relative to the taller Codex card. */
       display: flex;
       flex-direction: column;
       justify-content: center;
@@ -1130,10 +1130,16 @@
           <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Default enabled</p>
         </div>
         <div class="llm-card free">
-          <h3>Gemini</h3>
+          <h3>Antigravity <span style="font-size: 0.6em; color: #b7791f; font-weight: 600;">(experimental)</span></h3>
+          <p>Gemini CLI's successor (<code>agy</code>)</p>
+          <span class="badge badge-free">✓ FREE</span>
+          <p style="margin-top: 10px; font-size: 0.8em; color: #b7791f;">Detected by <code>doctor</code>; not yet in the review fan-out</p>
+        </div>
+        <div class="llm-card free">
+          <h3>Gemini <span style="font-size: 0.6em; color: #b7791f; font-weight: 600;">(deprecated)</span></h3>
           <p>Free API key from Google</p>
           <span class="badge badge-free">✓ FREE</span>
-          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Default enabled</p>
+          <p style="margin-top: 10px; font-size: 0.8em; color: #b7791f;">Stops serving 2026-06-18 — migrate to Antigravity</p>
         </div>
         <div class="llm-card paid">
           <h3>Codex</h3>
