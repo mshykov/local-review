@@ -231,7 +231,16 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// want the extra ~10s + ~1k tokens per LLM. Reserved escape
 	// hatch — not the recommended path.
 	if !sf.noPreflight {
-		active = runPreflightProbe(ctx, active)
+		// Resolve the per-LLM probe timeout: explicit --preflight-
+		// timeout wins; 0/unset falls back to cli.DefaultProbeTimeout
+		// (10s). The runner — not Probe — owns this resolution so
+		// the readiness-block render can show the actual configured
+		// value, not the package default.
+		probeTimeout := sf.preflightTimeout
+		if probeTimeout <= 0 {
+			probeTimeout = cli.DefaultProbeTimeout
+		}
+		active = runPreflightProbe(ctx, active, probeTimeout)
 		// Short-circuit on user interrupt / parent context cancel.
 		// Pre-fix the runner's only check was len(active) == 0,
 		// which would surface "every active LLM failed pre-flight"
@@ -692,14 +701,19 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 // with the per-LLM failure line.
 //
 // Goroutine + timeout posture: ProbeAll fans out internally with
-// per-LLM cli.DefaultProbeTimeout deadlines. Empirically 10s is
-// generous for a healthy CLI's startup + minimal response;
+// per-LLM deadlines bounded by `timeout`. The caller resolves
+// the actual value (--preflight-timeout flag overrides
+// cli.DefaultProbeTimeout); runPreflightProbe just receives it
+// pre-resolved so the readiness-block render can show the
+// CONFIGURED value, not a hard-coded default that would lie when
+// the user passed --preflight-timeout. Empirically the default
+// 10s is generous for a healthy CLI's startup + minimal response;
 // shortening it would catch slow but recoverable CLIs as
 // false-positive timeouts.
-func runPreflightProbe(ctx context.Context, active []cli.LLM) []cli.LLM {
+func runPreflightProbe(ctx context.Context, active []cli.LLM, timeout time.Duration) []cli.LLM {
 	fmt.Println("Pre-flight (probing auth + capacity):")
 	probeStart := time.Now()
-	results := cli.ProbeAll(ctx, active, cli.DefaultProbeTimeout)
+	results := cli.ProbeAll(ctx, active, timeout)
 	probeDuration := time.Since(probeStart)
 
 	// Build a quick name → index map so we can filter `active`
@@ -713,40 +727,10 @@ func runPreflightProbe(ctx context.Context, active []cli.LLM) []cli.LLM {
 		// a-glance UX, same as the per-LLM completion lines.
 		// printf's %-Ns padding does this in one format call.
 		name := r.LLM
-		switch r.Status {
-		case cli.ProbeReady:
-			fmt.Printf("  %-8s ✓ (%s)\n", name, r.Duration.Round(10*time.Millisecond))
+		line := formatProbeLine(r, timeout)
+		fmt.Println(line)
+		if r.Status == cli.ProbeReady {
 			readyByName[name] = true
-		case cli.ProbeTimeout:
-			// v0.10.6: if the probe captured a partial-stderr
-			// message (vendor printed its diagnostic before the
-			// hang), Probe will have populated r.Err with the
-			// vendor text in a "timeout after Ns — <vendor msg>"
-			// shape. Surface that message instead of the generic
-			// "timeout after 10s" so users see the actual cause
-			// (capacity exhausted, auth failed, etc.).
-			if r.Err != nil && strings.Contains(r.Err.Error(), "timeout after") {
-				fmt.Printf("  %-8s ✗ %s\n", name, singleLine(r.Err.Error()))
-			} else {
-				fmt.Printf("  %-8s ✗ timeout after %s\n", name, cli.DefaultProbeTimeout)
-			}
-		case cli.ProbeCanceled:
-			// Use a distinct glyph (⊘ / "canceled") so the user
-			// can tell "I pressed Ctrl+C" apart from "vendor
-			// timed out" at a glance. The runner short-circuits
-			// on ctx.Err() right after this loop returns, so this
-			// branch is mostly for the user's eyes — they see the
-			// readiness block render mid-cancel, then the run
-			// exits with the right reason.
-			fmt.Printf("  %-8s ⊘ canceled\n", name)
-		case cli.ProbeError:
-			// Surface the vendor's own error message (single line
-			// — multi-line stderr tails happen in the real-review
-			// path, not in the readiness block). Strip trailing
-			// whitespace + collapse newlines so a CLI that prints
-			// "error\n at line ..." renders as one tight line.
-			msg := singleLine(r.Err.Error())
-			fmt.Printf("  %-8s ✗ %s\n", name, msg)
 		}
 	}
 	fmt.Printf("Probed %d LLM%s in %s.\n\n", len(active), pluralS(len(active)), probeDuration.Round(10*time.Millisecond))
@@ -759,6 +743,58 @@ func runPreflightProbe(ctx context.Context, active []cli.LLM) []cli.LLM {
 		}
 	}
 	return ready
+}
+
+// formatProbeLine renders one row of the pre-flight readiness
+// block as a single string, ready for fmt.Println. Extracted from
+// the render loop so the rendering rules — especially the v0.10.8
+// "no diagnostic captured" hint and the v0.10.6 vendor-message
+// surfacing — can be unit-tested without needing to capture stdout.
+//
+// The padding width (8 chars on the agent name) matches the
+// per-LLM completion lines later in the run, so the readiness
+// block and the completion summary line up visually as a column.
+// All four ProbeStatus cases are exhaustive — unknown statuses
+// would render the empty default, which is harmless but tests
+// pin the exhaustiveness to catch a future enum addition that
+// forgets to update this function.
+func formatProbeLine(r cli.ProbeResult, timeout time.Duration) string {
+	name := r.LLM
+	switch r.Status {
+	case cli.ProbeReady:
+		return fmt.Sprintf("  %-8s ✓ (%s)", name, r.Duration.Round(10*time.Millisecond))
+	case cli.ProbeTimeout:
+		// v0.10.6: vendor message present → surface it (the
+		// "timeout after Ns — <vendor>" shape produced by
+		// Probe via probeTimeoutErr).
+		// v0.10.8: vendor message absent → append the
+		// "no diagnostic captured" hint so the user knows the
+		// difference between "vendor told us X" and "we got
+		// nothing." The hint also points at the most common
+		// fix (raise --preflight-timeout) so cold-start cases
+		// don't require digging through `doctor` output first.
+		if r.Err != nil && strings.Contains(r.Err.Error(), "timeout after") {
+			return fmt.Sprintf("  %-8s ✗ %s", name, singleLine(r.Err.Error()))
+		}
+		return fmt.Sprintf("  %-8s ✗ timeout after %s (no diagnostic captured — run `local-review doctor`, or raise --preflight-timeout)", name, timeout)
+	case cli.ProbeCanceled:
+		// Distinct glyph (⊘) so the user reads "I pressed
+		// Ctrl+C" rather than "vendor timed out" at a glance.
+		// The runner short-circuits on ctx.Err() right after
+		// the render loop, so this branch is mostly for the
+		// user's eyes mid-cancel.
+		return fmt.Sprintf("  %-8s ⊘ canceled", name)
+	case cli.ProbeError:
+		// Surface the vendor's own error message (single line
+		// — multi-line stderr tails belong in the real-review
+		// path, not the readiness block).
+		return fmt.Sprintf("  %-8s ✗ %s", name, singleLine(r.Err.Error()))
+	default:
+		// Unknown future ProbeStatus: render the agent with
+		// no glyph so the line still appears, surfacing the
+		// integer status via String() for diagnosis.
+		return fmt.Sprintf("  %-8s %s", name, r.Status)
+	}
 }
 
 // singleLine collapses any internal newline / carriage-return

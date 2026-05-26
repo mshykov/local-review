@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
@@ -822,6 +824,104 @@ func TestSingleLine_CollapsesAndTrims(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := singleLine(tc.in); got != tc.want {
 				t.Errorf("singleLine(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// formatProbeLine is the rendering rule for the pre-flight
+// readiness block. v0.10.8 added two behaviours worth pinning:
+// (a) the bare-timeout case appends a "no diagnostic captured"
+// hint pointing at doctor + --preflight-timeout (so users tell
+// silent-claude apart from vendor-message-present timeouts),
+// (b) the rendered timeout uses the CONFIGURED value, not the
+// hard-coded cli.DefaultProbeTimeout (so --preflight-timeout's
+// effect is visible in the rendered line).
+func TestFormatProbeLine(t *testing.T) {
+	cases := []struct {
+		name            string
+		result          cli.ProbeResult
+		timeout         time.Duration
+		wantContains    []string
+		wantNotContains []string
+		wantStartsWith  string // exact prefix check for column-padding
+	}{
+		{
+			name:           "ready_shows_glyph_and_duration",
+			result:         cli.ProbeResult{LLM: "claude", Status: cli.ProbeReady, Duration: 1234 * time.Millisecond},
+			timeout:        10 * time.Second,
+			wantContains:   []string{"claude", "✓", "1.23s"},
+			wantStartsWith: "  claude   ",
+		},
+		{
+			name: "timeout_with_vendor_message_surfaces_inline",
+			result: cli.ProbeResult{
+				LLM:    "gemini",
+				Status: cli.ProbeTimeout,
+				Err:    errors.New("timeout after 10s — Error: You have exhausted your capacity on this model."),
+			},
+			timeout:         10 * time.Second,
+			wantContains:    []string{"gemini", "✗", "exhausted your capacity", "timeout after"},
+			wantNotContains: []string{"no diagnostic captured"},
+		},
+		{
+			name:         "timeout_without_vendor_message_appends_hint",
+			result:       cli.ProbeResult{LLM: "claude", Status: cli.ProbeTimeout, Err: context.DeadlineExceeded},
+			timeout:      10 * time.Second,
+			wantContains: []string{"claude", "✗", "timeout after 10s", "no diagnostic captured", "local-review doctor", "--preflight-timeout"},
+		},
+		{
+			// v0.10.8 second behaviour: the rendered timeout
+			// reflects the configured value, not a hard-coded
+			// default. Pin via a non-default timeout so a future
+			// regression (someone re-hard-codes
+			// cli.DefaultProbeTimeout) fails this case.
+			name:         "timeout_renders_configured_timeout_not_default",
+			result:       cli.ProbeResult{LLM: "claude", Status: cli.ProbeTimeout, Err: context.DeadlineExceeded},
+			timeout:      20 * time.Second,
+			wantContains: []string{"timeout after 20s"},
+			// 10s would be the package default — must NOT appear.
+			wantNotContains: []string{"timeout after 10s"},
+		},
+		{
+			name:         "canceled_shows_distinct_glyph",
+			result:       cli.ProbeResult{LLM: "claude", Status: cli.ProbeCanceled},
+			timeout:      10 * time.Second,
+			wantContains: []string{"claude", "⊘", "canceled"},
+		},
+		{
+			name:         "error_shows_vendor_message",
+			result:       cli.ProbeResult{LLM: "gemini", Status: cli.ProbeError, Err: errors.New("authentication failed")},
+			timeout:      10 * time.Second,
+			wantContains: []string{"gemini", "✗", "authentication failed"},
+		},
+		{
+			// Error message with embedded newlines must
+			// collapse to single line (preserves the readiness
+			// block's column alignment).
+			name:            "error_collapses_internal_newlines",
+			result:          cli.ProbeResult{LLM: "codex", Status: cli.ProbeError, Err: errors.New("error\n  at line 42\n  reason: bad")},
+			timeout:         10 * time.Second,
+			wantContains:    []string{"codex", "error at line 42"},
+			wantNotContains: []string{"\n"}, // must not contain newline; would break alignment
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatProbeLine(tc.result, tc.timeout)
+			for _, sub := range tc.wantContains {
+				if !strings.Contains(got, sub) {
+					t.Errorf("formatProbeLine = %q, want it to contain %q", got, sub)
+				}
+			}
+			for _, sub := range tc.wantNotContains {
+				if strings.Contains(got, sub) {
+					t.Errorf("formatProbeLine = %q, want it NOT to contain %q", got, sub)
+				}
+			}
+			if tc.wantStartsWith != "" && !strings.HasPrefix(got, tc.wantStartsWith) {
+				t.Errorf("formatProbeLine = %q, want prefix %q (column padding)", got, tc.wantStartsWith)
 			}
 		})
 	}
