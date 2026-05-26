@@ -100,6 +100,24 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 	return active, configDisabled
 }
 
+// experimentalOnlyNames returns the --only entries that name a
+// detected-but-review-incapable CLI (cli.IsReviewCapable == false),
+// e.g. `--only antigravity`. The caller uses this to explain WHY a
+// named agent didn't run — without it, an all-experimental --only set
+// produces an empty active set and the generic "matched no ready LLMs
+// / check authentication" error, which misdiagnoses an intentional
+// gate as an auth problem.
+func experimentalOnlyNames(only string) []string {
+	var out []string
+	for name := range parseOnlyList(only) {
+		if !cli.IsReviewCapable(name) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out) // deterministic message ordering
+	return out
+}
+
 // parseOnlyList splits a comma-separated --only value into a set.
 // Trims whitespace per element and drops empty entries so callers don't
 // need a separate guard against `--only ""` or `--only " ,, "`.

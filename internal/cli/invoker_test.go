@@ -56,8 +56,10 @@ func TestNewInvoker(t *testing.T) {
 			} else {
 				if invoker == nil {
 					t.Errorf("NewInvoker() = nil, want non-nil")
-				}
-				if gotType := fmt.Sprintf("%T", invoker); gotType != tt.wantType {
+				} else if gotType := fmt.Sprintf("%T", invoker); gotType != tt.wantType {
+					// Pin the dispatch: a non-nil invoker of the WRONG
+					// concrete type (e.g. NewInvoker routing "codex" to
+					// the gemini invoker) would otherwise pass silently.
 					t.Errorf("NewInvoker() type = %s, want %s", gotType, tt.wantType)
 				}
 			}

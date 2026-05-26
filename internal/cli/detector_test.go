@@ -108,6 +108,31 @@ func TestDetect_UnknownVersionMarksUnavailable(t *testing.T) {
 	}
 }
 
+func TestDetect_AntigravityResolvesAgyBinary(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub uses /bin/sh; skip on windows")
+	}
+	// Detect("antigravity") must probe the `agy` binary, not a literal
+	// `antigravity` executable (which doesn't exist). A stub named `agy`
+	// on PATH that prints a parseable version proves the mapping: if
+	// Detect probed the raw key it would report not-installed.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "agy")
+	script := "#!/bin/sh\necho 'agy version 1.0.2'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir)
+
+	llm := Detect("antigravity")
+	if llm.Path == "" {
+		t.Fatalf("Detect(antigravity) probed the wrong binary — expected to resolve `agy`, got empty path")
+	}
+	if llm.Name != "antigravity" {
+		t.Errorf("Name = %q, want antigravity", llm.Name)
+	}
+}
+
 func TestIsReviewCapable(t *testing.T) {
 	// The review-capable CLIs may join the fan-out; antigravity is
 	// detected but excluded (its agentic --print can't produce a clean

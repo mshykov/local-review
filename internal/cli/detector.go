@@ -88,21 +88,14 @@ func DetectAll() []LLM {
 // non-standard paths got "✗ not installed" with no path-override
 // escape hatch.
 func DetectAllWithOverrides(overrides map[string]string) []LLM {
-	defaults := map[string]string{
-		"claude":      "claude",
-		"gemini":      "gemini",
-		"codex":       "codex",
-		"antigravity": "agy", // Google's Gemini-CLI successor; binary is `agy`
-	}
-	llms := []string{"claude", "gemini", "codex", "antigravity"}
-	results := make([]LLM, len(llms))
+	results := make([]LLM, len(supportedLLMs))
 	var wg sync.WaitGroup
 
-	for i, name := range llms {
+	for i, name := range supportedLLMs {
 		wg.Add(1)
 		go func(idx int, llmName string) {
 			defer wg.Done()
-			binaryName := defaults[llmName]
+			binaryName := binaryFor(llmName)
 			if override, ok := overrides[llmName]; ok && override != "" {
 				binaryName = override
 			}
@@ -114,11 +107,39 @@ func DetectAllWithOverrides(overrides map[string]string) []LLM {
 	return results
 }
 
+// supportedLLMs is the canonical detection order. Mirrored by
+// defaultBinaries below — keep the two in sync when adding a CLI.
+var supportedLLMs = []string{"claude", "gemini", "codex", "antigravity"}
+
+// defaultBinaries maps an LLM key to the executable name to probe.
+// Most are identical; antigravity is the exception (Google's
+// Gemini-CLI successor ships as `agy`). Single source of truth so
+// Detect() and DetectAllWithOverrides() can't drift on binary names.
+var defaultBinaries = map[string]string{
+	"claude":      "claude",
+	"gemini":      "gemini",
+	"codex":       "codex",
+	"antigravity": "agy",
+}
+
+// binaryFor returns the executable name to probe for an LLM key,
+// falling back to the key itself for unmapped names (custom agents).
+func binaryFor(name string) string {
+	if b, ok := defaultBinaries[name]; ok {
+		return b
+	}
+	return name
+}
+
 // Detect checks if a specific LLM CLI is installed and returns its metadata.
 // Available is true only if the binary is found AND its version probe
 // succeeded; see the LLM.Available field doc for the precise contract.
 func Detect(name string) LLM {
-	return detectWithBinary(name, name)
+	// Use the binary-name map (not the raw key) so Detect("antigravity")
+	// probes `agy`, matching DetectAllWithOverrides. Unmapped names fall
+	// back to the key itself, preserving the old behaviour for custom
+	// agents whose binary == name.
+	return detectWithBinary(name, binaryFor(name))
 }
 
 // detectWithBinary checks if a specific LLM CLI is installed using a custom binary name.
