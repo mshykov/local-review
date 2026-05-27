@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub Copilot CLI (`copilot`) as a live reviewer.** Copilot joins the parallel fan-out as a first-class agent alongside claude / gemini / codex (`cli.IsReviewCapable("copilot") == true`). A 2026-05 authenticated dogfood confirmed `copilot -p` returns a clean review on stdout (agent/usage telemetry stays on stderr) and reviews the diff it's handed rather than reconstructing its own — the opposite of antigravity, which is why Copilot ships live and `agy` stays experimental. `local-review doctor` shows it; auth is `copilot login` or a `COPILOT_GITHUB_TOKEN` (a bare `GH_TOKEN` / `GITHUB_TOKEN` works for the `copilot` CLI but won't auto-enable this paid reviewer); `--copilot-model` overrides the model. A default `llms.copilot` config entry ships so `merge.preferred_llm: copilot` validates out of the box. Token counts are parsed best-effort from Copilot's stderr usage summary. Each run consumes one Copilot **Premium request** (not BYOK-free).
+  - **Security:** Copilot is invoked tools-disabled (`--available-tools=`). The review prompt embeds an attacker-controllable diff, and `--allow-all-tools` would let a prompt-injecting diff drive Copilot's shell/write/url tools to mutate the workspace. A diff review needs no tools, so disabling them removes the vector while keeping non-interactive mode hang-free (`--no-ask-user` also stops it blocking on a question).
+
 ## [0.11.0] - 2026-05-26
 
 **Theme: prepare for the Gemini-CLI sunset.**

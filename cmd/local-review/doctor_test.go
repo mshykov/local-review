@@ -500,3 +500,74 @@ func TestClassify_AntigravityNotInstalledStillReportsNotInstalled(t *testing.T) 
 		t.Fatalf("uninstalled antigravity should be statusNotInstalled, got %v", status)
 	}
 }
+
+// --- Copilot -------------------------------------------------------
+
+// clearCopilotEnv neutralises the token env vars + COPILOT_HOME so the
+// dir-based path is exercised deterministically (CI often exports
+// GITHUB_TOKEN, which would otherwise short-circuit every case).
+func clearCopilotEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("COPILOT_GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("COPILOT_HOME", "")
+}
+
+// The Copilot-specific token auto-enables; the generic GH_TOKEN does
+// NOT (it's commonly set for `gh`/CI, and auto-enabling a PAID reviewer
+// on it is a surprise-cost footgun — see checkCopilotAuth).
+func TestCheckCopilotAuth_CopilotTokenAuthenticates(t *testing.T) {
+	withFakeHome(t) // empty fake home → no config dir, so the env is the only signal
+	clearCopilotEnv(t)
+	t.Setenv("COPILOT_GITHUB_TOKEN", "ghp_example")
+	got := checkCopilotAuth("")
+	if !got.authenticated {
+		t.Fatalf("COPILOT_GITHUB_TOKEN set should authenticate, got %+v", got)
+	}
+	if !strings.Contains(got.detail, "COPILOT_GITHUB_TOKEN") {
+		t.Errorf("detail should name the env var that satisfied auth: %q", got.detail)
+	}
+}
+
+// A bare GH_TOKEN (no Copilot-specific token, no login) must NOT
+// auto-enable Copilot — otherwise CI environments that export
+// GITHUB_TOKEN for `gh` would silently fire paid Premium requests.
+func TestCheckCopilotAuth_GenericGitHubTokenDoesNotAutoEnable(t *testing.T) {
+	withFakeHome(t) // empty fake home → no config dir
+	clearCopilotEnv(t)
+	t.Setenv("GH_TOKEN", "ghp_generic")
+	got := checkCopilotAuth("")
+	if got.authenticated {
+		t.Fatalf("a bare GH_TOKEN must NOT auto-enable the paid Copilot reviewer, got %+v", got)
+	}
+}
+
+// A bare/empty ~/.copilot must NOT read as authenticated — only a
+// populated dir (a real login leaves artifacts) counts.
+func TestCheckCopilotAuth_EmptyConfigDirNotAuthenticated(t *testing.T) {
+	home := withFakeHome(t)
+	clearCopilotEnv(t)
+	if err := os.MkdirAll(filepath.Join(home, ".copilot"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := checkCopilotAuth("")
+	if got.authenticated {
+		t.Fatalf("empty ~/.copilot should NOT authenticate, got %+v", got)
+	}
+	if got.hint == "" {
+		t.Error("not-authenticated result should carry a login hint")
+	}
+}
+
+// A populated ~/.copilot (a real login leaves state files) is treated
+// as logged in, with the probe verifying at review time.
+func TestCheckCopilotAuth_PopulatedConfigDirAuthenticates(t *testing.T) {
+	home := withFakeHome(t)
+	clearCopilotEnv(t)
+	writeFile(t, filepath.Join(home, ".copilot", "config.json"), `{"x":1}`)
+	got := checkCopilotAuth("")
+	if !got.authenticated {
+		t.Fatalf("populated ~/.copilot should authenticate, got %+v", got)
+	}
+}

@@ -5,6 +5,60 @@ import (
 	"testing"
 )
 
+func TestParseCopilotStderrTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		stderr   string
+		wantIn   int
+		wantOut  int
+		wantZero bool
+	}{
+		{
+			name:    "real summary line with k suffix and cached aside",
+			stderr:  "\n\nChanges    +0 -0\nRequests   1 Premium (4s)\nTokens     ↑ 16.9k (1.5k cached) • ↓ 20 (13 reasoning)\n",
+			wantIn:  16900,
+			wantOut: 20,
+		},
+		{
+			name:    "both sides plain integers",
+			stderr:  "Tokens     ↑ 512 • ↓ 103\n",
+			wantIn:  512,
+			wantOut: 103,
+		},
+		{
+			name:    "m suffix scales to millions",
+			stderr:  "Tokens ↑ 1.2m ↓ 3.4k",
+			wantIn:  1200000,
+			wantOut: 3400,
+		},
+		{
+			name:    "multiple token lines: last (cumulative) wins",
+			stderr:  "Tokens ↑ 1.0k ↓ 5\nTokens ↑ 16.9k ↓ 149\n",
+			wantIn:  16900,
+			wantOut: 149,
+		},
+		{
+			name:     "no tokens line degrades to zero",
+			stderr:   "Requests 1 Premium (4s)\n",
+			wantZero: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseCopilotStderrTokens(tt.stderr)
+			if tt.wantZero {
+				if !got.IsZero() {
+					t.Errorf("expected zero usage, got %+v", got)
+				}
+				return
+			}
+			if got.InputTokens != tt.wantIn || got.OutputTokens != tt.wantOut {
+				t.Errorf("got in=%d out=%d, want in=%d out=%d", got.InputTokens, got.OutputTokens, tt.wantIn, tt.wantOut)
+			}
+		})
+	}
+}
+
 func TestParseClaudeJSON_Success(t *testing.T) {
 	// Anthropic's documented shape from `claude --output-format json`:
 	// see https://docs.anthropic.com/en/docs/claude-code/sdk

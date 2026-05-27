@@ -88,6 +88,8 @@ func NewInvoker(llm LLM) Invoker {
 		return &CodexInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}
 	case "antigravity":
 		return &AntigravityInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}
+	case "copilot":
+		return &CopilotInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}
 	default:
 		return nil
 	}
@@ -479,4 +481,105 @@ func (a *AntigravityInvoker) run(ctx context.Context, prompt string) (string, To
 	}
 	// No structured output → return trimmed stdout, zero usage.
 	return strings.TrimSpace(stdout.String()), TokenUsage{}, nil
+}
+
+// CopilotInvoker runs the GitHub Copilot CLI (`copilot`), GitHub's
+// agentic coding assistant, in non-interactive mode as a review agent.
+//
+// Unlike Antigravity — the other agentic CLI we evaluated, gated out
+// because its `--print` emits agent narration instead of a review —
+// Copilot's `-p` mode returns a clean answer: the review prose goes to
+// STDOUT while agent/usage telemetry (MCP status, "Requests N Premium",
+// the token summary) goes to STDERR. The 2026-05 dogfood confirmed it
+// reviews the diff it's handed (`Changes +0 -0` — it does NOT
+// reconstruct its own) and catches planted bugs, so it joins the
+// active fan-out as a first-class agent.
+//
+// Invocation specifics (verified against `copilot --help` v1.0.54):
+//   - `-p, --prompt <text>` runs one prompt non-interactively. The
+//     prompt is a POSITIONAL value to the flag (not stdin), so it rides
+//     on argv — run() guards against ARG_MAX, with PreflightFilter as
+//     the upstream cap.
+//   - `--available-tools=` (empty whitelist) disables ALL tools. This
+//     is the security boundary: the diff in the prompt is untrusted, so
+//     we must NOT let a prompt-injecting diff drive Copilot's
+//     shell/write/url tools. With no tools available there's nothing to
+//     approve, so non-interactive mode needs no `--allow-all-tools` and
+//     can't hang on a permission prompt. See run() for the full note.
+//   - `--no-ask-user` stops the agent from blocking on a clarifying
+//     question in non-interactive mode.
+//   - `--no-color` strips ANSI so the captured stdout is clean markdown.
+//   - `--model <id>` selects the model (e.g. gpt-5.3-codex); empty =
+//     CLI default.
+//
+// Auth: a `copilot login` session stored under ~/.copilot (or
+// $COPILOT_HOME), OR a token in COPILOT_GITHUB_TOKEN. We inject the
+// resolved apiKey (when configured) as COPILOT_GITHUB_TOKEN. The
+// copilot CLI also reads GH_TOKEN / GITHUB_TOKEN, but doctor will NOT
+// auto-enable Copilot on those generic tokens (see checkCopilotAuth)
+// — they're too common in CI to safely activate a paid reviewer.
+//
+// Cost: each run consumes a Copilot "Premium request" from the user's
+// subscription — it is NOT BYOK-free like a Gemini API key. The token
+// summary on stderr is vendor-rounded; parseCopilotStderrTokens reads
+// it best-effort and degrades to zero usage if the format shifts.
+type CopilotInvoker struct {
+	path   string
+	model  string // copilot --model <id>; empty = CLI default
+	apiKey string // injected as COPILOT_GITHUB_TOKEN into subprocess env
+
+	// Embedded partial-stderr capture (v0.10.6) — lets the probe
+	// surface Copilot's own diagnostic on timeout. See
+	// partialStderrField in stderr_capture.go.
+	partialStderrField
+}
+
+func (c *CopilotInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
+	return c.run(ctx, buildReviewPrompt(systemPrompt)+"\n\n# Diff\n\n"+diff)
+}
+
+func (c *CopilotInvoker) RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error) {
+	return c.run(ctx, prompt)
+}
+
+// run drives `copilot -p <prompt> --available-tools= --no-ask-user
+// --no-color`. stdout is the clean review; stderr carries telemetry we
+// parse best-effort for token counts. See the type doc for the flag
+// rationale (notably why tools are disabled, not allow-all'd).
+func (c *CopilotInvoker) run(ctx context.Context, prompt string) (string, TokenUsage, error) {
+	// The prompt rides on argv (`-p <text>`), so guard against the OS
+	// ARG_MAX (~1 MiB on macOS) — an oversized prompt should fail with
+	// a clear message, not a cryptic "argument list too long". The
+	// runner's PreflightFilter is the upstream cap; this is the backstop.
+	const maxPromptBytes = 256 << 10
+	if len(prompt) > maxPromptBytes {
+		return "", TokenUsage{}, fmt.Errorf("copilot prompt too large: %d bytes (max %d)", len(prompt), maxPromptBytes)
+	}
+	// SECURITY: disable ALL tools (`--available-tools=` with an empty
+	// list is Copilot's whitelist-to-nothing). The review prompt embeds
+	// the diff, which is attacker-controllable (you review PRs from
+	// untrusted contributors) — running with `--allow-all-tools` would
+	// let a prompt-injecting diff drive Copilot's shell/write/url tools
+	// to mutate the workspace or exfiltrate. A diff review needs no
+	// tools (the dogfood confirmed `Changes +0 -0` even with tools
+	// allowed), so the safe contract is "no tools available." With none
+	// visible there's nothing to approve, so we don't need
+	// --allow-all-tools and there's no permission prompt to hang on.
+	// --no-ask-user additionally stops the agent from blocking on a
+	// clarifying question in non-interactive mode.
+	args := []string{"-p", prompt, "--available-tools=", "--no-ask-user", "--no-color"}
+	if c.model != "" {
+		args = append(args, "--model", c.model)
+	}
+	cmd := exec.CommandContext(ctx, c.path, args...)
+	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["copilot"], c.apiKey)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = c.teeStderr(&stderr)
+	if err := cmd.Run(); err != nil {
+		combined := append(stdout.Bytes(), stderr.Bytes()...)
+		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "copilot"))
+	}
+	// Clean review on stdout; usage summary on stderr (best-effort).
+	return strings.TrimSpace(stdout.String()), parseCopilotStderrTokens(stderr.String()), nil
 }

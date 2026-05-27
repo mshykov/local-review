@@ -76,11 +76,12 @@ type sharedFlags struct {
 	jsonOut     bool
 
 	// multi-LLM flags
-	only        string // comma-separated agent names to restrict the run to
-	claudeModel string
-	geminiModel string
-	codexModel  string
-	mergeWith   string
+	only         string // comma-separated agent names to restrict the run to
+	claudeModel  string
+	geminiModel  string
+	codexModel   string
+	copilotModel string
+	mergeWith    string
 
 	// v0.8 prompt-customization (issue #55). One-off override of
 	// cfg.Prompts.PackDir for a single review — useful for "review
@@ -177,6 +178,7 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.PersistentFlags().StringVar(&sf.claudeModel, "claude-model", "", "override claude's model")
 	root.PersistentFlags().StringVar(&sf.geminiModel, "gemini-model", "", "override gemini's model")
 	root.PersistentFlags().StringVar(&sf.codexModel, "codex-model", "", "override codex's model")
+	root.PersistentFlags().StringVar(&sf.copilotModel, "copilot-model", "", "override copilot's model")
 	root.PersistentFlags().StringVar(&sf.mergeWith, "merge-with", "", "agent to use for merging findings (default: auto)")
 
 	// prompt customization (issue #55).
@@ -414,6 +416,9 @@ func applyFlagsToConfig(cfg *config.Config, sf *sharedFlags) {
 	}
 	if sf.codexModel != "" {
 		setLLMModel(cfg, "codex", sf.codexModel)
+	}
+	if sf.copilotModel != "" {
+		setLLMModel(cfg, "copilot", sf.copilotModel)
 	}
 
 	// --merge-with overrides merge.preferred_llm. Without this branch,

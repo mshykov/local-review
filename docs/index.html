@@ -4,15 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>local-review - Privacy-First AI Code Reviews</title>
-  <meta name="description" content="Run AI code reviews locally with Claude, Gemini, and Codex in parallel. Privacy-first, no telemetry, no SaaS. Free options available.">
+  <meta name="description" content="Run AI code reviews locally with Claude, Gemini, Codex, and Copilot in parallel. Privacy-first, no telemetry, no SaaS. Free options available.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://mshykov.github.io/local-review/">
   <meta property="og:title" content="local-review — Privacy-First Multi-LLM Code Reviews">
-  <meta property="og:description" content="Run AI code reviews locally with Claude, Gemini, and Codex in parallel. Privacy-first, no telemetry, no SaaS. Free options available.">
+  <meta property="og:description" content="Run AI code reviews locally with Claude, Gemini, Codex, and Copilot in parallel. Privacy-first, no telemetry, no SaaS. Free options available.">
   <meta property="og:image" content="https://mshykov.github.io/local-review/social-preview.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="local-review — Privacy-First Multi-LLM Code Reviews">
-  <meta name="twitter:description" content="Run AI code reviews locally with Claude, Gemini, and Codex in parallel. Privacy-first, no telemetry, no SaaS. Free options available.">
+  <meta name="twitter:description" content="Run AI code reviews locally with Claude, Gemini, Codex, and Copilot in parallel. Privacy-first, no telemetry, no SaaS. Free options available.">
   <meta name="twitter:image" content="https://mshykov.github.io/local-review/social-preview.png">
   <link rel="canonical" href="https://mshykov.github.io/local-review/">
   <link rel="icon" type="image/svg+xml" href="favicon.svg?v=2">
@@ -961,10 +961,10 @@
         <div class="scope-col is">
           <h3>What it is</h3>
           <ul>
-            <li>Reads your auth state from local files only — env vars and parsed contents of <code>~/.claude/sessions/</code>, <code>~/.gemini/google_accounts.json</code>, <code>~/.codex/auth.json</code> (to detect login state); never transmits credentials</li>
+            <li>Reads your auth state from local files only — env vars and parsed contents of <code>~/.claude/sessions/</code>, <code>~/.gemini/google_accounts.json</code>, <code>~/.codex/auth.json</code>, plus the presence of a login session under <code>~/.copilot/</code> (to detect login state); never transmits credentials</li>
             <li>Each LLM call goes against the endpoint <em>you</em> configured — vendor CLI subprocess (multi-LLM mode) or HTTP to your <code>provider.base_url</code> (single-LLM fallback); your account, your key, your quota</li>
             <li>A local CLI that reviews a git diff using LLMs you've already authenticated</li>
-            <li>An orchestrator that runs Claude / Gemini / Codex CLIs in parallel and merges findings into one report</li>
+            <li>An orchestrator that runs Claude / Gemini / Codex / Copilot CLIs in parallel and merges findings into one report</li>
             <li>BYOK — your API key, requests go direct to the vendor (no middleman server)</li>
             <li>A pre-commit gate — exits non-zero on <code>major</code> / <code>critical</code> findings so hooks can block the commit</li>
             <li>A single Go binary — no Node, no Python, no Docker, no telemetry</li>
@@ -1007,7 +1007,7 @@
             </svg>
           </div>
           <h3>Multi-LLM</h3>
-          <p>Run Claude, Gemini, and Codex in parallel; findings consolidated into one report with deduplication. Pre-flight readiness probe (v0.10.1+) shows ✓/✗ per agent in seconds — no more 4-minute waits on a doomed LLM.</p>
+          <p>Run Claude, Gemini, Codex, and Copilot in parallel; findings consolidated into one report with deduplication. Pre-flight readiness probe (v0.10.1+) shows ✓/✗ per agent in seconds — no more 4-minute waits on a doomed LLM.</p>
         </div>
         <div class="feature">
           <div class="feature-icon">
@@ -1148,6 +1148,15 @@
           <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Enabled when authenticated</p>
           <p style="margin-top: 8px; font-size: 0.75em; color: #888; font-style: italic;">
             You pay OpenAI. <strong>local-review</strong> is 100% free.
+          </p>
+        </div>
+        <div class="llm-card paid">
+          <h3>Copilot</h3>
+          <p>GitHub Copilot subscription</p>
+          <span class="badge badge-paid">$ GitHub</span>
+          <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Enabled when authenticated</p>
+          <p style="margin-top: 8px; font-size: 0.75em; color: #888; font-style: italic;">
+            One Premium request per run. <strong>local-review</strong> is 100% free.
           </p>
         </div>
       </div>

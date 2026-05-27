@@ -39,6 +39,12 @@ func TestNewInvoker(t *testing.T) {
 			wantType: "*cli.AntigravityInvoker",
 		},
 		{
+			name:     "copilot invoker",
+			llm:      LLM{Name: "copilot", Path: "/usr/bin/copilot"},
+			wantNil:  false,
+			wantType: "*cli.CopilotInvoker",
+		},
+		{
 			name:    "unknown invoker",
 			llm:     LLM{Name: "unknown", Path: "/usr/bin/unknown"},
 			wantNil: true,
@@ -73,9 +79,12 @@ func TestInvokerInterface(t *testing.T) {
 	var _ Invoker = (*GeminiInvoker)(nil)
 	var _ Invoker = (*ClaudeInvoker)(nil)
 	var _ Invoker = (*AntigravityInvoker)(nil)
+	var _ Invoker = (*CopilotInvoker)(nil)
 	// Antigravity must also expose its partial stderr (probe surfaces
 	// the OAuth "Authentication required" message on timeout).
 	var _ PartialStderrCapturer = (*AntigravityInvoker)(nil)
+	// Copilot too — the probe surfaces its stderr diagnostic on timeout.
+	var _ PartialStderrCapturer = (*CopilotInvoker)(nil)
 }
 
 func TestAntigravityInvoker_Review(t *testing.T) {
@@ -93,6 +102,31 @@ func TestAntigravityInvoker_RejectsOversizedPrompt(t *testing.T) {
 	// be rejected before exec is even attempted — note the path is
 	// nonexistent, so reaching exec would surface a DIFFERENT error.
 	invoker := &AntigravityInvoker{path: "/nonexistent/agy"}
+	big := strings.Repeat("x", (256<<10)+1)
+	_, _, err := invoker.RunPrompt(context.Background(), big)
+	if err == nil {
+		t.Fatal("expected oversized-prompt rejection, got nil")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Errorf("expected size-limit error, got: %v", err)
+	}
+}
+
+func TestCopilotInvoker_Review(t *testing.T) {
+	invoker := &CopilotInvoker{path: "/nonexistent/copilot"}
+
+	if _, _, err := invoker.Review(context.Background(), "", "sample diff"); err == nil {
+		t.Error("Expected error with non-existent path, got nil")
+	}
+}
+
+func TestCopilotInvoker_RejectsOversizedPrompt(t *testing.T) {
+	// The prompt rides on argv (`-p <text>`), so run() enforces a
+	// 256 KiB ceiling to fail loud instead of letting exec emit a
+	// cryptic "argument list too long". Rejection must happen before
+	// exec — the path is nonexistent, so reaching exec would surface a
+	// DIFFERENT error.
+	invoker := &CopilotInvoker{path: "/nonexistent/copilot"}
 	big := strings.Repeat("x", (256<<10)+1)
 	_, _, err := invoker.RunPrompt(context.Background(), big)
 	if err == nil {
