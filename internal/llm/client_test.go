@@ -330,7 +330,7 @@ func TestIsLocalURL(t *testing.T) {
 		// widening. Tailscale tailnet IPs live here; Ollama-over-
 		// Tailscale is a common remote-Ollama setup.
 		{"http://100.64.0.1:11434/v1", true, "cgnat-lower-edge"},
-		{"http://100.107.222.78:11434/v1", true, "cgnat-tailscale-ollama"},
+		{"http://100.96.0.1:11434/v1", true, "cgnat-tailscale-ollama"},
 		{"http://100.127.255.254/v1", true, "cgnat-upper-edge-100.127"},
 		// Edges of 100.64/10 — must NOT match outside the /10 window.
 		{"http://100.63.255.254/v1", false, "100.63-just-below-cgnat"},
