@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Secret + personal-data guardrails (local pre-commit + CI).** A new `gitleaks`-based secret scan runs in CI (`.github/workflows/secret-scan.yml`, over full git history) and as a local pre-commit hook (`scripts/install-hooks.sh`). The hook also greps the staged *content* of changed files (not the raw diff, so a commit that *removes* a leaked value isn't blocked) against a **gitignored** `.git-personal-denylist` (seeded from `.git-personal-denylist.example`) so you can block your own IPs / hostnames / emails / names from ever being committed — those stay on your machine since CI can't hold them. `.gitleaks.toml` allowlists the repo's obviously-fake test placeholders so real secrets are still caught everywhere. Motivation: a maintainer's real Tailscale IP was committed into a test fixture in v0.13.0 — this is the backstop so it can't recur silently. (Secrets are reliably auto-detected; personal IPs/names rely on the denylist + the new CLAUDE.md rule 13, since a generic rule can't tell a real personal IP from the many legitimate example IPs in the test suite.)
 
+### Fixed
+
+- **`--only` now works with an all-disabled-LLM config.** `--only claude,codex,…` is an explicit allow-list that overrides config-level `enabled: false` for agent *selection*, but `cfg.Validate()` still hard-rejected an all-disabled config in the multi-LLM path (*"all LLMs are explicitly disabled"*), so the override didn't work end-to-end. Now `Validate` returns a sentinel `config.ErrAllLLMsDisabled` and the runner tolerates it specifically when `--only` is set. This enables a clean two-pass workflow from a **single** config (disable all LLMs + point `provider` at a local Ollama → `local-review review` runs Ollama; `local-review review --only claude,codex,copilot` runs those cloud agents). Every other config-validation failure (e.g. a bad `merge.preferred_llm`) still aborts. Surfaced by dogfooding the Ollama-then-cloud workflow.
+
 ## [0.13.0] - 2026-05-27
 
 **Theme: make the local/offline path actually work.**

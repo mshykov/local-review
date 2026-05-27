@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -728,6 +729,39 @@ func TestValidate_NoLLMsEnabled(t *testing.T) {
 	err := cfg.Validate()
 	if err == nil {
 		t.Error("expected error when no LLMs enabled")
+	}
+	// Must be the sentinel so the runner can errors.Is it and tolerate
+	// it specifically when --only explicitly selects agents (overriding
+	// config enable/disable). A bare fmt.Errorf string would force the
+	// runner to do a brittle string-match.
+	if !errors.Is(err, ErrAllLLMsDisabled) {
+		t.Errorf("expected ErrAllLLMsDisabled sentinel, got %v", err)
+	}
+}
+
+// When all LLMs are disabled AND another config error exists (here a
+// bogus merge.preferred_llm), Validate must return the OTHER error —
+// NOT ErrAllLLMsDisabled. The runner tolerates ErrAllLLMsDisabled under
+// --only, so if the all-disabled check short-circuited ahead of the
+// merge check, a real misconfig could be silently masked. This pins the
+// "all-disabled check runs last" ordering.
+func TestValidate_AllDisabledDoesNotMaskOtherErrors(t *testing.T) {
+	cfg := Defaults()
+	for name, llm := range cfg.LLMs {
+		llm.Enabled = boolPtr(false)
+		cfg.LLMs[name] = llm
+	}
+	cfg.Merge.PreferredLLM = "nonexistent" // a real misconfig that must surface
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected an error (bad preferred_llm)")
+	}
+	if errors.Is(err, ErrAllLLMsDisabled) {
+		t.Errorf("all-disabled check masked the merge.preferred_llm error; got sentinel, want the preferred_llm error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "preferred_llm") {
+		t.Errorf("expected a merge.preferred_llm error, got %v", err)
 	}
 }
 

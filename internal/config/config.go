@@ -651,28 +651,22 @@ func warnDeprecatedAPIKeys(cfg *Config) {
 // Returns an error if the config is invalid.
 // Note: This should be called explicitly by commands that need validation (e.g., multi),
 // not automatically in Load(), to avoid breaking v0-only users.
+// ErrAllLLMsDisabled is returned by Validate when every configured LLM
+// has an explicit `enabled: false`. The runner tolerates this
+// specifically when `--only` is set: `--only` is an explicit allow-list
+// that overrides config-level enable/disable for agent SELECTION, so an
+// all-disabled config is fine in that case (the user opted into the
+// named agents). Without the sentinel the runner couldn't tell this
+// benign case apart from a genuinely misconfigured default run.
+var ErrAllLLMsDisabled = errors.New("all LLMs are explicitly disabled; at least one must be enabled for multi-LLM mode")
+
 func (c *Config) Validate() error {
-	// v0.1: Check that at least one LLM is enabled
-	// Treat nil as enabled (default), only count explicit disables
-	hasEnabled := false
-	hasExplicitlyDisabled := 0
-
-	for _, llm := range c.LLMs {
-		// nil means enabled by default
-		if llm.Enabled == nil || *llm.Enabled {
-			hasEnabled = true
-		} else {
-			// Explicitly disabled
-			hasExplicitlyDisabled++
-		}
-	}
-
-	// Only error if user explicitly disabled all LLMs (not if LLMs map is empty)
-	if len(c.LLMs) > 0 && !hasEnabled && hasExplicitlyDisabled == len(c.LLMs) {
-		return fmt.Errorf("all LLMs are explicitly disabled; at least one must be enabled for multi-LLM mode")
-	}
-
-	// Validate merge config
+	// Validate merge config FIRST. ErrAllLLMsDisabled (below) is the one
+	// error the runner tolerates under --only, so it MUST be returned
+	// only when nothing else is wrong — otherwise tolerating it would
+	// mask an unrelated misconfig (e.g. a typo'd merge.preferred_llm).
+	// Checking everything else before the all-disabled short-circuit
+	// keeps the runner's "tolerate ErrAllLLMsDisabled" narrow and exact.
 	if c.Merge.PreferredLLM != "" && c.Merge.PreferredLLM != "auto" {
 		// Check that preferred LLM exists and is enabled
 		llm, ok := c.LLMs[c.Merge.PreferredLLM]
@@ -682,6 +676,24 @@ func (c *Config) Validate() error {
 		if llm.Enabled != nil && !*llm.Enabled {
 			return fmt.Errorf("merge.preferred_llm '%s' is disabled (must be enabled to use for merging)", c.Merge.PreferredLLM)
 		}
+	}
+
+	// v0.1: at least one LLM must be enabled. Treat nil as enabled
+	// (default); only count explicit disables. This check is LAST so
+	// the merge validation above is never short-circuited by it.
+	hasEnabled := false
+	hasExplicitlyDisabled := 0
+	for _, llm := range c.LLMs {
+		if llm.Enabled == nil || *llm.Enabled {
+			hasEnabled = true
+		} else {
+			hasExplicitlyDisabled++
+		}
+	}
+	// Only error if the user explicitly disabled all LLMs (not if the
+	// LLMs map is empty).
+	if len(c.LLMs) > 0 && !hasEnabled && hasExplicitlyDisabled == len(c.LLMs) {
+		return ErrAllLLMsDisabled
 	}
 
 	return nil
