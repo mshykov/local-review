@@ -181,7 +181,11 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		// run; `--only claude,codex,...` → those cloud agents). We only
 		// swallow THIS specific error; every other Validate failure
 		// (bad merge.preferred_llm, etc.) still aborts.
-		if !(sf.only != "" && errors.Is(err, config.ErrAllLLMsDisabled)) {
+		// Use parseOnlyList (not a bare sf.only != "") so a whitespace-
+		// only --only value is treated as "unset" — matching how
+		// selectAgents decides whether --only is in effect.
+		onlySet := len(parseOnlyList(sf.only)) > 0
+		if !(onlySet && errors.Is(err, config.ErrAllLLMsDisabled)) {
 			return fmt.Errorf("invalid config: %w", err)
 		}
 	}

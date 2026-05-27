@@ -733,7 +733,7 @@ func TestValidate_NoLLMsEnabled(t *testing.T) {
 	// Must be the sentinel so the runner can errors.Is it and tolerate
 	// it specifically when --only explicitly selects agents (overriding
 	// config enable/disable). A bare fmt.Errorf string would force the
-	// runner to brittly string-match.
+	// runner to do a brittle string-match.
 	if !errors.Is(err, ErrAllLLMsDisabled) {
 		t.Errorf("expected ErrAllLLMsDisabled sentinel, got %v", err)
 	}
