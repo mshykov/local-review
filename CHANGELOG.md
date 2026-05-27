@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-05-27
+
+**Theme: make the local/offline path actually work.**
+
+Two bugs the cloud multi-LLM path had hidden, both surfaced by pointing the single-LLM fallback at an Ollama running over Tailscale: tailnet IPs weren't recognised as local (so they demanded a key Ollama never wanted), and the language packs never actually shipped the JSON schema in single-LLM mode (so weak local models returned unparseable output). Strong cloud models had been papering over the second one by inferring the schema.
+
 ### Fixed
 
 - **Ollama over Tailscale now works without a dummy `api_key`.** `isLocalURL` only treated RFC1918 + IPv6 ULA/link-local as local, but Tailscale assigns IPs from `100.64.0.0/10` (RFC 6598 CGNAT), which Go's `IsPrivate()` doesn't cover. Pointing `provider.base_url` at a Tailscale Ollama (`http://100.x.x.x:11434/v1`) hard-errored "no API key" despite Ollama needing none. Added a `100.64.0.0/10` check; the corporate-gateway invariant is preserved (the bypass still only fires when no key is configured). Surfaced by an Ollama-over-Tailscale dogfood.
