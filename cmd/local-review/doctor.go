@@ -391,6 +391,8 @@ func getDisplayName(name string) string {
 		return "Codex CLI"
 	case "antigravity":
 		return "Antigravity CLI"
+	case "copilot":
+		return "Copilot CLI"
 	default:
 		return name
 	}
@@ -412,6 +414,10 @@ func printInstallInstructions(out io.Writer, name string) {
 	case "antigravity":
 		fmt.Fprintln(out, "    install:   curl -fsSL https://antigravity.google/cli/install.sh | bash")
 		fmt.Fprintln(out, "    then:      agy   (Google OAuth login — successor to the Gemini CLI, which stops serving 2026-06-18)")
+	case "copilot":
+		fmt.Fprintln(out, "    install:   npm install -g @github/copilot")
+		fmt.Fprintln(out, "    then:      copilot login   (requires a GitHub Copilot subscription)")
+		fmt.Fprintln(out, "    or:        export COPILOT_GITHUB_TOKEN=...   (headless / CI — a bare GH_TOKEN won't auto-enable this paid reviewer)")
 	}
 }
 
@@ -441,6 +447,8 @@ func checkAuth(name, customEnvVar string) authStatus {
 		return checkGeminiAuth(customEnvVar)
 	case "codex":
 		return checkCodexAuth(customEnvVar)
+	case "copilot":
+		return checkCopilotAuth(customEnvVar)
 	default:
 		// antigravity has no auth case: classify() short-circuits it to
 		// statusExperimental before reaching checkAuth (it never joins
@@ -607,5 +615,72 @@ func checkCodexAuth(customEnvVar string) authStatus {
 	return authStatus{
 		authenticated: false,
 		hint:          fmt.Sprintf("run 'codex login' (ChatGPT Plus, $20/mo) — or export %s=... (pay-per-token, usually cheaper)", envVar),
+	}
+}
+
+// copilotConfigDir returns Copilot CLI's config/login home — $COPILOT_HOME
+// when set, else ~/.copilot (honoring LOCAL_REVIEW_AUTH_HOME in tests via
+// authHomeDir). Empty when no home can be resolved.
+func copilotConfigDir() string {
+	if d := strings.TrimSpace(os.Getenv("COPILOT_HOME")); d != "" {
+		return d
+	}
+	home := authHomeDir()
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".copilot")
+}
+
+// checkCopilotAuth reports the Copilot CLI's auth state. Copilot has no
+// readable token file we can validate directly (login credentials live
+// in its own store), so — like the Claude keychain case — doctor uses a
+// proxy and the pre-flight probe is the real gate at review time.
+//
+// Precedence:
+//  1. The Copilot-specific token env var — COPILOT_GITHUB_TOKEN by
+//     default, or a user-configured api_key_env. Generic GH_TOKEN /
+//     GITHUB_TOKEN are deliberately NOT honored (see below).
+//  2. A populated `copilot login` session under ~/.copilot ($COPILOT_HOME):
+//     reported authenticated, with the detail noting probe-time verification.
+//  3. Otherwise not authenticated, with a login/token hint that names
+//     the resolved env var.
+func checkCopilotAuth(customEnvVar string) authStatus {
+	// ONLY the Copilot-specific token (COPILOT_GITHUB_TOKEN by default,
+	// or a user-configured api_key_env) auto-enables Copilot. We
+	// deliberately do NOT honor the generic GH_TOKEN / GITHUB_TOKEN
+	// here: those are routinely set for `gh` and CI for unrelated
+	// reasons, and treating them as Copilot auth would silently pull a
+	// PAID reviewer (one Premium request per run) into the fan-out —
+	// a surprise-cost footgun flagged by the multi-LLM self-review.
+	// The copilot CLI itself still reads GH_TOKEN/GITHUB_TOKEN at run
+	// time; we just won't auto-activate on them. To opt in, set
+	// COPILOT_GITHUB_TOKEN or run `copilot login`.
+	envVar := resolveEnvVar("copilot", customEnvVar)
+	if envVar == "" {
+		envVar = "COPILOT_GITHUB_TOKEN" // defensive: resolveEnvVar always returns this for copilot
+	}
+	if strings.TrimSpace(os.Getenv(envVar)) != "" {
+		return authStatus{
+			authenticated: true,
+			detail:        envVar + " env var set",
+		}
+	}
+	// Stored `copilot login` session. A NON-EMPTY config dir is the
+	// proxy (we don't read the credentials themselves); the pre-flight
+	// probe confirms it's actually live. We require non-empty rather
+	// than mere existence so a bare/stale `~/.copilot` (created but
+	// never logged in) doesn't read as a false "authenticated."
+	if dir := copilotConfigDir(); dir != "" {
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+			return authStatus{
+				authenticated: true,
+				detail:        "login detected in " + dir + " (verified at review time by the pre-flight probe)",
+			}
+		}
+	}
+	return authStatus{
+		authenticated: false,
+		hint:          fmt.Sprintf("run 'copilot login' (GitHub Copilot subscription) — or export %s=... (a bare GH_TOKEN won't auto-enable a paid reviewer)", envVar),
 	}
 }

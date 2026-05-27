@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -76,11 +77,12 @@ type sharedFlags struct {
 	jsonOut     bool
 
 	// multi-LLM flags
-	only        string // comma-separated agent names to restrict the run to
-	claudeModel string
-	geminiModel string
-	codexModel  string
-	mergeWith   string
+	only         string // comma-separated agent names to restrict the run to
+	claudeModel  string
+	geminiModel  string
+	codexModel   string
+	copilotModel string
+	mergeWith    string
 
 	// v0.8 prompt-customization (issue #55). One-off override of
 	// cfg.Prompts.PackDir for a single review — useful for "review
@@ -177,6 +179,7 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	root.PersistentFlags().StringVar(&sf.claudeModel, "claude-model", "", "override claude's model")
 	root.PersistentFlags().StringVar(&sf.geminiModel, "gemini-model", "", "override gemini's model")
 	root.PersistentFlags().StringVar(&sf.codexModel, "codex-model", "", "override codex's model")
+	root.PersistentFlags().StringVar(&sf.copilotModel, "copilot-model", "", "override copilot's model")
 	root.PersistentFlags().StringVar(&sf.mergeWith, "merge-with", "", "agent to use for merging findings (default: auto)")
 
 	// prompt customization (issue #55).
@@ -405,15 +408,20 @@ func applyFlagsToConfig(cfg *config.Config, sf *sharedFlags) {
 		cfg.Review.MaxFindings = sf.maxFindings
 	}
 
-	// Per-agent model overrides
-	if sf.claudeModel != "" {
-		setLLMModel(cfg, "claude", sf.claudeModel)
+	// Per-agent model overrides. TrimSpace so a whitespace-only flag
+	// value (e.g. `--copilot-model " "`) is treated as "unset" rather
+	// than forwarded as a blank model id the CLI would choke on.
+	if m := strings.TrimSpace(sf.claudeModel); m != "" {
+		setLLMModel(cfg, "claude", m)
 	}
-	if sf.geminiModel != "" {
-		setLLMModel(cfg, "gemini", sf.geminiModel)
+	if m := strings.TrimSpace(sf.geminiModel); m != "" {
+		setLLMModel(cfg, "gemini", m)
 	}
-	if sf.codexModel != "" {
-		setLLMModel(cfg, "codex", sf.codexModel)
+	if m := strings.TrimSpace(sf.codexModel); m != "" {
+		setLLMModel(cfg, "codex", m)
+	}
+	if m := strings.TrimSpace(sf.copilotModel); m != "" {
+		setLLMModel(cfg, "copilot", m)
 	}
 
 	// --merge-with overrides merge.preferred_llm. Without this branch,

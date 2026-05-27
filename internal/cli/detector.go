@@ -8,7 +8,7 @@ import (
 
 // LLM represents a detected CLI tool with its metadata.
 type LLM struct {
-	Name    string // "claude", "gemini", "codex", "antigravity"
+	Name    string // "claude", "gemini", "codex", "antigravity", "copilot"
 	Path    string // full path to the binary (e.g., "/usr/local/bin/claude")
 	Version string // version string (e.g., "2.1.0"), or "unknown" if version probe failed
 	// Available is true only when both the binary is in PATH AND the
@@ -65,6 +65,14 @@ var CanonicalAPIKeyEnv = map[string]string{
 	"claude": "ANTHROPIC_API_KEY",
 	"gemini": "GEMINI_API_KEY",
 	"codex":  "OPENAI_API_KEY",
+	// Copilot reads COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN (in
+	// that precedence). We use the most specific one as both the
+	// injection target and the doctor auto-enable signal — NOT the
+	// generic GH_TOKEN/GITHUB_TOKEN, which are commonly present for
+	// `gh`/CI and must not silently pull a PAID reviewer into the
+	// fan-out. (Login via `copilot login` works without any env var;
+	// the token path is the headless / CI escape hatch.)
+	"copilot": "COPILOT_GITHUB_TOKEN",
 }
 
 // DetectAll checks for all supported LLM CLIs and returns their status.
@@ -109,7 +117,7 @@ func DetectAllWithOverrides(overrides map[string]string) []LLM {
 
 // supportedLLMs is the canonical detection order. Mirrored by
 // defaultBinaries below — keep the two in sync when adding a CLI.
-var supportedLLMs = []string{"claude", "gemini", "codex", "antigravity"}
+var supportedLLMs = []string{"claude", "gemini", "codex", "antigravity", "copilot"}
 
 // defaultBinaries maps an LLM key to the executable name to probe.
 // Most are identical; antigravity is the exception (Google's
@@ -120,6 +128,7 @@ var defaultBinaries = map[string]string{
 	"gemini":      "gemini",
 	"codex":       "codex",
 	"antigravity": "agy",
+	"copilot":     "copilot",
 }
 
 // binaryFor returns the executable name to probe for an LLM key,

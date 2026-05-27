@@ -1280,7 +1280,17 @@ func sortByRoster(results []multi.ReviewResult, available []cli.LLM) []multi.Rev
 }
 
 // selectMergeLLM picks which agent merges findings. Priority:
-// caller-preferred → auto (claude > codex > gemini) → first eligible.
+// caller-preferred → auto (claude > codex > copilot > gemini) → first
+// eligible.
+//
+// Order rationale: claude and codex are the proven merge workhorses
+// (since v0.5). copilot ranks next — it produces clean mergeable
+// output (unlike antigravity) and is a current, supported agent.
+// gemini is LAST because it's deprecated (Google stops serving it
+// 2026-06-18); a default run shouldn't lean on a tool that's about to
+// go away, even though it's the nominally "free" option. (This is
+// only the auto fallback — `--merge-with`/`merge.preferred_llm`
+// override it, and it merely picks the merger, not the reviewer set.)
 //
 // antigravity is intentionally absent from the auto chain: it never
 // enters the review fan-out (cli.IsReviewCapable == false) so it can't
@@ -1313,7 +1323,7 @@ func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred
 			return &llm
 		}
 	}
-	for _, name := range []string{"claude", "codex", "gemini"} {
+	for _, name := range []string{"claude", "codex", "copilot", "gemini"} {
 		if llm, ok := eligible[name]; ok {
 			return &llm
 		}
@@ -1322,7 +1332,7 @@ func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred
 	// not results order. With v0.6.7 streaming, `results` is in
 	// completion order — iterating it for the fallback would make
 	// merge-LLM selection timing-dependent for custom-named agents
-	// (where the auto claude>codex>gemini chain doesn't match).
+	// (where the auto claude>codex>copilot>gemini chain doesn't match).
 	// Roster order (`available`) is deterministic across runs.
 	for _, llm := range available {
 		if l, ok := eligible[llm.Name]; ok {

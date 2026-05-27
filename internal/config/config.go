@@ -182,6 +182,18 @@ func Defaults() Config {
 				APIKeyEnv:  "OPENAI_API_KEY",
 				TimeoutSec: 600,
 			},
+			"copilot": {
+				// Enabled nil — "run if active", same as codex. copilot is
+				// paid (one Premium request per run), but only runs when
+				// explicitly authenticated. Defined here so
+				// `merge.preferred_llm: copilot` validates without the user
+				// having to hand-add an llms.copilot block. APIKeyEnv is the
+				// Copilot-specific token var (NOT GH_TOKEN/GITHUB_TOKEN —
+				// those are too generic to auto-enable a paid reviewer).
+				CLIPath:    "copilot",
+				APIKeyEnv:  "COPILOT_GITHUB_TOKEN",
+				TimeoutSec: 600,
+			},
 		},
 		Merge: MergeConfig{
 			PreferredLLM:       "auto",

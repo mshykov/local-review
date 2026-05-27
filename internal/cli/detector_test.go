@@ -54,11 +54,13 @@ func TestDetect(t *testing.T) {
 func TestDetectAll(t *testing.T) {
 	llms := DetectAll()
 
-	// Should return exactly 4 LLMs (claude, gemini, codex, antigravity).
-	// antigravity (the `agy` binary) was added in the v0.10.x Gemini-CLI
-	// succession work — Google's Gemini CLI stops serving 2026-06-18.
-	if len(llms) != 4 {
-		t.Errorf("DetectAll() returned %d LLMs, want 4", len(llms))
+	// Should return exactly 5 LLMs (claude, gemini, codex, antigravity,
+	// copilot). antigravity (`agy`) was added in the Gemini-CLI
+	// succession work; copilot (GitHub Copilot CLI) joined the active
+	// fan-out once its non-interactive `-p` mode proved to return clean
+	// reviews (unlike agy, which stays experimental).
+	if len(llms) != 5 {
+		t.Errorf("DetectAll() returned %d LLMs, want 5", len(llms))
 	}
 
 	// Check that all expected names are present
@@ -67,6 +69,7 @@ func TestDetectAll(t *testing.T) {
 		"gemini":      false,
 		"codex":       false,
 		"antigravity": false,
+		"copilot":     false,
 	}
 
 	for _, llm := range llms {
@@ -143,6 +146,7 @@ func TestIsReviewCapable(t *testing.T) {
 		"claude":      true,
 		"gemini":      true,
 		"codex":       true,
+		"copilot":     true,
 		"antigravity": false,
 		"unknown":     true, // unknown names default to capable (no false-exclusion of custom agents)
 	}

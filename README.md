@@ -36,7 +36,7 @@ Reviewer tools today are mostly **SaaS** (your code leaves the building), **CI-o
 | ✅ What it **is** | ❌ What it **isn't** |
 | --- | --- |
 | A local CLI that reviews a git diff using LLMs you've already authenticated | A replacement for Claude's `/review` or `/simplify` — those are single-prompt commands; this is multi-LLM diff orchestration |
-| An orchestrator that runs Claude / Gemini / Codex CLIs in parallel and merges findings into one report | "Code never leaves your machine" — the diff still goes to whichever LLM you authenticate (run Ollama for true offline) |
+| An orchestrator that runs Claude / Gemini / Codex / Copilot CLIs in parallel and merges findings into one report | "Code never leaves your machine" — the diff still goes to whichever LLM you authenticate (run Ollama for true offline) |
 | BYOK — your API key, requests go direct to the vendor (no middleman server) | A SaaS — no hosted dashboard, no account, no team collaboration features |
 | A pre-commit gate — exits non-zero on `major` / `critical` findings so hooks can block the commit | A linter or static analyzer — it's LLM-based, with the heuristic tradeoffs that implies |
 | A single Go binary — no Node, no Python, no Docker, no telemetry | A chat interface — reads a diff, prints findings, exits |
@@ -87,7 +87,7 @@ npm install -g @anthropic-ai/claude-code
 claude login
 ```
 
-Or use Gemini (free key — *deprecated, stops serving 2026-06-18*) or Codex (ChatGPT Plus / OpenAI API). Any combination works — every authenticated LLM joins the review automatically. `local-review doctor` shows the state.
+Or use Codex (ChatGPT Plus / OpenAI API), Copilot (GitHub Copilot subscription), or Gemini (free key — *deprecated, stops serving 2026-06-18*). Any combination works — every authenticated LLM joins the review automatically. `local-review doctor` shows the state.
 
 **3. (Optional) Add a `.local-review.yml` to your repo** for house rules:
 
@@ -137,9 +137,10 @@ All three apply to both the multi-LLM CLI path and the single-LLM fallback so cu
 
 ---
 
-> ✨ **What's new in v0.11.** Google retires the Gemini CLI on **2026-06-18**; v0.11 gets you ahead of the sunset:
+> ✨ **What's new in v0.12.** A new reviewer and a clear migration path off the dying Gemini CLI:
 >
-> - **Antigravity (`agy`) detection + Gemini deprecation.** `local-review doctor` now detects Google's Gemini-CLI successor `agy` and flags Gemini as deprecated with a migration notice. Caveat: `agy` is **detected but not yet a reviewer** — its headless `--print` runs an autonomous agent loop (explores the repo, rebuilds its own diff, emits narration) instead of returning a clean review, so it's gated out of the fan-out as `◐ experimental` until a structured-output contract lands. Keep using Claude / Codex (and Gemini until the cutoff).
+> - **GitHub Copilot CLI joins the fan-out.** `copilot` is now a first-class reviewer alongside Claude / Gemini / Codex — `copilot login` (or a `COPILOT_GITHUB_TOKEN`) and it joins automatically. We run it tools-disabled (`--available-tools=`) so a prompt-injecting diff can't drive its shell/write tools; each run costs one Copilot Premium request.
+> - **Antigravity (`agy`) detection + Gemini deprecation (v0.11).** `local-review doctor` detects Google's Gemini-CLI successor `agy` and flags Gemini as deprecated (stops serving **2026-06-18**) with a migration notice. Caveat: `agy` is **detected but not yet a reviewer** — its headless `--print` runs an autonomous agent loop instead of returning a clean review, so it's gated out as `◐ experimental` until a structured-output contract lands.
 >
 > **Plus the v0.10.x themes** (six patches since v0.9):
 >
@@ -178,8 +179,9 @@ local-review review --merge-with claude
 |-----|-------------|--------------|
 | **Claude** | ✅ Free tier via `claude login` (claude.ai account) | `npm install -g @anthropic-ai/claude-code` |
 | **Gemini** *(deprecated — stops serving 2026-06-18)* | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` |
-| **Antigravity** *(detected — review integration experimental)* | Google OAuth (`agy` login) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (binary: `agy`) |
 | **Codex** | ⚠️ ChatGPT Plus ($20/mo) **or** OpenAI API key (pay-per-token) | `npm install -g @openai/codex` |
+| **Copilot** | ⚠️ GitHub Copilot subscription (one Premium request per run) | `npm install -g @github/copilot` |
+| **Antigravity** *(detected — review integration experimental)* | Google OAuth (`agy` login) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (binary: `agy`) |
 
 > **Gemini is deprecated.** Google's Gemini CLI stops serving Pro/Ultra/free-tier requests on **2026-06-18**. Antigravity (`agy`) is Google's successor and `local-review doctor` will detect it, but **agy is not yet wired into the review fan-out**: its headless `--print` mode runs an autonomous agent loop (explores the repo, rebuilds its own diff, emits step-narration) instead of returning a clean review, so it's surfaced as *experimental* until a structured-output path is found. Until then, keep using Gemini (until the cutoff) or any of the other CLIs.
 
@@ -232,6 +234,7 @@ The probe gives you back the time the v0.10.0 build spent waiting on doomed LLMs
 | **Claude** | `claude login` — Anthropic OAuth, works with the free tier on a claude.ai account | `export ANTHROPIC_API_KEY=...` (paid API access) |
 | **Gemini** *(deprecated — stops serving 2026-06-18)* | `export GEMINI_API_KEY=...` — free key from [Google AI Studio](https://aistudio.google.com/apikey) | `gemini /auth` for Google OAuth |
 | **Codex** | `codex login` — uses your ChatGPT Plus subscription ($20/mo) | `export OPENAI_API_KEY=...` — pay-per-token; usually **cheaper** for occasional review use |
+| **Copilot** | `copilot login` — uses your GitHub Copilot subscription | `export COPILOT_GITHUB_TOKEN=...` (headless / CI). A bare `GH_TOKEN` / `GITHUB_TOKEN` works for the `copilot` CLI itself but **won't auto-enable** this paid reviewer — set the Copilot-specific token or log in. |
 
 Run `local-review doctor` to see which CLIs you have installed and authenticated. Each row that isn't ✓ ready tells you exactly what to fix.
 
@@ -364,7 +367,7 @@ Common flags (review):
 | Flag | Purpose |
 |---|---|
 | `--only <list>` | Comma-separated agents to run (e.g. `claude,gemini`); overrides config |
-| `--claude-model <id>` | Override claude's model (same for `--gemini-model`, `--codex-model`) |
+| `--claude-model <id>` | Override claude's model (same for `--gemini-model`, `--codex-model`, `--copilot-model`) |
 | `--merge-with <agent>` | Pick which agent merges findings (default: auto) |
 | `--no-preflight` | Skip the pre-flight readiness probe; go straight to the real fan-out (v0.10.1+). Use in CI / non-interactive scripts where the ~10s probe budget isn't worth it. |
 | `--model <id>` | Override `provider.model` (single-LLM fallback only) |
@@ -433,7 +436,7 @@ prompts:
     Output language: English only.
 ```
 
-All three apply to the multi-LLM path AND the single-LLM fallback, so a team's customizations reach every reviewer (claude, gemini, codex).
+All three apply to the multi-LLM path AND the single-LLM fallback, so a team's customizations reach every reviewer (claude, gemini, codex, copilot).
 
 For one-off runs, `--prompt-pack-dir <dir>` overrides `prompts.pack_dir` for a single review without touching the YAML.
 
@@ -489,8 +492,8 @@ Distributing to a few hundred engineers? Two patterns work:
 |---|---|
 | Single-LLM, `provider.base_url: http://localhost:11434/v1` (Ollama) | **Stays on your machine.** Fully offline. |
 | Single-LLM, any cloud provider (OpenAI, Anthropic, Mistral, etc.) | The provider you configured, over TLS. Their privacy policy applies. |
-| Multi-LLM (default) — Claude / Gemini / Codex CLIs | **Each authenticated CLI calls its own backend** (Anthropic, Google AI, OpenAI). One review fans out to multiple cloud vendors. Your `provider.base_url` is irrelevant in this mode. |
-| Multi-LLM with `--only` restricted to a fully-local agent | Roadmap. Will be possible once a fully-local-agent preset lands; today every multi-LLM agent (claude / gemini / codex) calls its own cloud backend. |
+| Multi-LLM (default) — Claude / Gemini / Codex / Copilot CLIs | **Each authenticated CLI calls its own backend** (Anthropic, Google AI, OpenAI, GitHub). One review fans out to multiple cloud vendors. Your `provider.base_url` is irrelevant in this mode. |
+| Multi-LLM with `--only` restricted to a fully-local agent | Roadmap. Will be possible once a fully-local-agent preset lands; today every multi-LLM agent (claude / gemini / codex / copilot) calls its own cloud backend. |
 
 If you need air-gapped review today, use single-LLM mode against a local Ollama and stay off `local-review review` (which fans out to authenticated cloud CLIs by default).
 

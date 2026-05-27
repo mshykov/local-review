@@ -190,6 +190,57 @@ var (
 // basis (different prefix words / punctuation), so two patterns
 // can't both match the same byte range — position comparison is
 // well-defined.
+// copilotTokensRE matches the "Tokens ↑ <up> ↓ <down>" summary line
+// the Copilot CLI prints to stderr after a non-interactive run, e.g.:
+//
+//	Tokens     ↑ 16.9k (1.5k cached) • ↓ 20 (13 reasoning)
+//
+// Group 1/2 = input magnitude + optional k/m suffix (the ↑ "sent"
+// figure); group 3/4 = output (the ↓ "received" figure). The `[^↓]*`
+// skips the "(N cached)" aside between the arrows. Values are
+// vendor-rounded ("16.9k", not 16900-exact), so the resulting
+// TokenUsage is approximate — fine for the display contract (sizes,
+// not billing) but not exact.
+var copilotTokensRE = regexp.MustCompile(`↑\s*([\d.]+)([kKmM]?)[^↓]*↓\s*([\d.]+)([kKmM]?)`)
+
+// parseCopilotStderrTokens extracts approximate input/output token
+// counts from the Copilot CLI's stderr usage summary. Returns
+// TokenUsage{} when the line isn't present (a future CLI that changes
+// the format), so a review still ships token-less rather than failing
+// — mirroring the codex/gemini parsers' degrade-soft contract.
+func parseCopilotStderrTokens(stderr string) TokenUsage {
+	// Take the LAST match: the Copilot CLI prints one summary block at
+	// end-of-run, but if a future version emits interim "Tokens ↑ … ↓ …"
+	// lines too, the final (cumulative) line is the authoritative one —
+	// same rightmost-wins principle as parseCodexStdoutTokens.
+	all := copilotTokensRE.FindAllStringSubmatch(stderr, -1)
+	if len(all) == 0 {
+		return TokenUsage{}
+	}
+	m := all[len(all)-1]
+	return TokenUsage{
+		InputTokens:  scaleTokenMagnitude(m[1], m[2]),
+		OutputTokens: scaleTokenMagnitude(m[3], m[4]),
+	}
+}
+
+// scaleTokenMagnitude converts a vendor-rounded magnitude like
+// ("16.9", "k") into an integer token count (16900). An unparseable
+// magnitude yields 0; an unrecognised suffix is treated as no scaling.
+func scaleTokenMagnitude(num, suffix string) int {
+	f, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return 0
+	}
+	switch suffix {
+	case "k", "K":
+		f *= 1_000
+	case "m", "M":
+		f *= 1_000_000
+	}
+	return int(f + 0.5)
+}
+
 func parseCodexStdoutTokens(combined, response string) TokenUsage {
 	combined = stripTrailingDuplicate(combined, response)
 
