@@ -29,15 +29,19 @@ mkdir -p "$hooks_dir"
 
 if [ -e "$hook" ] && ! grep -q "local-review secret/PII pre-commit" "$hook" 2>/dev/null; then
   if [ -e "$chained" ]; then
-    # Don't clobber an existing chained hook; keep a timestamped backup.
-    cp "$hook" "$hook.bak.$(date +%s)"
-    echo "⚠ $chained already exists; backed up the current pre-commit to $hook.bak.*"
-    echo "  Review manually — the existing pre-commit was NOT chained to avoid overwriting $chained."
-  else
-    mv "$hook" "$chained"
-    chmod +x "$chained" 2>/dev/null || true
-    echo "Existing pre-commit hook preserved as $chained (it will be run first / chained)."
+    # Ambiguous: a foreign pre-commit AND a pre-commit.local both exist.
+    # We can't chain a second one without clobbering the first, so
+    # fail-closed and let the human resolve it — never silently disable
+    # an existing hook.
+    echo "✗ Both a non-local-review pre-commit hook and $chained already exist." >&2
+    echo "  Refusing to overwrite (that would disable one of them). Resolve manually:" >&2
+    echo "    - merge the logic you want into $chained, then re-run this installer, or" >&2
+    echo "    - remove whichever hook is stale." >&2
+    exit 1
   fi
+  mv "$hook" "$chained"
+  chmod +x "$chained" 2>/dev/null || true
+  echo "Existing pre-commit hook preserved as $chained (it will be run first / chained)."
 fi
 
 cat > "$hook" <<'HOOK'
