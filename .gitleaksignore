@@ -1,0 +1,8 @@
+# gitleaks fingerprint allowlist for known false positives in git
+# HISTORY (immutable commits we can't edit). Format:
+#   <commit>:<file>:<rule>:<line>
+# Working-tree / new-commit false positives belong in .gitleaks.toml
+# instead (value/path allowlist), so they survive line moves.
+
+# Fake ANTHROPIC_API_KEY test fixture in an old revision of config_test.go.
+ed29b957ab87176dd30f93d32f65f696c449645b:internal/config/config_test.go:generic-api-key:191

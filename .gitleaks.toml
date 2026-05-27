@@ -1,0 +1,36 @@
+# gitleaks config for local-review.
+#
+# Backstop against committing real secrets (tokens, API keys, passwords,
+# private keys). Used by both the local pre-commit hook
+# (scripts/install-hooks.sh) and the secret-scan CI workflow.
+#
+# NOTE: secrets are reliably catchable here; personal-but-not-secret
+# values (your own IPs, hostnames, names, emails) are NOT — a generic
+# rule can't tell a real personal IP from the dozens of legitimate
+# example IPs in the test suite. Those are guarded by the gitignored
+# personal denylist the pre-commit hook greps (see
+# .git-personal-denylist.example) plus the review convention. See
+# memory: "Never commit sensitive/personal data".
+
+title = "local-review secret scan"
+
+[extend]
+# Inherit gitleaks' built-in rules (AWS/GCP keys, GitHub PATs, private
+# keys, generic high-entropy API keys, etc.). We only ADD allowlist
+# entries below — we don't weaken the default ruleset.
+useDefault = true
+
+[allowlist]
+description = "Obviously-fake placeholder secrets in tests, docs, and example config."
+# Match the fake values VERBATIM rather than allowlisting whole files,
+# so a real secret accidentally pasted into a test is still caught.
+regexes = [
+  '''sk-claude-123''',  # internal/config/config_test.go — fake ANTHROPIC_API_KEY fixture
+  '''ghp_example''',    # doctor_test.go / docs — fake GitHub token placeholder
+  '''ghp_generic''',    # doctor_test.go — fake generic GitHub token placeholder
+]
+# NOTE: deliberately NO path-based allowlist. A directory allowlist (e.g.
+# `examples/.*`) would create a blind spot — a real secret pasted there
+# would be ignored by both CI and the hook. We allowlist specific fake
+# VALUES instead, so real secrets are caught everywhere, including docs
+# and examples.

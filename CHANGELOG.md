@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Secret + personal-data guardrails (local pre-commit + CI).** A new `gitleaks`-based secret scan runs in CI (`.github/workflows/secret-scan.yml`, over full git history) and as a local pre-commit hook (`scripts/install-hooks.sh`). The hook also greps the staged diff against a **gitignored** `.git-personal-denylist` (seeded from `.git-personal-denylist.example`) so you can block your own IPs / hostnames / emails / names from ever being committed — those stay on your machine since CI can't hold them. `.gitleaks.toml` allowlists the repo's obviously-fake test placeholders so real secrets are still caught everywhere. Motivation: a maintainer's real Tailscale IP was committed into a test fixture in v0.13.0 — this is the backstop so it can't recur silently. (Secrets are reliably auto-detected; personal IPs/names rely on the denylist + the new CLAUDE.md rule 13, since a generic rule can't tell a real personal IP from the many legitimate example IPs in the test suite.)
+
 ## [0.13.0] - 2026-05-27
 
 **Theme: make the local/offline path actually work.**

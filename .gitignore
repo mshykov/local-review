@@ -15,6 +15,11 @@
 .env
 .env.local
 
+# Personal denylist for the secret/PII pre-commit hook — stays local so
+# you can list your own real IPs / emails / names safely. The committed
+# template is .git-personal-denylist.example. See scripts/install-hooks.sh.
+.git-personal-denylist
+
 # Antigravity CLI (`agy`) drops a per-project working dir on invocation
 .antigravitycli/
 
