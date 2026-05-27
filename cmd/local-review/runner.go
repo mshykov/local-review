@@ -173,7 +173,17 @@ func applyConfig(llm cli.LLM, cfg config.Config) cli.LLM {
 // to disk, and print the merged report to stdout.
 func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, configDisabled []string, mode git.Mode, ref string) error {
 	if err := cfg.Validate(); err != nil {
-		return fmt.Errorf("invalid config: %w", err)
+		// `--only` is an explicit allow-list that overrides config-level
+		// enable/disable for agent selection (see selectAgents). So an
+		// "all LLMs disabled" config is benign here — the user named the
+		// agents to run. This is what makes the two-pass workflow work
+		// with ONE config (disable all → Ollama fallback for the default
+		// run; `--only claude,codex,...` → those cloud agents). We only
+		// swallow THIS specific error; every other Validate failure
+		// (bad merge.preferred_llm, etc.) still aborts.
+		if !(sf.only != "" && errors.Is(err, config.ErrAllLLMsDisabled)) {
+			return fmt.Errorf("invalid config: %w", err)
+		}
 	}
 	warnIgnoredFlags(sf)
 	if err := validateMergeWith(sf, active); err != nil {
