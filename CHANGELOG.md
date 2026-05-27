@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-27
+
+**Theme: a new reviewer that actually works.**
+
+GitHub's Copilot CLI joins the fan-out as a first-class reviewer — the first agent added since the Antigravity evaluation, and the one that passed the dogfood where `agy` didn't. Where `agy --print` runs an autonomous agent loop and emits narration, `copilot -p` returns a clean review on stdout and reviews the diff it's handed. The integration was hardened by Copilot reviewing its own code plus a multi-LLM self-review: tools are disabled to close a prompt-injection vector, generic `GH_TOKEN`/`GITHUB_TOKEN` no longer auto-enable a paid reviewer, and `merge.preferred_llm: copilot` validates out of the box.
+
 ### Added
 
 - **GitHub Copilot CLI (`copilot`) as a live reviewer.** Copilot joins the parallel fan-out as a first-class agent alongside claude / gemini / codex (`cli.IsReviewCapable("copilot") == true`). A 2026-05 authenticated dogfood confirmed `copilot -p` returns a clean review on stdout (agent/usage telemetry stays on stderr) and reviews the diff it's handed rather than reconstructing its own — the opposite of antigravity, which is why Copilot ships live and `agy` stays experimental. `local-review doctor` shows it; auth is `copilot login` or a `COPILOT_GITHUB_TOKEN` (a bare `GH_TOKEN` / `GITHUB_TOKEN` works for the `copilot` CLI but won't auto-enable this paid reviewer); `--copilot-model` overrides the model. A default `llms.copilot` config entry ships so `merge.preferred_llm: copilot` validates out of the box. Token counts are parsed best-effort from Copilot's stderr usage summary. Each run consumes one Copilot **Premium request** (not BYOK-free).
