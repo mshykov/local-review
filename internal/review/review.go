@@ -62,6 +62,10 @@ func (r *Reviewer) Run(ctx context.Context, mode git.Mode, ref string) (Report, 
 		PackDir: r.cfg.Prompts.PackDir,
 		Prepend: r.cfg.Prompts.Prepend,
 		Append:  r.cfg.Prompts.Append,
+		// Single-LLM path parses the reply as JSON, so the schema must
+		// be in the prompt. The multi-LLM invokers leave this false and
+		// append their own markdown-output override instead.
+		RequireJSON: true,
 	})
 	if err != nil {
 		return Report{}, fmt.Errorf("load prompt pack %q: %w", packID, err)

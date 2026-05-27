@@ -7,6 +7,49 @@ import (
 	"testing"
 )
 
+// RequireJSON must inject the canonical findings schema for EVERY
+// shipped pack — the single-LLM path parses JSON and the language
+// packs no longer carry the schema themselves (pre-v0.12.1 they
+// deferred to default.md, which Resolve never sent — the Ollama
+// dogfood bug). The language set is derived from Available() so a
+// newly added pack is automatically covered (a hardcoded list would
+// silently skip it — the exact regression this test guards against).
+func TestResolve_RequireJSON_InjectsSchemaForEveryLanguage(t *testing.T) {
+	langs, err := Available()
+	if err != nil {
+		t.Fatalf("Available(): %v", err)
+	}
+	if len(langs) == 0 {
+		t.Fatal("Available() returned no packs — embed broken?")
+	}
+	for _, lang := range langs {
+		pack, err := Resolve(lang, ResolveOptions{RequireJSON: true})
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", lang, err)
+		}
+		if !strings.Contains(pack.Content, FindingsJSONSchema) {
+			t.Errorf("Resolve(%q, RequireJSON) missing the canonical findings schema", lang)
+		}
+	}
+}
+
+// Without RequireJSON (multi-LLM path), the schema must NOT be present
+// — those invokers append a "respond in markdown, NOT JSON" override,
+// and a competing JSON schema risks a stray JSON reply the merger
+// can't consolidate. Asserts against the schema constant itself, not
+// incidental wording, so unrelated pack edits don't flip this.
+func TestResolve_NoRequireJSON_OmitsSchema(t *testing.T) {
+	for _, lang := range []string{"default", "go"} {
+		pack, err := Resolve(lang, ResolveOptions{})
+		if err != nil {
+			t.Fatalf("Resolve(%q): %v", lang, err)
+		}
+		if strings.Contains(pack.Content, FindingsJSONSchema) {
+			t.Errorf("Resolve(%q) without RequireJSON must not carry the JSON schema", lang)
+		}
+	}
+}
+
 func TestGetKnown(t *testing.T) {
 	cases := []string{"default", "typescript", "go", "python", "rust"}
 	for _, lang := range cases {

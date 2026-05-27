@@ -326,6 +326,16 @@ func TestIsLocalURL(t *testing.T) {
 		{"http://172.15.255.254/v1", false, "172.15-outside-12"},
 		{"http://172.32.0.1/v1", false, "172.32-outside-12"},
 
+		// CGNAT / Tailscale — RFC 6598 (100.64.0.0/10), the v0.12.1
+		// widening. Tailscale tailnet IPs live here; Ollama-over-
+		// Tailscale is a common remote-Ollama setup.
+		{"http://100.64.0.1:11434/v1", true, "cgnat-lower-edge"},
+		{"http://100.107.222.78:11434/v1", true, "cgnat-tailscale-ollama"},
+		{"http://100.127.255.254/v1", true, "cgnat-upper-edge-100.127"},
+		// Edges of 100.64/10 — must NOT match outside the /10 window.
+		{"http://100.63.255.254/v1", false, "100.63-just-below-cgnat"},
+		{"http://100.128.0.1/v1", false, "100.128-just-above-cgnat"},
+
 		// Link-local APIPA + IPv6 unique-local + link-local.
 		{"http://169.254.1.1/v1", true, "ipv4-link-local-169.254_16"},
 		{"http://[fd00::1]:11434/v1", true, "ipv6-unique-local-fc00_7"},

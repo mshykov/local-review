@@ -94,6 +94,3 @@ Apply the default review rules. Plus: language-specific patterns to look for.
 - **Client-side secrets** — API keys exposed in client bundle.
 - **CORS misconfiguration** — overly permissive origins.
 
-## Output
-
-Same JSON shape as the default pack. Use `tag: "correctness"`, `"security"`, `"perf"`, `"maintainability"`, or `"style"`.

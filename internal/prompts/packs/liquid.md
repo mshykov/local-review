@@ -70,6 +70,3 @@ Liquid is a template language, not a programming language — review priorities 
 - **`{% comment %} … {% endcomment %}`** for multi-line; `{# … #}` (Jekyll) does NOT work in Liquid.
 - **Empty-state guards at the top** — `{% if products.size == 0 %}…{% else %}{% for %}…{% endfor %}{% endif %}` reads cleaner than testing inside the loop body.
 
-## Output
-
-Same JSON shape as the default pack.

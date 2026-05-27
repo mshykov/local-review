@@ -75,6 +75,3 @@ Apply the default review rules. Plus: Go-specific patterns to look for.
 - **Cleanup not deferred** — use `t.Cleanup()` for test teardown.
 - **Global state in tests** — causes flaky tests when run in parallel.
 
-## Output
-
-Same JSON shape as the default pack.

@@ -75,6 +75,3 @@ Apply the default review rules. Plus: Kotlin-specific patterns to look for.
 - **Sealed classes / interfaces** for state machines — exhaustive `when` is the payoff.
 - **`object` for singletons** — prefer over `companion object { @JvmStatic … }` unless Java callers need the static look.
 
-## Output
-
-Same JSON shape as the default pack.

@@ -65,7 +65,50 @@ type ResolveOptions struct {
 	// rules ("respond in English only", "include a one-line summary at
 	// the end") that the LLM should see last.
 	Append string
+
+	// RequireJSON appends the canonical findings JSON schema
+	// (FindingsJSONSchema) to the pack body. The single-LLM fallback
+	// path sets this — it parses the model's reply as JSON, so the
+	// schema MUST be in the prompt. The multi-LLM path leaves it false:
+	// those invokers append their own "respond in markdown, NOT JSON"
+	// override (the merger consolidates prose), so injecting a JSON
+	// schema there would contradict the override and risk a stray
+	// JSON reply the merger can't read.
+	//
+	// Pre-v0.12.1 the language packs ended with "Same JSON shape as the
+	// default pack" but Resolve only ever sent ONE pack — so a
+	// single-LLM review of any non-default language never received the
+	// actual schema. Strong cloud models inferred it; weak local models
+	// (Ollama) returned JSON without the `findings` key and the review
+	// failed to parse. Centralising the schema here and appending it on
+	// demand fixes that for every language.
+	RequireJSON bool
 }
+
+// FindingsJSONSchema is the single source of truth for the output
+// contract the single-LLM path parses (internal/review.parseFindings).
+// Appended to the resolved pack when ResolveOptions.RequireJSON is set.
+// Keep the field names + severity/tag enums in sync with rawFinding /
+// ParseSeverity in internal/review.
+const FindingsJSONSchema = "## Output format\n\n" +
+	"Return a single JSON object with this exact shape:\n\n" +
+	"```json\n" +
+	"{\n" +
+	"  \"findings\": [\n" +
+	"    {\n" +
+	"      \"file\": \"src/foo.ts\",\n" +
+	"      \"line\": 42,\n" +
+	"      \"severity\": \"major\",\n" +
+	"      \"title\": \"Short imperative summary, < 80 chars\",\n" +
+	"      \"body\": \"1–3 sentence explanation. State *why* it's a problem and *what* to do.\",\n" +
+	"      \"tag\": \"security\"\n" +
+	"    }\n" +
+	"  ]\n" +
+	"}\n" +
+	"```\n\n" +
+	"`file` and `line` must come from the diff. `severity` must be one of: `critical`, `major`, `warning`, `info`, `nit`. " +
+	"`tag` is optional (use one of: `correctness`, `security`, `perf`, `maintainability`, `error_handling`, `testing`, `compat`, `ux`, `ethics`, `style`, `specialist`). " +
+	"If there are no findings, return `{\"findings\": []}`."
 
 // BaselinePrompt is the minimal "raw model" system prompt the
 // bench's --uplift mode uses to measure what local-review's
@@ -125,6 +168,16 @@ func Resolve(language string, opts ResolveOptions) (Pack, error) {
 	body, source, err := loadBody(language, opts.PackDir)
 	if err != nil {
 		return Pack{}, err
+	}
+
+	// Inject the canonical JSON output schema into the pack body when
+	// the caller will parse JSON (single-LLM path). Done here — before
+	// the prepend/append wrapping below — so the model sees the pack's
+	// rules, then the output contract, and finally any user-supplied
+	// Append (which still lands last and can refine output shape).
+	// See ResolveOptions.RequireJSON for why the multi-LLM path skips it.
+	if opts.RequireJSON {
+		body = strings.TrimRight(body, "\n") + "\n\n" + FindingsJSONSchema
 	}
 
 	content := body

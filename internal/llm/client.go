@@ -17,6 +17,25 @@ import (
 	"time"
 )
 
+// cgnatRange is RFC 6598 Shared Address Space (100.64.0.0/10), the
+// carrier-grade-NAT block Tailscale draws tailnet IPs from. Parsed
+// once at init; isLocalURL uses it to treat Ollama-over-Tailscale as
+// local.
+var cgnatRange = mustCIDR("100.64.0.0/10")
+
+// mustCIDR parses a CIDR literal at init, panicking with a clear
+// message if it's malformed. Fail-loud: the only caller passes a
+// compile-time constant, so a panic here means a typo introduced
+// during maintenance — far better caught at startup than as a nil
+// *net.IPNet dereference deep inside isLocalURL on the first request.
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(fmt.Sprintf("llm: invalid CIDR literal %q: %v", s, err))
+	}
+	return n
+}
+
 // isLocalURL returns true when raw is a URL whose host points at the
 // local machine OR a private LAN range. Used to skip the API-key
 // requirement for Ollama / vLLM-style setups where the provider
@@ -26,6 +45,7 @@ import (
 //   - localhost / ::1 / 0.0.0.0
 //   - loopback: 127.0.0.0/8
 //   - IPv4 private RFC1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+//   - IPv4 RFC6598 CGNAT (Tailscale): 100.64.0.0/10
 //   - IPv4 link-local APIPA: 169.254.0.0/16 (rare but legitimate)
 //   - IPv6 unique-local: fc00::/7
 //   - IPv6 link-local: fe80::/10
@@ -86,6 +106,17 @@ func isLocalURL(raw string) bool {
 		return true
 	}
 	if ip.IsLinkLocalUnicast() { // 169.254/16 + fe80::/10
+		return true
+	}
+	// RFC 6598 Shared Address Space (100.64.0.0/10) — the CGNAT range,
+	// and notably what Tailscale assigns to tailnet nodes. Running
+	// Ollama on another box reachable over Tailscale (a `100.x` IP) is
+	// one of the most common remote-Ollama setups; Go's IsPrivate()
+	// doesn't cover it, so without this an Ollama-over-Tailscale URL
+	// was treated as remote and hard-errored "no API key". A tailnet
+	// link is already encrypted + ACL'd, and the c.APIKey == "" guard
+	// still lets a gateway operator force auth by setting a key.
+	if cgnatRange.Contains(ip) {
 		return true
 	}
 	// Belt-and-braces fallback for 127.* in case the upstream parse
@@ -165,7 +196,8 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 		// LOCAL_REVIEW_API_KEY (the legacy default) used to crash the
 		// review here despite the provider needing no key. Skip the
 		// check when base_url points at a local-or-LAN host (see
-		// isLocalURL — loopback + RFC1918 + IPv6 unique/link-local);
+		// isLocalURL — loopback + RFC1918 + CGNAT/Tailscale + IPv6
+		// unique/link-local);
 		// any public URL still requires a key. A user with a LAN
 		// gateway that DOES authenticate just sets api_key as usual
 		// (the !c.APIKey guard here means the bypass only fires when
