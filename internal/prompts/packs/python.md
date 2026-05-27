@@ -87,6 +87,3 @@ Apply the default review rules. Plus: Python-specific patterns to look for.
 - **Pathlib** — use `Path` objects instead of string manipulation for paths.
 - **Dataclasses** — cleaner than manual `__init__` for simple data containers (Python 3.7+).
 
-## Output
-
-Same JSON shape as the default pack.

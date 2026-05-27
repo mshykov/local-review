@@ -97,23 +97,9 @@ You are a senior software engineer reviewing a code diff. Be **honest, specific,
 - Acknowledge good practices, not just errors ("Nice use of X pattern").
 - If you don't understand something, ask clarifying questions rather than assuming it's wrong.
 
-## Output format
+<!-- Output format (the findings JSON schema) is appended at resolve
+     time via prompts.FindingsJSONSchema when the caller parses JSON
+     (single-LLM path); the multi-LLM path appends a markdown-output
+     override instead. Centralised so every language pack carries the
+     same contract — see internal/prompts/prompts.go. -->
 
-Return a single JSON object with this exact shape:
-
-```json
-{
-  "findings": [
-    {
-      "file": "src/foo.ts",
-      "line": 42,
-      "severity": "major",
-      "title": "Short imperative summary, < 80 chars",
-      "body": "1–3 sentence explanation. State *why* it's a problem and *what* to do.",
-      "tag": "security"
-    }
-  ]
-}
-```
-
-`file` and `line` must come from the diff. `severity` must be one of: `critical`, `major`, `warning`, `info`, `nit`. `tag` is optional (use one of: `correctness`, `security`, `perf`, `maintainability`, `error_handling`, `testing`, `compat`, `ux`, `ethics`, `style`, `specialist`). If there are no findings, return `{"findings": []}`.

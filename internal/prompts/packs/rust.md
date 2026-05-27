@@ -91,6 +91,3 @@ Apply the default review rules. Plus: Rust-specific patterns to look for.
 - **`Default::default()`** — `T::default()` is clearer.
 - **Trait imports forgotten** — extension methods invisible without `use SomeTrait;` (e.g. `itertools::Itertools`, `futures::StreamExt`, `tokio::io::AsyncReadExt`).
 
-## Output
-
-Same JSON shape as the default pack.

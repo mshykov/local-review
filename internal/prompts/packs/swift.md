@@ -67,6 +67,3 @@ Apply the default review rules. Plus: Swift-specific patterns to look for.
 - **`fileprivate` / `private`** — prefer the narrowest access level that works.
 - **Tuple destructuring** `let (x, y) = pair` — clearer than `pair.0` / `pair.1`.
 
-## Output
-
-Same JSON shape as the default pack.

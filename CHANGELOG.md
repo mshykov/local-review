@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ollama over Tailscale now works without a dummy `api_key`.** `isLocalURL` only treated RFC1918 + IPv6 ULA/link-local as local, but Tailscale assigns IPs from `100.64.0.0/10` (RFC 6598 CGNAT), which Go's `IsPrivate()` doesn't cover. Pointing `provider.base_url` at a Tailscale Ollama (`http://100.x.x.x:11434/v1`) hard-errored "no API key" despite Ollama needing none. Added a `100.64.0.0/10` check; the corporate-gateway invariant is preserved (the bypass still only fires when no key is configured). Surfaced by an Ollama-over-Tailscale dogfood.
+- **Single-LLM reviews of non-default languages now send the JSON output schema.** Every language pack (go/python/typescript/rust/swift/kotlin/liquid) ended with "Same JSON shape as the default pack", but `prompts.Resolve` only ever sent ONE pack — so the schema (which lived only in `default.md`) never reached the model. Strong cloud models inferred `{"findings": […]}` anyway; weaker local models (e.g. Ollama `llama3`) returned JSON without the `findings` key and the review failed with "no JSON object with a `findings` key found in response". The schema is now centralised in `prompts.FindingsJSONSchema` and appended at resolve time when the caller parses JSON (single-LLM path), so every language carries the contract. The multi-LLM path is unchanged — it appends its own markdown-output override, so the JSON schema is deliberately NOT injected there.
+
 ## [0.12.0] - 2026-05-27
 
 **Theme: a new reviewer that actually works.**
