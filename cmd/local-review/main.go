@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -407,18 +408,20 @@ func applyFlagsToConfig(cfg *config.Config, sf *sharedFlags) {
 		cfg.Review.MaxFindings = sf.maxFindings
 	}
 
-	// Per-agent model overrides
-	if sf.claudeModel != "" {
-		setLLMModel(cfg, "claude", sf.claudeModel)
+	// Per-agent model overrides. TrimSpace so a whitespace-only flag
+	// value (e.g. `--copilot-model " "`) is treated as "unset" rather
+	// than forwarded as a blank model id the CLI would choke on.
+	if m := strings.TrimSpace(sf.claudeModel); m != "" {
+		setLLMModel(cfg, "claude", m)
 	}
-	if sf.geminiModel != "" {
-		setLLMModel(cfg, "gemini", sf.geminiModel)
+	if m := strings.TrimSpace(sf.geminiModel); m != "" {
+		setLLMModel(cfg, "gemini", m)
 	}
-	if sf.codexModel != "" {
-		setLLMModel(cfg, "codex", sf.codexModel)
+	if m := strings.TrimSpace(sf.codexModel); m != "" {
+		setLLMModel(cfg, "codex", m)
 	}
-	if sf.copilotModel != "" {
-		setLLMModel(cfg, "copilot", sf.copilotModel)
+	if m := strings.TrimSpace(sf.copilotModel); m != "" {
+		setLLMModel(cfg, "copilot", m)
 	}
 
 	// --merge-with overrides merge.preferred_llm. Without this branch,
