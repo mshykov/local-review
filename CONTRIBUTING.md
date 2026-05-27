@@ -92,9 +92,24 @@ The test suite verifies every pack file loads. Add a case to `internal/lang/dete
 - Pure logic gets a unit test. We won't merge new behaviour without one.
 - `internal/llm/` is intentionally not mocked in tests yet — that's a gap, contributions welcome.
 
+## Secrets & personal data — install the pre-commit hook
+
+Before your first commit, install the local guard:
+
+```sh
+./scripts/install-hooks.sh
+```
+
+This sets up a `pre-commit` hook that blocks committing:
+
+- **Secrets** — tokens, API keys, passwords, private keys — via [`gitleaks`](https://github.com/gitleaks/gitleaks) over your staged diff (honors `.gitleaks.toml`). Install gitleaks so the local half runs: `go install github.com/zricethezav/gitleaks/v8@v8.30.1` (or `brew install gitleaks`).
+- **Personal data** — your own IPs, hostnames, emails, names — via a **gitignored** `.git-personal-denylist` (seeded from `.git-personal-denylist.example`). Add your real values there; they stay on your machine, and the hook blocks any commit that contains them.
+
+**Use neutral examples in tests and docs** — `192.0.2.x` / `198.51.100.x` (RFC 5737 documentation ranges), `test@example.com`, `ghp_example`. Never paste a real personal value, even in a test fixture; git history is forever. The secret-scan CI job enforces the gitleaks half on every PR regardless, but the hook catches it before it leaves your machine (and CI can't hold your personal denylist — that's local-only).
+
 ## CI
 
-`.github/workflows/ci.yml` runs `go vet`, `go test -race`, and a build on every push. PRs must be green.
+`.github/workflows/ci.yml` runs `go vet`, `go test -race`, and a build on every push. `.github/workflows/secret-scan.yml` runs `gitleaks` over the full git history. PRs must be green.
 
 ## Releases
 

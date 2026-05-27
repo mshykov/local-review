@@ -1,0 +1,16 @@
+# Personal denylist — copy to `.git-personal-denylist` (gitignored) and
+# add YOUR OWN values that must never be committed to this public repo.
+# scripts/install-hooks.sh seeds the real file from this template; the
+# pre-commit hook greps the STAGED CONTENT of your changed files for
+# each line (plain substring, case-sensitive) and blocks the commit on
+# a match. It scans staged content, not the diff — so a commit that
+# REMOVES a denylisted value is allowed (you can clean up a past slip).
+#
+# One value per line. Blank lines and `#` comments are ignored.
+# Because the real .git-personal-denylist is gitignored, listing your
+# actual values here is safe — they stay on your machine.
+#
+# Examples (replace with your own — these are illustrative only):
+# 100.107.222.78          # my Tailscale Ollama IP
+# my.real.name@email.com  # personal email
+# my-laptop.local         # internal hostname

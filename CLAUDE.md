@@ -34,6 +34,8 @@ These apply to every task in this repo. They exist because each one has cost us 
 
 12. **`cmd/local-review/runner.go` and `doctor.go` are the danger zone.** They historically account for ~40% of all reviewer findings. Both are orchestration files where multiple concepts meet. Apply rules 1–6 with extra care here.
 
+13. **Never commit secrets or personal data.** No real tokens, API keys, passwords, private keys, **IPs, hostnames, emails, or names** — not even in test fixtures or docs. Use neutral examples (`192.0.2.x`/`198.51.100.x` per RFC 5737, `test@example.com`, `ghp_example`). Values you learned from the user's environment (their machine, network, config) are NOT fixtures. `gitleaks` (pre-commit hook + `.github/workflows/secret-scan.yml`) backstops secrets; the gitignored `.git-personal-denylist` backstops personal values — but the primary defense is not staging the value in the first place. Git history is forever; scrubbing a pushed/tagged value needs a history rewrite. *Why:* committing the user's real Tailscale IP into a test fixture (v0.13.0) was a real incident.
+
 ---
 
 ## What this project is
