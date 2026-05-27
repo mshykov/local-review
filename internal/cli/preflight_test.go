@@ -68,9 +68,10 @@ func TestContextWindow_KnownAgents(t *testing.T) {
 	// a window and we need to lower one of these, that's a deliberate
 	// change and this test is the canary.
 	tests := map[string]int{
-		"claude": 200_000,
-		"gemini": 1_000_000,
-		"codex":  128_000,
+		"claude":  200_000,
+		"gemini":  1_000_000,
+		"codex":   128_000,
+		"copilot": 128_000,
 	}
 	for name, want := range tests {
 		if got := ContextWindow(name); got != want {

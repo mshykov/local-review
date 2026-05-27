@@ -74,6 +74,12 @@ func ContextWindow(agent string) int {
 		// floor at 128K means we'll over-skip on gpt-5 but won't
 		// over-fit on a gpt-4o-default user.
 		return 128_000
+	case "copilot":
+		// Copilot routes to GPT-family models (the dogfood default was
+		// gpt-5.3-codex). Same conservative 128K floor as codex so an
+		// oversized diff is preflight-skipped rather than failing at
+		// runtime on whichever model Copilot picks.
+		return 128_000
 	default:
 		return 0
 	}
@@ -97,8 +103,8 @@ type SkippedAgent struct {
 
 // diffSeparator is the literal glue the invokers put between the
 // system prompt and the diff before sending. Keep this in sync
-// with each Review() implementation in invoker.go — currently all
-// three (claude, gemini, codex) use the same shape.
+// with each Review() implementation in invoker.go — all review
+// invokers (claude, gemini, codex, copilot) use the same shape.
 const diffSeparator = "\n\n# Diff\n\n"
 
 // EstimatePromptPayload returns an upper-bound token estimate for

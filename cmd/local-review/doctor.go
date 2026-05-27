@@ -638,11 +638,13 @@ func copilotConfigDir() string {
 // proxy and the pre-flight probe is the real gate at review time.
 //
 // Precedence:
-//  1. A token env var (COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN, or
-//     a user-configured api_key_env): explicit current intent, used by CI.
+//  1. The Copilot-specific token env var — COPILOT_GITHUB_TOKEN by
+//     default, or a user-configured api_key_env. Generic GH_TOKEN /
+//     GITHUB_TOKEN are deliberately NOT honored (see below).
 //  2. A populated `copilot login` session under ~/.copilot ($COPILOT_HOME):
 //     reported authenticated, with the detail noting probe-time verification.
-//  3. Otherwise not authenticated, with a login/token hint.
+//  3. Otherwise not authenticated, with a login/token hint that names
+//     the resolved env var.
 func checkCopilotAuth(customEnvVar string) authStatus {
 	// ONLY the Copilot-specific token (COPILOT_GITHUB_TOKEN by default,
 	// or a user-configured api_key_env) auto-enables Copilot. We
@@ -654,12 +656,14 @@ func checkCopilotAuth(customEnvVar string) authStatus {
 	// The copilot CLI itself still reads GH_TOKEN/GITHUB_TOKEN at run
 	// time; we just won't auto-activate on them. To opt in, set
 	// COPILOT_GITHUB_TOKEN or run `copilot login`.
-	if envVar := resolveEnvVar("copilot", customEnvVar); envVar != "" {
-		if strings.TrimSpace(os.Getenv(envVar)) != "" {
-			return authStatus{
-				authenticated: true,
-				detail:        envVar + " env var set",
-			}
+	envVar := resolveEnvVar("copilot", customEnvVar)
+	if envVar == "" {
+		envVar = "COPILOT_GITHUB_TOKEN" // defensive: resolveEnvVar always returns this for copilot
+	}
+	if strings.TrimSpace(os.Getenv(envVar)) != "" {
+		return authStatus{
+			authenticated: true,
+			detail:        envVar + " env var set",
 		}
 	}
 	// Stored `copilot login` session. A NON-EMPTY config dir is the
@@ -677,6 +681,6 @@ func checkCopilotAuth(customEnvVar string) authStatus {
 	}
 	return authStatus{
 		authenticated: false,
-		hint:          "run 'copilot login' (GitHub Copilot subscription) — or export COPILOT_GITHUB_TOKEN=... (a bare GH_TOKEN won't auto-enable a paid reviewer)",
+		hint:          fmt.Sprintf("run 'copilot login' (GitHub Copilot subscription) — or export %s=... (a bare GH_TOKEN won't auto-enable a paid reviewer)", envVar),
 	}
 }
