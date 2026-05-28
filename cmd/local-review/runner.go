@@ -323,7 +323,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		if probeTimeout <= 0 {
 			probeTimeout = cli.DefaultProbeTimeout
 		}
-		active = runPreflightProbe(ctx, active, probeTimeout)
+		active = runPreflightProbe(ctx, active, probeTimeout, sf.strictProbe)
 		// Short-circuit on user interrupt / parent context cancel.
 		// Pre-fix the runner's only check was len(active) == 0,
 		// which would surface "every active LLM failed pre-flight"
@@ -793,10 +793,10 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 // 10s is generous for a healthy CLI's startup + minimal response;
 // shortening it would catch slow but recoverable CLIs as
 // false-positive timeouts.
-func runPreflightProbe(ctx context.Context, active []cli.LLM, timeout time.Duration) []cli.LLM {
+func runPreflightProbe(ctx context.Context, active []cli.LLM, timeout time.Duration, strict bool) []cli.LLM {
 	fmt.Println("Pre-flight (probing auth + capacity):")
 	probeStart := time.Now()
-	results := cli.ProbeAll(ctx, active, timeout)
+	results := cli.ProbeAll(ctx, active, timeout, strict)
 	probeDuration := time.Since(probeStart)
 
 	// Build a quick name → index map so we can filter `active`

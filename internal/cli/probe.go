@@ -7,7 +7,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mshykov/local-review/internal/agents/provider"
 )
+
+// providerProbe wraps internal/agents/provider.Probe in a function-
+// value the package-level providerProbeFunc seam can point at. Plain
+// function alias so tests can swap it without an interface (the seam
+// is reassignment, not dependency injection).
+func providerProbe(ctx context.Context, baseURL, apiKey string, timeout time.Duration) error {
+	return provider.Probe(ctx, baseURL, apiKey, timeout)
+}
 
 // ProbeStatus is the outcome of a pre-flight readiness probe.
 //
@@ -346,9 +356,31 @@ func classifyProbeOutcome(name string, start time.Time, out string, err error, c
 //
 // invokerFactory is an unexported test seam (see ProbeAllWithInvokerFactory).
 // Production callers use ProbeAll which wires in cli.NewInvoker.
-func ProbeAll(ctx context.Context, llms []LLM, perLLMTimeout time.Duration) []ProbeResult {
-	return ProbeAllWithInvokerFactory(ctx, llms, perLLMTimeout, NewInvoker)
+// strict toggles how provider agents are probed:
+//
+//   - false (default): provider agents use a cheap HTTP `GET /v1/models`
+//     check — proves the endpoint is up and auth is accepted without
+//     loading the model or burning tokens. Right default for the common
+//     "is my Ollama tailnet box reachable?" question. CLI agents always
+//     use the existing `Reply OK` subprocess probe regardless (they
+//     have no lighter alternative).
+//
+//   - true: every agent (provider AND CLI) does the full `Reply OK`
+//     via the Invoker contract — for providers that's an actual
+//     `POST /v1/chat/completions` exercising the named model, catching
+//     "endpoint up but model not loaded" cases the light probe misses.
+//     Useful when the configured model id matters; surfaced via the
+//     `--strict-probe` flag.
+func ProbeAll(ctx context.Context, llms []LLM, perLLMTimeout time.Duration, strict bool) []ProbeResult {
+	return ProbeAllWithInvokerFactory(ctx, llms, perLLMTimeout, NewInvoker, providerProbe, strict)
 }
+
+// ProviderProbeFunc is the seam shape ProbeAllWithInvokerFactory uses
+// to drive the cheap HTTP /v1/models check. Production code passes
+// providerProbe (which adapts internal/agents/provider.Probe); tests
+// pass deterministic fakes. Per-call (not a package global) so tests
+// can run in parallel without seam reassignment races.
+type ProviderProbeFunc func(ctx context.Context, baseURL, apiKey string, timeout time.Duration) error
 
 // ProbeAllWithInvokerFactory is the test-seam variant of ProbeAll.
 // Production code calls ProbeAll; this is exported only so the
@@ -358,13 +390,25 @@ func ProbeAll(ctx context.Context, llms []LLM, perLLMTimeout time.Duration) []Pr
 // a struct field so callers don't have to construct a Prober type
 // for a single override — the seam is the function pointer
 // itself.
-func ProbeAllWithInvokerFactory(ctx context.Context, llms []LLM, perLLMTimeout time.Duration, factory func(LLM) Invoker) []ProbeResult {
+//
+// See ProbeAll for the `strict` semantics.
+func ProbeAllWithInvokerFactory(ctx context.Context, llms []LLM, perLLMTimeout time.Duration, factory func(LLM) Invoker, providerProbeFn ProviderProbeFunc, strict bool) []ProbeResult {
+	if providerProbeFn == nil {
+		providerProbeFn = providerProbe
+	}
 	results := make([]ProbeResult, len(llms))
 	var wg sync.WaitGroup
 	for i, l := range llms {
 		wg.Add(1)
 		go func(idx int, llm LLM) {
 			defer wg.Done()
+			// Provider agents in light mode: HTTP /v1/models is enough.
+			// In strict mode, fall through to the Invoker path below,
+			// which exercises the configured model via a real chat call.
+			if llm.BaseURL != "" && !strict {
+				results[idx] = probeProviderLight(ctx, llm, perLLMTimeout, providerProbeFn)
+				return
+			}
 			inv := factory(llm)
 			if inv == nil {
 				results[idx] = ProbeResult{
@@ -381,6 +425,44 @@ func ProbeAllWithInvokerFactory(ctx context.Context, llms []LLM, perLLMTimeout t
 	}
 	wg.Wait()
 	return results
+}
+
+// probeProviderLight runs the cheap `GET <base_url>/models` readiness
+// check (in internal/agents/provider) and maps the outcome into the
+// same ProbeResult shape ProbeAll returns for CLI agents — so the
+// runner's readiness block, ✓/✗ glyphs, and downstream filtering work
+// identically across kinds.
+//
+// The duration we report is wall-clock from entry to either probe
+// completion or ctx expiry, so the "qwen ✓ (0.4s)" line shows the
+// actual time the user waited — not a vendor-reported latency that
+// might exclude TCP setup.
+func probeProviderLight(ctx context.Context, llm LLM, timeout time.Duration, providerProbeFn ProviderProbeFunc) ProbeResult {
+	start := time.Now()
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	err := providerProbeFn(pctx, llm.BaseURL, llm.APIKey, timeout)
+	duration := time.Since(start)
+	if err == nil {
+		return ProbeResult{LLM: llm.Name, Status: ProbeReady, Duration: duration}
+	}
+	// Distinguish user-Ctrl+C / parent-cancel from a real failure or
+	// vendor timeout — same disambiguation Probe (the CLI path) does so
+	// the runner's "every LLM failed" handler can short-circuit on
+	// cancel. Use errors.Is rather than a pctx.Err() identity check
+	// because provider.Probe wraps the cause (`fmt.Errorf("reach %s:
+	// %w", url, ctx.Err())`) AND has its own inner ctx that may fire
+	// before the parent — a plain pctx.Err() check missed the wrapped
+	// inner-deadline case and emitted ProbeError + the generic ✗ glyph
+	// instead of ProbeTimeout (flagged by the PR 3 self-review).
+	if errors.Is(err, context.Canceled) {
+		return ProbeResult{LLM: llm.Name, Status: ProbeCanceled, Duration: duration, Err: err}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ProbeResult{LLM: llm.Name, Status: ProbeTimeout, Duration: duration, Err: err}
+	}
+	return ProbeResult{LLM: llm.Name, Status: ProbeError, Duration: duration, Err: err}
 }
 
 // SplitReady partitions a ProbeResult slice into "ready" and
