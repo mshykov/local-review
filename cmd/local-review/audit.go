@@ -45,6 +45,22 @@ type auditFlags struct {
 	// auto-split into `pkg [part N/M]` sub-chunks (see
 	// internal/audit/walker.go splitChunk).
 	maxBytesPerChunk int
+
+	// with names the single agent to run the audit through —
+	// matches any name that appears in `local-review doctor`'s
+	// ready list, i.e. a CLI agent (`claude`, `codex`, …) or a
+	// provider agent (any free-form id from cfg.llms with a
+	// configured base_url, e.g. `qwen`, `local-fast`). When
+	// empty, falls back to the first authenticated agent — same
+	// shape as v0.13 and earlier. Single-valued in v1; multi-LLM
+	// audit would multiply per-chunk cost × N and isn't on the
+	// roadmap yet.
+	//
+	// Composes with --only: --only restricts the active set,
+	// --with picks one entry from it. `--only codex --with claude`
+	// fails the same way as `--with claude` against an
+	// unauthenticated claude.
+	with string
 }
 
 // auditCmd wires the `local-review audit` subcommand. v0.10.0-c:
@@ -80,7 +96,9 @@ Examples:
 
 Single-LLM by design in v1 — audit cost is per-package × per-topic,
 and multi-LLM would multiply it without obvious quality return.
-Picks the first authenticated LLM by default; override with --only.
+Picks the first authenticated LLM by default; override with --with
+(e.g. --with claude, --with qwen) to pin a specific CLI or provider
+agent. --only still works as the upstream allow-list filter.
 
 Audit runs against the whole committed source tree (git ls-files),
 so a working-tree-only change won't appear in findings until it's
@@ -101,6 +119,12 @@ committed.`,
 	// the CLI (Copilot caught this on PR #73).
 	cmd.Flags().BoolVar(&af.dryRun, "dry-run", false, "print the audit plan (chunks + sizes) without invoking the LLM")
 	cmd.Flags().IntVar(&af.maxBytesPerChunk, "max-bytes-per-chunk", 0, "per-chunk input cap; packages over the cap auto-split into `pkg [part N/M]` sub-chunks (0 = default 96 KiB; negative values are rejected)")
+	// The placeholder backticks set cobra's type-name token — must
+	// be a single word, so `agent` (no spaces) rather than the
+	// example command. Anything else here would render as
+	// `--with local-review doctor` in --help (cobra parses the
+	// first backtick-quoted run as the placeholder).
+	cmd.Flags().StringVar(&af.with, "with", "", "pin the audit to a specific `agent` (CLI or provider name from `local-review doctor`, e.g. claude / qwen); single-valued")
 
 	return cmd
 }
@@ -144,7 +168,7 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 		return writeAuditPlan(os.Stdout, af.topic, chunks)
 	}
 
-	llm, err := pickAuditLLM(sf)
+	llm, err := pickAuditLLM(sf, af)
 	if err != nil {
 		return err
 	}
@@ -163,24 +187,52 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 
 // pickAuditLLM picks ONE authenticated LLM for the audit run.
 // Reuses the existing review-path agent selection so the same
-// `--only` / config rules apply, but takes only the first match
-// — audit is single-LLM in v1.
+// `--only` / config rules apply, then narrows to one entry
+// based on `--with` (when set) or first-match (default). Audit
+// is single-LLM in v1.
 //
-// Returns an actionable error when no LLM is authenticated; the
-// user sees a doctor hint, same as the review path.
-func pickAuditLLM(sf *sharedFlags) (cli.LLM, error) {
+// Returns an actionable error when no LLM is authenticated, or
+// when `--with` names an agent that isn't in the active set; in
+// either case the message points the user at `doctor` so the
+// fix is one command away.
+func pickAuditLLM(sf *sharedFlags, af auditFlags) (cli.LLM, error) {
 	cfg, err := loadConfig()
 	if err != nil {
 		return cli.LLM{}, fmt.Errorf("load config: %w", err)
 	}
 	active, _ := pickAgents(cfg, sf)
+	return selectAuditLLM(active, af.with)
+}
+
+// selectAuditLLM is the pure-function core of pickAuditLLM —
+// extracted so the resolution rules (--with exact match, default
+// to first authenticated agent) can be exercised without spinning
+// up a config + filesystem. Match is exact by `LLM.Name` so a
+// typo fails closed with an actionable error rather than silently
+// fanning out to the wrong agent.
+func selectAuditLLM(active []cli.LLM, with string) (cli.LLM, error) {
 	if len(active) == 0 {
 		return cli.LLM{}, fmt.Errorf("audit needs at least one authenticated LLM (run `local-review doctor` for status)")
 	}
-	// Single-LLM in v1: first authenticated agent wins. The
-	// review path's auto-merge ordering already prefers claude
-	// when present, so this matches "use claude when available."
-	return active[0], nil
+	if with == "" {
+		// First authenticated agent wins. The review path's
+		// auto-merge ordering already prefers claude when
+		// present, so this matches "use claude when available."
+		return active[0], nil
+	}
+	for _, llm := range active {
+		if llm.Name == with {
+			return llm, nil
+		}
+	}
+	// Build the candidate list inline so the user can copy a name
+	// directly out of the error message instead of re-running
+	// doctor to learn what's available right now.
+	names := make([]string, 0, len(active))
+	for _, llm := range active {
+		names = append(names, llm.Name)
+	}
+	return cli.LLM{}, fmt.Errorf("--with %q is not in the ready set %v (run `local-review doctor` to see what's authenticated)", with, names)
 }
 
 // emitAuditReport dispatches to the right writer based on flags.

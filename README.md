@@ -290,7 +290,7 @@ local-review audit --topic security --out audit/security.md
 local-review audit --topic tech-debt --out audit/tech-debt.md
 ```
 
-Single-LLM in v1 — picks the first authenticated agent (claude when available). Audit cost is per-package × per-topic; running multi-LLM would multiply spend without obvious quality return.
+Single-LLM in v1 — picks the first authenticated agent (claude when available) unless you pin one with `--with <agent>` (any CLI or provider name from `local-review doctor`). Audit cost is per-package × per-topic; running multi-LLM would multiply spend without obvious quality return.
 
 This project audits itself: [`audit/security.md`](audit/security.md) and [`audit/tech-debt.md`](audit/tech-debt.md) are the live reports the tool produced on its own source tree. They're the trust artifact for `audit` the way [`bench/RESULTS.md`](bench/RESULTS.md) is for `review`. See [`audit/README.md`](audit/README.md) for methodology + how to triage findings.
 
@@ -388,6 +388,7 @@ Audit-specific flags:
 | `--include <prefixes>` | Comma-separated path prefixes to include (default: all auditable tracked files) |
 | `--exclude <prefixes>` | Comma-separated path prefixes to exclude |
 | `--max-bytes-per-chunk <N>` | Per-chunk input cap; packages above the cap auto-split into `pkg [part N/M]` sub-chunks (default: 96 KiB) |
+| `--with <agent>` | Pin the audit to a specific agent — any name from `local-review doctor`'s ready list, CLI (`claude`, `codex`, …) or provider (`qwen`, `local-fast`, …). Default: first authenticated agent. Single-valued. |
 
 The root-level `--json` flag is honoured by `audit` (emits the report as JSON on stdout) and by `bench` (same shape). It's only ignored by multi-LLM `review`, per the paragraph above.
 
