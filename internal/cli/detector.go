@@ -8,7 +8,11 @@ import (
 
 // LLM represents a detected CLI tool with its metadata.
 type LLM struct {
-	Name    string // "claude", "gemini", "codex", "antigravity", "copilot"
+	// Name is the agent's identifier. CLI agents use the well-known
+	// keys "claude" / "gemini" / "codex" / "antigravity" / "copilot".
+	// Provider agents (BaseURL set) use the free-form user-chosen name
+	// from cfg.LLMs (e.g. "qwen", "local-fast", "air-gapped").
+	Name    string
 	Path    string // full path to the binary (e.g., "/usr/local/bin/claude")
 	Version string // version string (e.g., "2.1.0"), or "unknown" if version probe failed
 	// Available is true only when both the binary is in PATH AND the
@@ -31,8 +35,18 @@ type LLM struct {
 	// (ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY) so users
 	// can stash the key under any env name they like and the agent
 	// still authenticates.
-	APIKey     string
-	TimeoutSec int // timeout in seconds for this LLM (from config)
+	APIKey string
+	// BaseURL is the OpenAI-compatible HTTP endpoint for a *provider*
+	// agent (Ollama, vLLM, any /v1/chat/completions endpoint). Empty
+	// for CLI subprocess agents — that's the kind-discriminator across
+	// the codebase: BaseURL != "" → provider; else CLI. cli.NewInvoker
+	// dispatches on it, doctor renders a different row shape for it,
+	// and the probe layer picks an HTTP vs subprocess probe accordingly.
+	// Populated by DetectProviders (this package) from the matching
+	// cfg.LLMs[name].BaseURL entry.
+	BaseURL string
+	// TimeoutSec is the per-call timeout (from config).
+	TimeoutSec int
 }
 
 // experimentalLLMs are detected (and surfaced in `doctor`) but kept

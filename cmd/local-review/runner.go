@@ -27,8 +27,14 @@ import (
 var errBlockingFindings = errors.New("blocking findings present")
 
 // pickAgents returns the LLMs to run for this invocation. Wraps
-// selectAgents with a real cli.DetectAll() + classify() call; tests
-// drive selectAgents directly with synthetic input.
+// selectAgents with real CLI + provider detection + classify() calls;
+// tests drive selectAgents directly with synthetic input.
+//
+// CLI agents are detected from the hardcoded supported list (claude /
+// gemini / codex / copilot / antigravity). Provider agents are
+// detected from cfg.LLMs entries that carry a BaseURL — that's the
+// kind discriminator. Both kinds end up in the same []LLM slice and
+// flow through identical selection / ready-filter logic.
 func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDisabled []string) {
 	// Honor cfg.LLMs[*].CLIPath when set — corporate / nix-store installs
 	// at non-standard paths can override the default binary name.
@@ -39,6 +45,8 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 		}
 	}
 	detected := cli.DetectAllWithOverrides(overrides)
+	detected = append(detected, cli.DetectProviders(context.Background(), providerSpecsFromConfig(cfg))...)
+
 	ready := make(map[string]bool, len(detected))
 	for _, llm := range detected {
 		// Mirror doctor: honor cfg.LLMs[*].APIKeyEnv so a user with
@@ -52,6 +60,39 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 		ready[llm.Name] = status == statusReady
 	}
 	return selectAgents(detected, ready, cfg, sf)
+}
+
+// providerSpecsFromConfig extracts the provider entries from cfg.LLMs
+// (those with BaseURL set) into the runtime ProviderSpec shape
+// DetectProviders consumes. Specs are returned in name-sorted order so
+// doctor rows and the active-agent list are deterministic across runs
+// — Go map iteration is randomised, which made output flicker between
+// invocations (flagged by the PR 2 self-review).
+//
+// The api key has already been resolved by config.resolveAPIKeys
+// (env-var lookup) before this point, so the APIKey field here is the
+// actual value, not a key name.
+func providerSpecsFromConfig(cfg config.Config) []cli.ProviderSpec {
+	names := make([]string, 0, len(cfg.LLMs))
+	for name, c := range cfg.LLMs {
+		if c.BaseURL == "" {
+			continue // CLI entry, handled by DetectAllWithOverrides above
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	specs := make([]cli.ProviderSpec, 0, len(names))
+	for _, name := range names {
+		c := cfg.LLMs[name]
+		specs = append(specs, cli.ProviderSpec{
+			Name:       name,
+			BaseURL:    c.BaseURL,
+			Model:      c.Model,
+			APIKey:     c.APIKey,
+			TimeoutSec: c.TimeoutSec,
+		})
+	}
+	return specs
 }
 
 // selectAgents picks which detected LLMs run, plus the names of any

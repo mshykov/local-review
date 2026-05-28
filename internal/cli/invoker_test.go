@@ -45,6 +45,16 @@ func TestNewInvoker(t *testing.T) {
 			wantType: "*cli.CopilotInvoker",
 		},
 		{
+			// Provider agents are discriminated by BaseURL (not by name —
+			// names are free-form for providers), so a free-form name +
+			// BaseURL set must dispatch to *provider.Invoker. Pins PR 2
+			// of the agents series.
+			name:     "provider invoker (free-form name + base_url)",
+			llm:      LLM{Name: "qwen", BaseURL: "http://127.0.0.1:11434/v1", Model: "qwen2.5-coder:7b"},
+			wantNil:  false,
+			wantType: "*provider.Invoker",
+		},
+		{
 			name:    "unknown invoker",
 			llm:     LLM{Name: "unknown", Path: "/usr/bin/unknown"},
 			wantNil: true,
