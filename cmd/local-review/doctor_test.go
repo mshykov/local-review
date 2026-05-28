@@ -571,3 +571,92 @@ func TestCheckCopilotAuth_PopulatedConfigDirAuthenticates(t *testing.T) {
 		t.Fatalf("populated ~/.copilot should authenticate, got %+v", got)
 	}
 }
+
+// --- Gemini sunset banner (v0.15) ---------------------------------------
+
+// The sunset banner is a pure function (geminiSunsetBanner) so its
+// three modes — pre-sunset countdown, post-sunset auto-disabled,
+// post-sunset force-overridden — can be exercised against an
+// injected clock instead of waiting for the wall clock to cross the
+// real 2026-06-18 cutoff. Higher-layer doctor wiring is covered
+// indirectly through TestRunDoctor smoke tests above.
+
+func TestGeminiSunsetBanner_PreSunsetShowsCountdown(t *testing.T) {
+	var buf bytes.Buffer
+	preSunset := time.Date(2026, 5, 30, 12, 0, 0, 0, time.UTC) // ~18 days before
+	geminiSunsetBanner(&buf, preSunset, false /* force */)
+	out := buf.String()
+	for _, must := range []string{
+		"days until Gemini CLI sunset",
+		"2026-06-18",
+		"Antigravity",
+	} {
+		if !strings.Contains(out, must) {
+			t.Errorf("pre-sunset banner missing %q\nfull output:\n%s", must, out)
+		}
+	}
+	// Must NOT show the post-sunset wording yet.
+	for _, illegal := range []string{"auto-disabled", "force_after_sunset is set"} {
+		if strings.Contains(out, illegal) {
+			t.Errorf("pre-sunset banner leaked post-sunset wording %q:\n%s", illegal, out)
+		}
+	}
+}
+
+func TestGeminiSunsetBanner_PostSunsetDefaultAutoDisabled(t *testing.T) {
+	var buf bytes.Buffer
+	postSunset := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC) // ~2 weeks after
+	geminiSunsetBanner(&buf, postSunset, false /* force */)
+	out := buf.String()
+	for _, must := range []string{
+		"auto-disabled",
+		"2026-06-18",
+		"force_after_sunset",
+		"override",
+	} {
+		if !strings.Contains(out, must) {
+			t.Errorf("post-sunset (default) banner missing %q\nfull output:\n%s", must, out)
+		}
+	}
+	// Pre-sunset countdown phrasing must be gone.
+	if strings.Contains(out, "days until") {
+		t.Errorf("post-sunset banner must not show the countdown:\n%s", out)
+	}
+}
+
+func TestGeminiSunsetBanner_PostSunsetForceShowsOverride(t *testing.T) {
+	var buf bytes.Buffer
+	postSunset := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	geminiSunsetBanner(&buf, postSunset, true /* force */)
+	out := buf.String()
+	for _, must := range []string{
+		"force_after_sunset is set",
+		"running anyway",
+		"401",
+	} {
+		if !strings.Contains(out, must) {
+			t.Errorf("post-sunset force-overridden banner missing %q\nfull output:\n%s", must, out)
+		}
+	}
+	// Must NOT show auto-disabled wording when the user has opted in.
+	if strings.Contains(out, "auto-disabled") {
+		t.Errorf("force-overridden banner must not say 'auto-disabled':\n%s", out)
+	}
+}
+
+func TestGeminiSunsetBanner_AtSunsetMidnightIsPostSunset(t *testing.T) {
+	// The at-or-after semantics: a banner rendered at exactly the
+	// sunset moment must show the post-sunset wording, not the "0
+	// days until" countdown — both because cli.IsAgentSunset returns
+	// true on the boundary, and because rendering "0 days until
+	// sunset" at the precise sunset instant would read as a bug.
+	var buf bytes.Buffer
+	geminiSunsetBanner(&buf, time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC), false)
+	out := buf.String()
+	if !strings.Contains(out, "auto-disabled") {
+		t.Errorf("banner at sunset midnight must show post-sunset wording, got:\n%s", out)
+	}
+	if strings.Contains(out, "days until") {
+		t.Errorf("banner at sunset midnight must not still show the countdown:\n%s", out)
+	}
+}

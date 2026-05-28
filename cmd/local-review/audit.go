@@ -200,7 +200,7 @@ func pickAuditLLM(sf *sharedFlags, af auditFlags) (cli.LLM, error) {
 	if err != nil {
 		return cli.LLM{}, fmt.Errorf("load config: %w", err)
 	}
-	active, _ := pickAgents(cfg, sf)
+	active, _, _ := pickAgents(cfg, sf)
 	return selectAuditLLM(active, af.with)
 }
 

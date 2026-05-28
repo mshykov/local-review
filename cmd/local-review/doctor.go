@@ -139,10 +139,23 @@ func runDoctor(out io.Writer) error {
 			reviewCapable++
 		}
 		status, auth := classify(llm, customEnvVars[llm.Name])
-		if status == statusReady {
-			readyCount++
+		var force bool
+		if c, ok := cfg.LLMs[llm.Name]; ok && c.ForceAfterSunset != nil {
+			force = *c.ForceAfterSunset
 		}
-		printLLMRow(w, llm, status, auth, models[llm.Name])
+		// Mirror the runtime fan-out: a sunset CLI without
+		// force_after_sunset is NOT going to participate, so it
+		// must NOT count toward "N/M LLMs ready for multi-review".
+		// Pre-fix doctor said "5/5 ready" while selectAgents dropped
+		// gemini behind the scenes, giving users a false picture of
+		// available agents (codex self-review on PR 2/4).
+		if status == statusReady {
+			sunsetGated := cli.IsAgentSunset(llm.Name, time.Now().UTC()) && !force
+			if !sunsetGated {
+				readyCount++
+			}
+		}
+		printLLMRow(w, llm, status, auth, models[llm.Name], force)
 	}
 
 	fmt.Fprintln(w)
@@ -357,7 +370,7 @@ func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 // know how to take control. For not-authed rows we still elide when
 // no model is pinned, since the row's primary signal is the auth fix
 // and the model line would be noise.
-func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string) {
+func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string, forceAfterSunset bool) {
 	displayName := getDisplayName(llm.Name)
 
 	// Provider agents render an HTTP-endpoint-shaped row (no Path,
@@ -431,19 +444,53 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 		printInstallInstructions(out, llm.Name)
 	}
 
-	// Gemini deprecation notice (added during the Antigravity
-	// succession work). Google's Gemini CLI stops serving
-	// Pro/Ultra/free-tier requests on 2026-06-18; Antigravity
-	// (`agy`) is the replacement. Surface this on every gemini row
-	// — ready or not — so users see the migration path before the
-	// cutoff strands their config. Removed once gemini support is
-	// dropped in a post-cutoff release.
+	// Gemini sunset notice. Google's Gemini CLI stops serving
+	// Pro/Ultra/free-tier requests on 2026-06-18 (`cli.GeminiSunsetDate`);
+	// Antigravity (`agy`) is the replacement.
+	//
+	// v0.15 upgraded the static banner to a clock-aware variant:
+	//   pre-sunset             → countdown ("N days until sunset, ...")
+	//   post-sunset, !force    → "sunset (auto-disabled; ...)"
+	//   post-sunset, force     → "sunset (overridden — running anyway, ...)"
+	// Surfaced on every gemini row regardless of detection state so
+	// the user sees the migration path even when claude/codex are
+	// the active fan-out. Remove this block once gemini support is
+	// dropped entirely in a post-cutoff release.
 	if llm.Name == "gemini" {
-		fmt.Fprintln(out, "    ⚠ deprecated:  Gemini CLI stops serving on 2026-06-18. Migrate to Antigravity:")
-		fmt.Fprintln(out, "                   curl -fsSL https://antigravity.google/cli/install.sh | bash  (then `agy` to log in)")
+		geminiSunsetBanner(out, time.Now().UTC(), forceAfterSunset)
 	}
 
 	fmt.Fprintln(out)
+}
+
+// geminiSunsetBanner renders the appropriate sunset notice for the
+// gemini doctor row. Pure function: no time.Now() side effect (caller
+// passes `now`), no I/O beyond the writer. Three modes:
+//
+//   - Pre-sunset → countdown ("19 days until Gemini CLI sunset on
+//     2026-06-18; Antigravity (agy) is the announced replacement").
+//   - Post-sunset, force=false → "Gemini CLI sunset 2026-06-18:
+//     auto-disabled in the review fan-out. Migrate to Antigravity
+//     (agy), or set llms.gemini.force_after_sunset: true to override".
+//   - Post-sunset, force=true → "Gemini CLI sunset 2026-06-18:
+//     force_after_sunset is set — running anyway. Expect 401 / model-
+//     unavailable failures if Google has removed your tier".
+func geminiSunsetBanner(out io.Writer, now time.Time, force bool) {
+	sunset := cli.AgentSunsetDate("gemini")
+	dateStr := sunset.Format("2006-01-02")
+	if !cli.IsAgentSunset("gemini", now) {
+		days := cli.DaysUntilAgentSunset("gemini", now)
+		fmt.Fprintf(out, "    ⚠ deprecated:  %d days until Gemini CLI sunset on %s. Migrate to Antigravity:\n", days, dateStr)
+		fmt.Fprintln(out, "                   curl -fsSL https://antigravity.google/cli/install.sh | bash  (then `agy` to log in)")
+		return
+	}
+	if force {
+		fmt.Fprintf(out, "    ⚠ sunset:      Gemini CLI sunset %s — force_after_sunset is set, running anyway.\n", dateStr)
+		fmt.Fprintln(out, "                   Expect 401 / model-unavailable failures if Google has removed your tier.")
+		return
+	}
+	fmt.Fprintf(out, "    ✗ sunset:      Gemini CLI sunset %s — auto-disabled in the review fan-out.\n", dateStr)
+	fmt.Fprintln(out, "                   Migrate to Antigravity (`agy`), or set llms.gemini.force_after_sunset: true to override.")
 }
 
 func getDisplayName(name string) string {

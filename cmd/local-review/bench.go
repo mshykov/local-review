@@ -311,7 +311,7 @@ func pickBenchLLMs(bf benchFlags) ([]cli.LLM, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 	sf := &sharedFlags{only: bf.only}
-	active, _ := pickAgents(cfg, sf)
+	active, _, _ := pickAgents(cfg, sf)
 	if len(active) == 0 && bf.only != "" {
 		return nil, fmt.Errorf("--only %q matched no ready LLMs (run `local-review doctor` to see what's authenticated; refusing to silently bench a different set than the one named)", bf.only)
 	}

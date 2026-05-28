@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/git"
 )
@@ -371,7 +372,7 @@ func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref s
 	}
 	applyFlagsToConfig(&cfg, sf)
 
-	active, configDisabled := pickAgents(cfg, sf)
+	active, configDisabled, sunsetDropped := pickAgents(cfg, sf)
 
 	// If --only named an experimental (non-review-capable) CLI, say so
 	// explicitly. Otherwise its absence — or an empty active set — reads
@@ -395,7 +396,12 @@ func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref s
 		// silently no-op'ing.
 		fmt.Fprintln(os.Stderr, "No active LLMs to review with.")
 		if len(configDisabled) > 0 {
-			fmt.Fprintf(os.Stderr, "  - Authenticated CLIs disabled in config: %v — pass --only <agent> to override.\n", configDisabled)
+			fmt.Fprintf(os.Stderr, "  - Authenticated CLIs disabled in config: %v — pass --only %s to override.\n",
+				configDisabled, strings.Join(configDisabled, ","))
+		}
+		for _, name := range sunsetDropped {
+			fmt.Fprintf(os.Stderr, "  - %s past manufacturer sunset (%s) — set llms.%s.force_after_sunset: true to override.\n",
+				name, cli.AgentSunsetDate(name).Format("2006-01-02"), name)
 		}
 		fmt.Fprintln(os.Stderr, "  - Authenticate a CLI agent (`claude login`, `codex login`, `copilot login`, or `gemini /auth`)")
 		fmt.Fprintln(os.Stderr, "  - OR add a provider endpoint to your config:")
@@ -406,7 +412,7 @@ func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref s
 		fmt.Fprintln(os.Stderr, "Run `local-review doctor` for current status.")
 		return fmt.Errorf("no active LLMs (v0.15 dropped the single-LLM `provider:` fallback; see above)")
 	}
-	return runMultiLLMReview(ctx, cfg, sf, active, configDisabled, mode, ref)
+	return runMultiLLMReview(ctx, cfg, sf, active, configDisabled, sunsetDropped, mode, ref)
 }
 
 // applyFlagsToConfig overlays --flag values onto the resolved config.
