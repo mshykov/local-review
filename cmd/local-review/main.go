@@ -112,6 +112,18 @@ type sharedFlags struct {
 	// package default" rather than "infinite" — the probe always
 	// needs SOME cap or the v0.10.1 4-minute-gemini-hang regresses.
 	preflightTimeout time.Duration
+
+	// strictProbe (v0.14 unified-agent series, PR 3) toggles the
+	// pre-flight readiness probe for provider agents (Ollama / vLLM /
+	// any /v1 endpoint). Default false: providers do a cheap
+	// `GET /v1/models` check that proves the endpoint is up and auth
+	// works without burning tokens or loading the model. With --strict-
+	// probe, providers fall through to a real `Reply OK` chat
+	// completion (same as CLI agents always do) — exercises the
+	// configured model id end-to-end, catches "endpoint up but model
+	// not loaded" cases the light probe misses. CLI agents are
+	// unaffected by this flag (they have no lighter alternative).
+	strictProbe bool
 }
 
 func main() {
@@ -228,6 +240,7 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	// --no-preflight (which loses the readiness signal entirely).
 	// Zero / unset falls back to cli.DefaultProbeTimeout.
 	root.PersistentFlags().DurationVar(&sf.preflightTimeout, "preflight-timeout", 0, "per-LLM probe deadline (default: 10s); raise when CLIs cold-start past the default")
+	root.PersistentFlags().BoolVar(&sf.strictProbe, "strict-probe", false, "exercise provider endpoints with a real chat completion (default: lighter GET /v1/models)")
 
 	// Group commands so --help reads as three sections (Review / Setup /
 	// Other) instead of one alphabetical wall. Cobra renders any command

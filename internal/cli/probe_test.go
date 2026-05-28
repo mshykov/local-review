@@ -168,7 +168,7 @@ func TestProbeAll_PreservesRosterOrder(t *testing.T) {
 		return nil
 	}
 
-	results := ProbeAllWithInvokerFactory(context.Background(), llms, 5*time.Second, factory)
+	results := ProbeAllWithInvokerFactory(context.Background(), llms, 5*time.Second, factory, nil, false)
 	if len(results) != 3 {
 		t.Fatalf("got %d results, want 3", len(results))
 	}
@@ -206,7 +206,7 @@ func TestProbeAll_MixedReadyErrorTimeout(t *testing.T) {
 		return nil
 	}
 
-	results := ProbeAllWithInvokerFactory(context.Background(), llms, 30*time.Millisecond, factory)
+	results := ProbeAllWithInvokerFactory(context.Background(), llms, 30*time.Millisecond, factory, nil, false)
 	if len(results) != 3 {
 		t.Fatalf("got %d results, want 3", len(results))
 	}
@@ -238,7 +238,7 @@ func TestProbeAll_NilInvokerFactoryProducesError(t *testing.T) {
 		return &fakeProbeInvoker{output: "OK"}
 	}
 
-	results := ProbeAllWithInvokerFactory(context.Background(), llms, 5*time.Second, factory)
+	results := ProbeAllWithInvokerFactory(context.Background(), llms, 5*time.Second, factory, nil, false)
 	if len(results) != 2 {
 		t.Fatalf("got %d results, want 2", len(results))
 	}
@@ -269,7 +269,7 @@ func TestProbeAll_FansOutInParallel(t *testing.T) {
 	}
 
 	start := time.Now()
-	_ = ProbeAllWithInvokerFactory(context.Background(), llms, 5*time.Second, factory)
+	_ = ProbeAllWithInvokerFactory(context.Background(), llms, 5*time.Second, factory, nil, false)
 	elapsed := time.Since(start)
 
 	// Three sequential 50ms calls would take ~150ms. Parallel
@@ -419,7 +419,7 @@ func TestProbeAll_PhaseRespectsTimeoutEvenWhenOneInvokerHangs(t *testing.T) {
 
 	const perLLM = 50 * time.Millisecond
 	start := time.Now()
-	results := ProbeAllWithInvokerFactory(context.Background(), llms, perLLM, factory)
+	results := ProbeAllWithInvokerFactory(context.Background(), llms, perLLM, factory, nil, false)
 	elapsed := time.Since(start)
 
 	if len(results) != 3 {
@@ -615,5 +615,108 @@ func TestProbe_TimeoutClassification(t *testing.T) {
 				t.Errorf("errors.Is(Err, %v) = false, want true", tc.wantUnwraps)
 			}
 		})
+	}
+}
+
+// --- Provider probe dispatch (v0.14 unified-agent series, PR 3) -------------
+
+// Default (non-strict) mode: provider agents go through the cheap
+// HTTP /v1/models probe — NOT Invoker.RunPrompt. providerProbeFn
+// passed as a parameter (per-call seam, no package globals) so tests
+// can run in parallel without reassignment races (PR 3 self-review
+// catch).
+func TestProbeAll_ProviderLight_UsesHTTPProbeNotInvoker(t *testing.T) {
+	llms := []LLM{
+		{Name: "qwen", BaseURL: "http://example/v1", Model: "qwen2.5-coder:7b"},
+	}
+	// Track which path ran. If the dispatcher routes correctly to the
+	// light probe, the invoker factory below must NEVER be called.
+	var invokerCalled bool
+	factory := func(LLM) Invoker {
+		invokerCalled = true
+		return &fakeProbeInvoker{output: "OK"}
+	}
+	probeFn := func(context.Context, string, string, time.Duration) error { return nil }
+
+	results := ProbeAllWithInvokerFactory(context.Background(), llms, 2*time.Second, factory, probeFn, false /* strict */)
+	if len(results) != 1 {
+		t.Fatalf("len: got %d, want 1", len(results))
+	}
+	if !results[0].IsReady() {
+		t.Errorf("provider should be Ready when light probe succeeds; got %s (%v)", results[0].Status, results[0].Err)
+	}
+	if invokerCalled {
+		t.Error("light-probe path must NOT invoke the chat-completion Invoker (would defeat the cheap-probe contract)")
+	}
+}
+
+// Strict mode: provider agents fall through to the Invoker path so the
+// configured model id is actually exercised (catches "endpoint up but
+// model not loaded"). The HTTP-probe seam must NOT be called.
+func TestProbeAll_ProviderStrict_UsesInvokerNotHTTPProbe(t *testing.T) {
+	llms := []LLM{
+		{Name: "qwen", BaseURL: "http://example/v1", Model: "qwen2.5-coder:7b"},
+	}
+	invokerCalled := false
+	factory := func(LLM) Invoker {
+		invokerCalled = true
+		return &fakeProbeInvoker{output: "OK"}
+	}
+	httpProbeCalled := false
+	probeFn := func(context.Context, string, string, time.Duration) error {
+		httpProbeCalled = true
+		return nil
+	}
+
+	results := ProbeAllWithInvokerFactory(context.Background(), llms, 2*time.Second, factory, probeFn, true /* strict */)
+	if !results[0].IsReady() {
+		t.Errorf("strict-mode provider must be Ready when Invoker succeeds; got %s", results[0].Status)
+	}
+	if !invokerCalled {
+		t.Error("strict mode must route providers through the Invoker (real chat completion)")
+	}
+	if httpProbeCalled {
+		t.Error("strict mode must NOT also fire the HTTP light probe")
+	}
+}
+
+// HTTP probe failure surfaces with the right ProbeStatus (Timeout vs
+// Error) so the readiness-block renderer can pick the right glyph and
+// the runner's cancel-vs-timeout discrimination still works. The
+// probe blocks until the per-LLM ctx fires, then returns ctx.Err()
+// directly — exercises the unwrapped path.
+func TestProbeAll_ProviderLight_TimeoutMapsToProbeTimeout(t *testing.T) {
+	llms := []LLM{
+		{Name: "slow-qwen", BaseURL: "http://example/v1"},
+	}
+	probeFn := func(ctx context.Context, _, _ string, _ time.Duration) error {
+		<-ctx.Done() // block until the probe's per-LLM ctx fires
+		return ctx.Err()
+	}
+
+	results := ProbeAllWithInvokerFactory(context.Background(), llms, 20*time.Millisecond, func(LLM) Invoker { return nil }, probeFn, false)
+	if results[0].Status != ProbeTimeout {
+		t.Errorf("blocked probe past the deadline must yield ProbeTimeout, got %s (%v)", results[0].Status, results[0].Err)
+	}
+}
+
+// provider.Probe wraps its error chain (`fmt.Errorf("reach %s: %w", url,
+// ctx.Err())`) AND has its own inner timeout that may fire before the
+// caller's pctx. The classifier must unwrap via errors.Is so wrapped
+// DeadlineExceeded still maps to ProbeTimeout (not a generic
+// ProbeError + ✗ glyph). Self-review (PR 3) flagged the gap.
+func TestProbeAll_ProviderLight_WrappedDeadlineMapsToTimeout(t *testing.T) {
+	llms := []LLM{
+		{Name: "slow", BaseURL: "http://example/v1"},
+	}
+	probeFn := func(ctx context.Context, _, _ string, _ time.Duration) error {
+		// Return a WRAPPED deadline (matches what provider.Probe actually
+		// produces) without the caller's pctx having fired yet — proves
+		// the classifier consults the error chain, not just pctx.Err().
+		return fmt.Errorf("reach http://example/v1/models: %w", context.DeadlineExceeded)
+	}
+	results := ProbeAllWithInvokerFactory(context.Background(), llms, 2*time.Second, func(LLM) Invoker { return nil }, probeFn, false)
+	if results[0].Status != ProbeTimeout {
+		t.Errorf("wrapped DeadlineExceeded must classify as ProbeTimeout, got %s (%v)", results[0].Status, results[0].Err)
 	}
 }
