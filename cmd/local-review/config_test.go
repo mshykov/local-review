@@ -44,15 +44,19 @@ func runConfigCmdIn(t *testing.T, yamlContent string) string {
 	return out.String()
 }
 
-func TestConfigCommand_MasksBasicAuthInProviderBaseURL(t *testing.T) {
+func TestConfigCommand_MasksBasicAuthInLLMsBaseURL(t *testing.T) {
 	// Credentials embedded in basic-auth userinfo (`user:pass@host`)
 	// must NOT survive a `config` dump — same standard as the api_key
 	// field, which has always been masked. Pre-fix the value was
 	// printed verbatim.
+	//
+	// v0.15 dropped the v0 `provider:` block; the same masking
+	// contract now applies to every `llms.<name>.base_url` value.
 	out := runConfigCmdIn(t, `
-provider:
-  base_url: https://leak-user:leak-pass@api.openai.com/v1
-  model: gpt-4o
+llms:
+  openai:
+    base_url: https://leak-user:leak-pass@api.openai.com/v1
+    model: gpt-4o
 `)
 	if strings.Contains(out, "leak-user") || strings.Contains(out, "leak-pass") {
 		t.Errorf("basic-auth credentials must be stripped from config output; got:\n%s", out)
@@ -62,13 +66,14 @@ provider:
 	}
 }
 
-func TestConfigCommand_MasksQueryStringInProviderBaseURL(t *testing.T) {
+func TestConfigCommand_MasksQueryStringInLLMsBaseURL(t *testing.T) {
 	// Some providers accept the key as a query-string parameter.
 	// That belongs in an env var, not in a shareable config dump.
 	out := runConfigCmdIn(t, `
-provider:
-  base_url: https://api.example.test/v1?api_key=sk-LEAKED
-  model: gpt-4o
+llms:
+  openai:
+    base_url: https://api.example.test/v1?api_key=sk-LEAKED
+    model: gpt-4o
 `)
 	if strings.Contains(out, "sk-LEAKED") || strings.Contains(out, "api_key=") {
 		t.Errorf("query-string credentials must be stripped from config output; got:\n%s", out)
@@ -78,23 +83,15 @@ provider:
 	}
 }
 
-func TestConfigCommand_PlainProviderBaseURLRoundtrips(t *testing.T) {
-	// The common case: an unauthenticated URL stays exactly itself.
-	// Sanitization must not corrupt valid configs.
-	out := runConfigCmdIn(t, `
-provider:
-  base_url: http://localhost:11434/v1
-  model: qwen2.5
-`)
-	if !strings.Contains(out, "http://localhost:11434/v1") {
-		t.Errorf("plain URL must roundtrip; got:\n%s", out)
-	}
-}
+// TestConfigCommand_PlainLLMsBaseURLRoundtrips (below) covers the
+// plain-URL roundtrip path. The v0.14 separate "Provider" variant
+// is gone as of v0.15 — there's nothing left to differentiate.
 
-func TestConfigCommand_MasksCredsInLLMsBaseURL(t *testing.T) {
-	// The unified v0.14 agent model puts the same `base_url:` field
-	// under `llms.<name>:`. Masking must apply there too — the
-	// `provider:` block isn't the only leak surface.
+func TestConfigCommand_MasksCredsInExtraLLMsBaseURL(t *testing.T) {
+	// Symmetric coverage: a second `llms.<name>.base_url` entry
+	// (different name, different vendor) must also be masked. Pins
+	// that the printer iterates the LLMs map rather than masking
+	// only a known key.
 	out := runConfigCmdIn(t, `
 llms:
   cloud:

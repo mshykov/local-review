@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed (BREAKING)
+
+- **Top-level `provider:` config block** (and the v0 single-LLM fallback code path it drove). Deprecated in v0.14, scheduled for removal in v0.15 — this is that removal. A `.local-review.yml` that still carries a `provider:` key now surfaces an actionable migration error at load time pointing at the unified `llms.<name>.base_url` shape (verbatim field rename — `provider.base_url` → `llms.<name>.base_url`, same for `model` / `api_key_env` / `timeout_seconds`). Internals dropped alongside: `config.Provider` struct + field, `resolveAPIKey`, `warnDeprecatedProviderBlock`, `shouldWarnDeprecatedProvider`, the `internal/review` single-LLM orchestration (`Reviewer.Run`, `parseFindings`, `topLevelJSONObjects`, `applyFilters`, `buildUserMessage`), and the `runSingleLLMFallback` runner branch.
+- **`--model` and `--base-url` CLI flags** went with the same removal — they only overlaid `cfg.Provider`. Per-agent equivalents (`--claude-model`, `--codex-model`, …) and the config-time `llms.<name>.model` field cover the same use case under the unified shape.
+- **Legacy example configs**: `examples/.local-review.mistral.yml`, `examples/.local-review.deepseek.yml`, `examples/.local-review-multi.yml` deleted. The previous `examples/.local-review.unified.yml` is promoted to the canonical `examples/.local-review.yml`.
+
+### Changed
+
+- **`local-review init` wizard now emits the unified shape** — output is `llms.<presetName>:` (e.g. `llms.openai:`, `llms.ollama:`) instead of the v0 top-level `provider:` block. The preset name is free-form; the comment above the entry tells users they can rename it to anything that reads well for their team.
+- **`internal/review` package slimmed** to just the diff-filter machinery (`FilterDiffs` + the glob helpers the multi-LLM runner shares with the audit walker). The structured `Severity` / `Finding` / `Report` types stay (used by `internal/output`, `internal/multi`, audit), but the LLM orchestration is gone.
+
 ## [0.14.1] - 2026-05-28
 
 ### Fixed

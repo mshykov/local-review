@@ -16,7 +16,6 @@ import (
 	"github.com/mshykov/local-review/internal/git"
 	"github.com/mshykov/local-review/internal/lang"
 	"github.com/mshykov/local-review/internal/multi"
-	"github.com/mshykov/local-review/internal/output"
 	"github.com/mshykov/local-review/internal/prompts"
 	"github.com/mshykov/local-review/internal/review"
 )
@@ -683,13 +682,13 @@ func isNonePlaceholder(line string) bool {
 // that don't reflect what the user asked for.
 func warnIgnoredFlags(sf *sharedFlags) {
 	if sf.jsonOut {
-		fmt.Fprintln(os.Stderr, "Warning: --json is only honored in single-LLM fallback (the merged report is markdown).")
+		fmt.Fprintln(os.Stderr, "Warning: --json is ignored on the review path (the merged report is markdown); it still applies to audit and bench.")
 	}
 	if sf.minSeverity != "" {
-		fmt.Fprintln(os.Stderr, "Warning: --min-severity is only honored in single-LLM fallback; multi-LLM filtering happens inside the merge prompt.")
+		fmt.Fprintln(os.Stderr, "Warning: --min-severity is ignored on the review path (filtering happens inside the merge prompt); it still applies to audit and bench.")
 	}
 	if sf.maxFindings != 0 {
-		fmt.Fprintln(os.Stderr, "Warning: --max-findings is only honored in single-LLM fallback; multi-LLM trims inside the merge prompt.")
+		fmt.Fprintln(os.Stderr, "Warning: --max-findings is ignored on the review path (trimming happens inside the merge prompt); it still applies to audit and bench.")
 	}
 }
 
@@ -1217,41 +1216,6 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	fmt.Println("─── End ───")
 
 	return savedPath, merged, mergeTokens
-}
-
-// runSingleLLMFallback is the v0 path: hit the configured provider's
-// chat-completions endpoint with a single review pass. Used when no LLM
-// CLI is active.
-func runSingleLLMFallback(ctx context.Context, cfg config.Config, sf *sharedFlags, mode git.Mode, ref string) error {
-	r := review.New(cfg)
-	rep, err := r.Run(ctx, mode, ref)
-	if err != nil {
-		return err
-	}
-
-	if sf.jsonOut {
-		if err := output.WriteJSON(os.Stdout, rep); err != nil {
-			return err
-		}
-	} else {
-		if err := output.WriteText(os.Stdout, rep); err != nil {
-			return err
-		}
-	}
-
-	if hasBlocking(rep) {
-		return errBlockingFindings
-	}
-	return nil
-}
-
-func hasBlocking(r review.Report) bool {
-	for _, f := range r.Findings {
-		if f.Severity >= review.SeverityMajor {
-			return true
-		}
-	}
-	return false
 }
 
 // --- helpers extracted from the deleted multi.go --------------------

@@ -26,7 +26,6 @@ body:
         - Review (local-review review/staged/commit/branch — multi-LLM by default)
         - Audit (local-review audit --topic …)
         - Provider agent via llms.<name>.base_url (Ollama / vLLM / OpenAI / …)
-        - Single-LLM fallback via the deprecated top-level provider: block
         - Doctor (local-review doctor)
         - Init (local-review init)
         - Other

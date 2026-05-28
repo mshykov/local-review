@@ -1,4 +1,8 @@
-# local-review project config — drop this at the root of any repo.
+# local-review project config — unified agent model (v0.14+).
+#
+# Every authenticated CLI (claude / codex / copilot / gemini) AND every
+# reachable provider entry below runs in parallel for `local-review review`.
+# `local-review audit` picks one (first by default, or pin via --with <name>).
 #
 # Cascading order (lowest precedence first):
 #   1. Built-in defaults
@@ -6,38 +10,44 @@
 #   3. ./.local-review.yml          ← this file
 #   4. CLI flags
 
-# DEPRECATED in v0.14: the top-level `provider:` block (this whole stanza)
-# is superseded by the unified agent model. Move the same fields under
-# `llms.<your-name>:` instead — any name you pick (e.g. `ollama`, `qwen`,
-# `cloud`) — and the entry runs side-by-side with the CLI agents in the
-# default fan-out. The legacy `provider:` block keeps working for one
-# release with a stderr deprecation warning; see
-# examples/.local-review.unified.yml for the new shape, or just rename:
-#
-#   llms:
-#     ollama:
-#       base_url: https://api.openai.com/v1
-#       model: gpt-4o-mini
-#       api_key_env: LOCAL_REVIEW_API_KEY
+llms:
+  # Pick any name — it's the agent's identifier in `doctor`, `--only`,
+  # `--with`, and the on-disk review filename. Conventions: "ollama" /
+  # "qwen" / "local-fast" / "cloud" / "air-gapped" — whatever reads well
+  # in your team's vocabulary.
+  ollama:
+    # Any OpenAI-compatible endpoint. The presence of base_url is what
+    # makes this entry a PROVIDER agent (HTTP, no CLI subprocess).
+    base_url: http://localhost:11434/v1
 
-provider:
-  # Any OpenAI-compatible endpoint. Examples:
-  #   OpenAI       https://api.openai.com/v1
-  #   Anthropic    https://api.anthropic.com/v1   (chat-completions endpoint)
-  #   Mistral      https://api.mistral.ai/v1      (EU-hosted; see examples/.local-review.mistral.yml)
-  #   DeepSeek     https://api.deepseek.com/v1    (cheapest; see examples/.local-review.deepseek.yml)
-  #   Together     https://api.together.xyz/v1
-  #   Groq         https://api.groq.com/openai/v1
-  #   OpenRouter   https://openrouter.ai/api/v1
-  #   Ollama       http://localhost:11434/v1       (local, no key required by Ollama)
-  base_url: https://api.openai.com/v1
+    # Model name passed in the chat-completions request.
+    # Examples: qwen2.5-coder:7b, llama3.1:8b, deepseek-coder-v2, gpt-4o-mini
+    model: qwen2.5-coder:7b
 
-  model: gpt-4o-mini
+    # Optional: env var name for the API key. Local Ollama / LAN /
+    # Tailscale endpoints are auth-free by default (see isLocalURL).
+    # Public-internet endpoints (OpenAI, Anthropic, …) need this set.
+    # api_key_env: LOCAL_REVIEW_API_KEY
 
-  # Read the API key from this env var. Default: LOCAL_REVIEW_API_KEY
-  api_key_env: LOCAL_REVIEW_API_KEY
+    # Optional per-call timeout; default 60.
+    # timeout_seconds: 60
 
-  timeout_seconds: 60
+  # A second provider entry is just another agent — run alongside the
+  # local one and the CLIs. Comment in / out to flip the active set.
+  #
+  # cloud-openai:
+  #   base_url: https://api.openai.com/v1
+  #   model: gpt-4o-mini
+  #   api_key_env: LOCAL_REVIEW_API_KEY
+
+  # CLI agents are auto-detected — listing them is optional, but if you
+  # do, the same shape works (no base_url needed; the runtime locates
+  # the binary). Use this only to pin a specific model or disable one.
+  #
+  # claude:
+  #   model: claude-sonnet-4-6
+  # codex:
+  #   enabled: false
 
 review:
   # Hide nits + info findings unless explicitly requested.
@@ -46,7 +56,6 @@ review:
   # Hard cap so a chatty model can't drown you in noise.
   max_findings: 20
 
-  # Files to skip. Glob syntax: filepath.Match plus naive ** support.
   exclude:
     - "**/*.lock"
     - "**/*.snap"
@@ -54,5 +63,7 @@ review:
     - "**/build/**"
     - "**/node_modules/**"
 
-  # Force a specific prompt pack (otherwise auto-detected from file extensions).
-  # prompt_pack: typescript
+# merge:
+#   # Which agent consolidates the per-LLM findings. "auto" follows the
+#   # claude > codex > copilot > gemini preference; set explicitly to pin.
+#   preferred_llm: auto
