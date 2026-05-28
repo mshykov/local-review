@@ -178,18 +178,28 @@ type response struct {
 	Choices []struct {
 		Message Message `json:"message"`
 	} `json:"choices"`
+	// Usage is the prompt/completion token count every OpenAI-compatible
+	// provider populates on a successful response. Surfaced to callers
+	// via Complete's return so internal/agents/provider.Invoker can map
+	// it to agents.TokenUsage and per-call counts show up in the roster
+	// line. Missing or zero on partial/older implementations; treat as
+	// unknown (the provider invoker folds total_tokens-only responses
+	// into InputTokens with TotalOnly=true so they're not lost).
+	Usage Usage `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
 	} `json:"error"`
 }
 
-// Complete sends a chat completion and returns the assistant's text.
+// Complete sends a chat completion and returns the assistant's text
+// plus token usage from the provider's `usage` object (zero values
+// when the provider omitted it).
 //
 // jsonMode requests structured JSON output via response_format. Most
 // providers respect this; for those that don't, the system prompt
 // should still steer the model to JSON.
-func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (string, error) {
+func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (string, Usage, error) {
 	if c.APIKey == "" && !isLocalURL(c.BaseURL) {
 		// Local-review init's "Ollama" preset writes a config with no
 		// api_key_env line because Ollama doesn't authenticate. A blank
@@ -206,7 +216,7 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 		if envName == "" {
 			envName = "LOCAL_REVIEW_API_KEY"
 		}
-		return "", fmt.Errorf("no API key: $%s is unset or empty\n         run `local-review init` to set up a provider, or `export %s=...`\n         or run `local-review review` if you have LLM CLIs installed (see `local-review doctor`)", envName, envName)
+		return "", Usage{}, fmt.Errorf("no API key: $%s is unset or empty\n         run `local-review init` to set up a provider, or `export %s=...`\n         or run `local-review review` if you have LLM CLIs installed (see `local-review doctor`)", envName, envName)
 	}
 
 	req := request{
@@ -220,12 +230,12 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return "", fmt.Errorf("marshal: %w", err)
+		return "", Usage{}, fmt.Errorf("marshal: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("new request: %w", err)
+		return "", Usage{}, fmt.Errorf("new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if c.APIKey != "" {
@@ -239,7 +249,7 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("call %s: %w", c.BaseURL, err)
+		return "", Usage{}, fmt.Errorf("call %s: %w", c.BaseURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -248,10 +258,10 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 	// provider returned more than we'll trust.
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
+		return "", Usage{}, fmt.Errorf("read response: %w", err)
 	}
 	if int64(len(respBody)) > maxResponseBytes {
-		return "", fmt.Errorf("llm %s: response exceeded %d-byte cap (possible runaway provider or spoofed endpoint)", c.BaseURL, maxResponseBytes)
+		return "", Usage{}, fmt.Errorf("llm %s: response exceeded %d-byte cap (possible runaway provider or spoofed endpoint)", c.BaseURL, maxResponseBytes)
 	}
 
 	if resp.StatusCode >= 400 {
@@ -259,17 +269,17 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 		var parsed response
 		_ = json.Unmarshal(respBody, &parsed)
 		if parsed.Error != nil {
-			return "", fmt.Errorf("llm %s: %s", resp.Status, parsed.Error.Message)
+			return "", Usage{}, fmt.Errorf("llm %s: %s", resp.Status, parsed.Error.Message)
 		}
-		return "", fmt.Errorf("llm %s: %s", resp.Status, string(respBody))
+		return "", Usage{}, fmt.Errorf("llm %s: %s", resp.Status, string(respBody))
 	}
 
 	var out response
 	if err := json.Unmarshal(respBody, &out); err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
+		return "", Usage{}, fmt.Errorf("parse response: %w", err)
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("no choices returned")
+		return "", Usage{}, fmt.Errorf("no choices returned")
 	}
-	return out.Choices[0].Message.Content, nil
+	return out.Choices[0].Message.Content, out.Usage, nil
 }

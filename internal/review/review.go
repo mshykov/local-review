@@ -72,7 +72,12 @@ func (r *Reviewer) Run(ctx context.Context, mode git.Mode, ref string) (Report, 
 	}
 
 	user := buildUserMessage(diffs)
-	raw, err := r.client.Complete(ctx, []llm.Message{
+	// Usage discarded for now — single-LLM Complete now returns it
+	// alongside the text (v0.14 prep for the unified agent model), but
+	// the Report struct doesn't carry per-call usage yet. A later PR
+	// in the agents-unification series will thread it through. For now
+	// the multi-LLM path is the one that displays tokens.
+	raw, _, err := r.client.Complete(ctx, []llm.Message{
 		{Role: "system", Content: pack.Content},
 		{Role: "user", Content: user},
 	}, true)

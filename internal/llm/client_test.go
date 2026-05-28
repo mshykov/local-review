@@ -49,7 +49,7 @@ func TestComplete_NoAPIKeyReturnsError(t *testing.T) {
 	// right knob to set, and (b) point at `multi` mode as an alternative
 	// for users who only have CLI auth.
 	c := New("https://api.example.com", "", "OPENAI_API_KEY", "gpt-4", 0)
-	_, err := c.Complete(context.Background(), nil, false)
+	_, _, err := c.Complete(context.Background(), nil, false)
 	if err == nil {
 		t.Fatal("expected error for missing API key, got nil")
 	}
@@ -73,7 +73,7 @@ func TestComplete_NoAPIKeyFallsBackToLegacyEnvName(t *testing.T) {
 	// the error should fall back to the legacy default rather than
 	// printing "$" with no name.
 	c := New("https://api.example.com", "", "", "gpt-4", 0)
-	_, err := c.Complete(context.Background(), nil, false)
+	_, _, err := c.Complete(context.Background(), nil, false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -117,11 +117,54 @@ func okResponse(content string) http.HandlerFunc {
 	}
 }
 
+// Complete now returns the provider's `usage` object alongside the
+// text — pin that contract directly at the HTTP-client layer so a
+// regression in the response struct's `json:"usage"` mapping (or in
+// surfacing it through Complete's return) fails this test, not a
+// downstream provider-invoker test where the cause is one step
+// removed. Self-review (3-LLM consensus) on PR 1 of the agents
+// series flagged the gap.
+func TestComplete_ReturnsUsageFromResponse(t *testing.T) {
+	m := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[{"message":{"role":"assistant","content":"hi"}}],
+			"usage":{"prompt_tokens":1234,"completion_tokens":56,"total_tokens":1290}
+		}`))
+	})
+	c := New(m.server.URL, "sk-test", "LOCAL_REVIEW_API_KEY", "gpt-4o-mini", 5)
+	text, u, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if text != "hi" {
+		t.Errorf("text: want hi, got %q", text)
+	}
+	if u.PromptTokens != 1234 || u.CompletionTokens != 56 || u.TotalTokens != 1290 {
+		t.Errorf("usage mismatch: got %+v, want {Prompt:1234, Completion:56, Total:1290}", u)
+	}
+}
+
+// A response that omits `usage` (older / partial OpenAI-compat
+// providers) must yield a zero Usage, NOT an error — the rest of the
+// stack treats zero as "unknown."
+func TestComplete_MissingUsageYieldsZero(t *testing.T) {
+	m := newMockServer(t, okResponse("hello"))
+	c := New(m.server.URL, "sk-test", "LOCAL_REVIEW_API_KEY", "gpt-4o-mini", 5)
+	_, u, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	if err != nil {
+		t.Fatalf("missing usage should not error: %v", err)
+	}
+	if u != (Usage{}) {
+		t.Errorf("missing usage should map to zero Usage, got %+v", u)
+	}
+}
+
 func TestComplete_SendsExpectedRequestShape(t *testing.T) {
 	m := newMockServer(t, okResponse("hello"))
 	c := New(m.server.URL, "sk-test", "LOCAL_REVIEW_API_KEY", "gpt-4o-mini", 5)
 
-	got, err := c.Complete(context.Background(), []Message{
+	got, _, err := c.Complete(context.Background(), []Message{
 		{Role: "system", Content: "you are a reviewer"},
 		{Role: "user", Content: "review this"},
 	}, false)
@@ -171,7 +214,7 @@ func TestComplete_JSONModeIncludesResponseFormat(t *testing.T) {
 	m := newMockServer(t, okResponse("{}"))
 	c := New(m.server.URL, "sk-test", "LOCAL_REVIEW_API_KEY", "gpt-4o-mini", 5)
 
-	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, true)
+	_, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -197,7 +240,7 @@ func TestComplete_4xxWithJSONErrorEnvelope(t *testing.T) {
 	})
 	c := New(m.server.URL, "sk-bad", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 
-	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	_, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
 		t.Fatal("expected error for 401, got nil")
 	}
@@ -216,7 +259,7 @@ func TestComplete_4xxWithNonJSONBody(t *testing.T) {
 	})
 	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 
-	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	_, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
 		t.Fatal("expected error for 502, got nil")
 	}
@@ -233,7 +276,7 @@ func TestComplete_EmptyChoicesReturnsError(t *testing.T) {
 	})
 	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 
-	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	_, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
 		t.Fatal("expected error for empty choices, got nil")
 	}
@@ -250,7 +293,7 @@ func TestComplete_LocalURLOmitsAuthorizationHeaderOnEmptyKey(t *testing.T) {
 	// what they expect for unauthenticated mode.
 	m := newMockServer(t, okResponse("ok"))
 	c := New(m.server.URL, "", "LOCAL_REVIEW_API_KEY", "ollama-model", 5)
-	if _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false); err != nil {
+	if _, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := m.lastRequest.Header.Get("Authorization"); got != "" {
@@ -262,7 +305,7 @@ func TestComplete_NonEmptyKeyStillSetsAuthorizationHeader(t *testing.T) {
 	// Sanity: the header conditional must not regress the normal path.
 	m := newMockServer(t, okResponse("ok"))
 	c := New(m.server.URL, "sk-real", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
-	if _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false); err != nil {
+	if _, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got, want := m.lastRequest.Header.Get("Authorization"), "Bearer sk-real"; got != want {
@@ -280,7 +323,7 @@ func TestComplete_LocalURLSkipsKeyRequirement(t *testing.T) {
 	// Replace the mock URL's host with 127.0.0.1 explicitly to exercise
 	// the local-host detector. httptest already binds there.
 	c := New(m.server.URL, "", "LOCAL_REVIEW_API_KEY", "ollama-model", 5)
-	got, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	got, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err != nil {
 		t.Fatalf("local URL with empty key should succeed, got %v", err)
 	}
@@ -377,7 +420,7 @@ func TestComplete_RejectsOversizedResponse(t *testing.T) {
 	})
 	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 30)
 
-	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	_, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
 		t.Fatal("expected oversize error, got nil")
 	}
@@ -393,7 +436,7 @@ func TestComplete_MalformedJSONResponse(t *testing.T) {
 	})
 	c := New(m.server.URL, "sk-x", "LOCAL_REVIEW_API_KEY", "gpt-4", 5)
 
-	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	_, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
 		t.Fatal("expected parse error, got nil")
 	}
@@ -417,7 +460,7 @@ func TestComplete_RespectsContextCancellation(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := c.Complete(ctx, []Message{{Role: "user", Content: "x"}}, false)
+	_, _, err := c.Complete(ctx, []Message{{Role: "user", Content: "x"}}, false)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -445,7 +488,7 @@ func TestComplete_NetworkErrorIncludesURL(t *testing.T) {
 	// depend on whether port 9999 happens to be unbound in the test environment.
 	c.HTTP.Transport = &errRoundTripper{err: errors.New("connection refused")}
 
-	_, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
+	_, _, err := c.Complete(context.Background(), []Message{{Role: "user", Content: "x"}}, false)
 	if err == nil {
 		t.Fatal("expected network error, got nil")
 	}
@@ -462,7 +505,7 @@ func TestComplete_BodyContainsMessages(t *testing.T) {
 		{Role: "system", Content: "be terse"},
 		{Role: "user", Content: "hello"},
 	}
-	_, err := c.Complete(context.Background(), msgs, false)
+	_, _, err := c.Complete(context.Background(), msgs, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
