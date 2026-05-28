@@ -82,6 +82,21 @@ type LLMConfig struct {
 	APIKeyEnv  string `yaml:"api_key_env"`     // env var name for API key
 	APIKey     string `yaml:"api_key"`         // DEPRECATED: use environment variable instead
 	TimeoutSec int    `yaml:"timeout_seconds"` // per-call timeout
+
+	// ForceAfterSunset overrides the auto-disable behaviour applied
+	// to manufacturer-sunset CLIs (today: gemini, sunset 2026-06-18).
+	// Default behaviour is to drop a sunset CLI from the fan-out as
+	// soon as the cutoff passes — keeping it active without an
+	// override risks confusing 401s / "model unavailable" errors
+	// against an unreachable endpoint. A user who wants to retry
+	// past the cutoff (in case Google extends, or in case their
+	// network sees a different rollout) can set
+	// `llms.gemini.force_after_sunset: true` to opt back in.
+	//
+	// Pointer (*bool) so "field absent in YAML" is distinguishable
+	// from "field explicitly false". Today only meaningful on the
+	// gemini entry; ignored everywhere else.
+	ForceAfterSunset *bool `yaml:"force_after_sunset"`
 }
 
 // MergeConfig controls how multi-LLM reviews are merged (v0.1+).
@@ -560,6 +575,12 @@ func merge(dst *Config, src Config) {
 				// Enabled is a *bool, only override if explicitly set in src
 				if llmCfg.Enabled != nil {
 					existing.Enabled = llmCfg.Enabled
+				}
+				// ForceAfterSunset (v0.15) — *bool, same merge shape
+				// as Enabled. Distinguishes "field absent" (nil, use
+				// dst value) from "set to false" (non-nil, override).
+				if llmCfg.ForceAfterSunset != nil {
+					existing.ForceAfterSunset = llmCfg.ForceAfterSunset
 				}
 
 				dst.LLMs[name] = existing

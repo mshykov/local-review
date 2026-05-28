@@ -29,3 +29,10 @@
 *.bak*
 .local-review/reviews/
 do-not-merge/
+
+# Claude Code per-repo harness scratch — scheduled task locks, local
+# settings overrides, worktrees. The harness owns these; nothing in
+# them belongs in version control.
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+.claude/worktrees/

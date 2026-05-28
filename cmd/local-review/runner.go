@@ -34,7 +34,7 @@ var errBlockingFindings = errors.New("blocking findings present")
 // detected from cfg.LLMs entries that carry a BaseURL — that's the
 // kind discriminator. Both kinds end up in the same []LLM slice and
 // flow through identical selection / ready-filter logic.
-func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDisabled []string) {
+func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDisabled, sunsetDropped []string) {
 	// Honor cfg.LLMs[*].CLIPath when set — corporate / nix-store installs
 	// at non-standard paths can override the default binary name.
 	overrides := make(map[string]string, len(cfg.LLMs))
@@ -58,7 +58,7 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 		status, _ := classify(llm, customEnvVar)
 		ready[llm.Name] = status == statusReady
 	}
-	return selectAgents(detected, ready, cfg, sf)
+	return selectAgents(detected, ready, cfg, sf, time.Now().UTC())
 }
 
 // providerSpecsFromConfig extracts the provider entries from cfg.LLMs
@@ -107,7 +107,26 @@ func providerSpecsFromConfig(cfg config.Config) []cli.ProviderSpec {
 //     supplies; in production this comes from doctor's classify).
 //  3. If config explicitly sets enabled:false, skip — but report it
 //     separately so we can tell the user about the override path.
-func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDisabled []string) {
+//
+// selectAgents takes `now` (UTC) as a parameter rather than calling
+// time.Now() internally so the sunset behaviour (v0.15+) is testable
+// against a fixed clock — production callers pass time.Now().UTC()
+// via pickAgents. Tests inject pre/post-sunset timestamps to
+// exercise both the auto-disable branch and the
+// force_after_sunset opt-out without waiting for the wall clock to
+// cross the real 2026-06-18 cutoff.
+//
+// Returns three lists: `active` (the fan-out roster); `configDisabled`
+// (agents skipped because cfg.LLMs[*].Enabled is false — the
+// `--only <name>` override-hint path consumes this); `sunsetDropped`
+// (agents skipped because their manufacturer-announced sunset date
+// has passed and `force_after_sunset` isn't set). The two skip lists
+// are kept separate because their override paths are different —
+// configDisabled wants `--only`, sunsetDropped wants
+// `llms.<name>.force_after_sunset: true` — and the original v0.15
+// review caught that bundling them broke the `--only` suggestion
+// in printAgentRoster.
+func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, sf *sharedFlags, now time.Time) (active []cli.LLM, configDisabled, sunsetDropped []string) {
 	if want := parseOnlyList(sf.only); len(want) > 0 {
 		for _, llm := range detected {
 			if !want[llm.Name] {
@@ -119,9 +138,17 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 			if !ready[llm.Name] {
 				continue
 			}
+			if isSunsetAndNotForced(llm.Name, cfg, now) {
+				// --only is an explicit allow-list; honour the user's
+				// intent over the sunset auto-disable. Warn so they
+				// see they're past the cutoff (force_after_sunset is
+				// always implicit under --only of a sunset agent).
+				fmt.Fprintf(os.Stderr, "Warning: --only %s past manufacturer sunset (%s) — running anyway (treat any failures as expected).\n",
+					llm.Name, cli.AgentSunsetDate(llm.Name).Format("2006-01-02"))
+			}
 			active = append(active, applyConfig(llm, cfg))
 		}
-		return active, nil
+		return active, nil, nil
 	}
 
 	for _, llm := range detected {
@@ -135,9 +162,38 @@ func selectAgents(detected []cli.LLM, ready map[string]bool, cfg config.Config, 
 			configDisabled = append(configDisabled, llm.Name)
 			continue
 		}
+		if isSunsetAndNotForced(llm.Name, cfg, now) {
+			// v0.15: drop the agent from the active set once its
+			// manufacturer-announced sunset passes (today: gemini
+			// after 2026-06-18). Without this, every default-mode
+			// review post-cutoff burns ~10s on the pre-flight probe
+			// only to surface a 401 or "model not found" error.
+			// `llms.<name>.force_after_sunset: true` opts back in.
+			// Reported separately from configDisabled so the
+			// `--only <name>` override hint stays valid syntactically
+			// and the sunset hint renders with its own
+			// `force_after_sunset: true` advice.
+			sunsetDropped = append(sunsetDropped, llm.Name)
+			continue
+		}
 		active = append(active, applyConfig(llm, cfg))
 	}
-	return active, configDisabled
+	return active, configDisabled, sunsetDropped
+}
+
+// isSunsetAndNotForced returns true when the agent's manufacturer
+// sunset date has passed AND the user has NOT explicitly opted
+// in via llms.<name>.force_after_sunset. Today only gemini has a
+// sunset; the predicate is no-op for everything else (returns false
+// from cli.IsAgentSunset).
+func isSunsetAndNotForced(name string, cfg config.Config, now time.Time) bool {
+	if !cli.IsAgentSunset(name, now) {
+		return false
+	}
+	if c, ok := cfg.LLMs[name]; ok && c.ForceAfterSunset != nil && *c.ForceAfterSunset {
+		return false
+	}
+	return true
 }
 
 // experimentalOnlyNames returns the --only entries that name a
@@ -211,7 +267,7 @@ func applyConfig(llm cli.LLM, cfg config.Config) cli.LLM {
 // runMultiLLMReview executes the parallel multi-LLM flow: print the
 // agent roster, extract the diff, fan out reviews, merge findings, save
 // to disk, and print the merged report to stdout.
-func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, configDisabled []string, mode git.Mode, ref string) error {
+func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, active []cli.LLM, configDisabled, sunsetDropped []string, mode git.Mode, ref string) error {
 	if err := cfg.Validate(); err != nil {
 		// `--only` is an explicit allow-list that overrides config-level
 		// enable/disable for agent selection (see selectAgents). So an
@@ -243,7 +299,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	if err != nil {
 		return err
 	}
-	printAgentRoster(active, configDisabled, cfg, branch, commit)
+	printAgentRoster(active, configDisabled, sunsetDropped, cfg, branch, commit)
 
 	diffs, err := git.Extract(mode, ref)
 	if err != nil {
@@ -719,7 +775,7 @@ func validateMergeWith(sf *sharedFlags, active []cli.LLM) error {
 // they're reviewing without scrolling — important when the same shell
 // is jumping between checkouts and `local-review review` is the first
 // thing they see after a `git switch`.
-func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Config, branch, commit string) {
+func printAgentRoster(active []cli.LLM, configDisabled, sunsetDropped []string, cfg config.Config, branch, commit string) {
 	short := commit
 	if len(short) > 7 {
 		short = short[:7]
@@ -760,6 +816,10 @@ func printAgentRoster(active []cli.LLM, configDisabled []string, cfg config.Conf
 	if len(configDisabled) > 0 {
 		fmt.Printf("  (skipped: %s — disabled in config; pass `--only %s` to run anyway)\n",
 			strings.Join(configDisabled, ", "), strings.Join(configDisabled, ","))
+	}
+	for _, name := range sunsetDropped {
+		fmt.Printf("  (skipped: %s — past manufacturer sunset %s; set `llms.%s.force_after_sunset: true` to override)\n",
+			name, cli.AgentSunsetDate(name).Format("2006-01-02"), name)
 	}
 	fmt.Println()
 }

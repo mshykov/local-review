@@ -37,7 +37,7 @@ func names(llms []cli.LLM) []string {
 func TestSelectAgents_AllActiveNoConfig(t *testing.T) {
 	// Default case: 3 detected, all authed, empty config — all 3 run.
 	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
-	active, disabled := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{})
+	active, disabled, _ := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{}, time.Time{})
 	if got, want := names(active), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("active: got %v, want %v", got, want)
 	}
@@ -50,7 +50,7 @@ func TestSelectAgents_SkipsUnauthed(t *testing.T) {
 	// Codex installed but not authed → skipped silently. Not "disabled
 	// in config" — that's a separate state.
 	ready := map[string]bool{"claude": true, "gemini": true, "codex": false}
-	active, disabled := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{})
+	active, disabled, _ := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{}, time.Time{})
 	if got, want := names(active), []string{"claude", "gemini"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("active: got %v, want %v", got, want)
 	}
@@ -68,7 +68,7 @@ func TestSelectAgents_ConfigDisabledIsReported(t *testing.T) {
 			"codex": {Enabled: boolPtr(false)},
 		},
 	}
-	active, disabled := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{})
+	active, disabled, _ := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{}, time.Time{})
 	if got, want := names(active), []string{"claude", "gemini"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("active: got %v, want %v", got, want)
 	}
@@ -86,7 +86,7 @@ func TestSelectAgents_ConfigEnabledNilTreatedAsActive(t *testing.T) {
 			"codex": {Enabled: nil}, // explicit nil
 		},
 	}
-	active, disabled := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{})
+	active, disabled, _ := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{}, time.Time{})
 	if got, want := names(active), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("active: got %v, want %v", got, want)
 	}
@@ -104,7 +104,7 @@ func TestSelectAgents_OnlyFilter(t *testing.T) {
 			"codex": {Enabled: boolPtr(false)}, // would be disabled normally
 		},
 	}
-	active, disabled := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{only: "claude,codex"})
+	active, disabled, _ := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{only: "claude,codex"}, time.Time{})
 	if got, want := names(active), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("active: got %v, want %v", got, want)
 	}
@@ -120,7 +120,7 @@ func TestSelectAgents_OnlySkipsNotReady(t *testing.T) {
 	// matching how the no-flag path behaves. Doctor is the diagnostic; the
 	// runner stays quiet for clean script output.
 	ready := map[string]bool{"claude": true, "gemini": false, "codex": false}
-	active, _ := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{only: "gemini,claude"})
+	active, _, _ := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{only: "gemini,claude"}, time.Time{})
 	if got, want := names(active), []string{"claude"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("active: got %v, want %v", got, want)
 	}
@@ -130,7 +130,7 @@ func TestSelectAgents_OnlyTrimsSpaces(t *testing.T) {
 	// `--only  claude , gemini ` (extra whitespace from copy-paste) must
 	// still parse. Common typo, easy to handle, no reason to be strict.
 	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
-	active, _ := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{only: " claude , gemini "})
+	active, _, _ := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{only: " claude , gemini "}, time.Time{})
 	if got, want := names(active), []string{"claude", "gemini"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("active: got %v, want %v", got, want)
 	}
@@ -146,7 +146,7 @@ func TestSelectAgents_TimeoutCarriesOver(t *testing.T) {
 			"claude": {TimeoutSec: 240},
 		},
 	}
-	active, _ := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{})
+	active, _, _ := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{}, time.Time{})
 	var got int
 	for _, llm := range active {
 		if llm.Name == "claude" {
@@ -172,7 +172,7 @@ func TestSelectAgents_ModelCarriesOver(t *testing.T) {
 			"codex":  {Model: "gpt-5"},
 		},
 	}
-	active, _ := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{})
+	active, _, _ := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{}, time.Time{})
 	want := map[string]string{"claude": "claude-opus-4-7", "gemini": "gemini-2.0-flash", "codex": "gpt-5"}
 	for _, llm := range active {
 		if llm.Model != want[llm.Name] {
@@ -274,7 +274,7 @@ func TestSelectAgents_OnlyWhitespaceFallsThrough(t *testing.T) {
 	// non-empty but parsed to {""}, matching no LLMs. Now whitespace-only
 	// is treated as "no filter set" and the default behavior kicks in.
 	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
-	active, _ := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{only: "   "})
+	active, _, _ := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{only: "   "}, time.Time{})
 	if got, want := names(active), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("active: got %v, want %v", got, want)
 	}
@@ -919,5 +919,90 @@ func TestFormatProbeLine(t *testing.T) {
 				t.Errorf("formatProbeLine = %q, want prefix %q (column padding)", got, tc.wantStartsWith)
 			}
 		})
+	}
+}
+
+// --- v0.15 Gemini sunset hardening --------------------------------------
+
+// These tests inject a fixed `now` into selectAgents to exercise the
+// three sunset branches without waiting for the wall clock to cross
+// 2026-06-18. The matching pure-function tests live in
+// internal/cli/sunset_test.go (the date constant, the predicate).
+
+func TestSelectAgents_PostSunsetGeminiAutoDisabled(t *testing.T) {
+	// Default behaviour after 2026-06-18: gemini is dropped from
+	// the active set and surfaces in the NEW sunsetDropped return
+	// — NOT configDisabled. The separation matters because
+	// printAgentRoster reuses configDisabled to build the
+	// `--only <names>` override suggestion (caught by the v0.15
+	// self-review on PR 2/4); bundling sunset reasons in there
+	// produced a syntactically broken hint.
+	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
+	postSunset := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	active, configDisabled, sunsetDropped := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{}, postSunset)
+	if got, want := names(active), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("active: got %v, want %v (gemini must be dropped post-sunset)", got, want)
+	}
+	if len(configDisabled) != 0 {
+		t.Errorf("configDisabled MUST stay agent-names-only and empty here (sunset isn't a config-disable): got %v", configDisabled)
+	}
+	if got, want := sunsetDropped, []string{"gemini"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sunsetDropped: got %v, want %v", got, want)
+	}
+}
+
+func TestSelectAgents_PostSunsetForceKeepsGemini(t *testing.T) {
+	// llms.gemini.force_after_sunset: true opts back in — gemini
+	// stays in the active set, both skip lists are empty.
+	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
+	postSunset := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	force := true
+	cfg := config.Config{
+		LLMs: map[string]config.LLMConfig{
+			"gemini": {ForceAfterSunset: &force},
+		},
+	}
+	active, configDisabled, sunsetDropped := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{}, postSunset)
+	if got, want := names(active), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("active: got %v, want %v (force_after_sunset must keep gemini in)", got, want)
+	}
+	if len(configDisabled) != 0 || len(sunsetDropped) != 0 {
+		t.Errorf("override path: both skip lists must be empty, got configDisabled=%v sunsetDropped=%v", configDisabled, sunsetDropped)
+	}
+}
+
+func TestSelectAgents_PreSunsetGeminiStaysActive(t *testing.T) {
+	// Sanity: before the cutoff, no special behaviour — gemini
+	// behaves identically to claude/codex. Guards against an
+	// accidentally-flipped predicate.
+	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
+	preSunset := time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC)
+	active, configDisabled, sunsetDropped := selectAgents(fakeDetected(), ready, config.Config{}, &sharedFlags{}, preSunset)
+	if got, want := names(active), []string{"claude", "codex", "gemini"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("active: got %v, want %v", got, want)
+	}
+	if len(configDisabled) != 0 || len(sunsetDropped) != 0 {
+		t.Errorf("pre-sunset: both skip lists must be empty, got configDisabled=%v sunsetDropped=%v", configDisabled, sunsetDropped)
+	}
+}
+
+func TestSelectAgents_PostSunsetForceFalseAlsoAutoDisables(t *testing.T) {
+	// Edge case: `force_after_sunset: false` is explicitly set
+	// (distinct from the default nil). Both should auto-disable —
+	// false means "don't force"; only true opts back in.
+	ready := map[string]bool{"claude": true, "gemini": true, "codex": true}
+	postSunset := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	force := false
+	cfg := config.Config{
+		LLMs: map[string]config.LLMConfig{
+			"gemini": {ForceAfterSunset: &force},
+		},
+	}
+	active, _, sunsetDropped := selectAgents(fakeDetected(), ready, cfg, &sharedFlags{}, postSunset)
+	if got, want := names(active), []string{"claude", "codex"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("active: got %v, want %v (force=false should NOT keep gemini in)", got, want)
+	}
+	if got, want := sunsetDropped, []string{"gemini"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("sunsetDropped: got %v, want %v", got, want)
 	}
 }
