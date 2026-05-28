@@ -6,6 +6,20 @@
 #   3. ./.local-review.yml          ← this file
 #   4. CLI flags
 
+# DEPRECATED in v0.14: the top-level `provider:` block (this whole stanza)
+# is superseded by the unified agent model. Move the same fields under
+# `llms.<your-name>:` instead — any name you pick (e.g. `ollama`, `qwen`,
+# `cloud`) — and the entry runs side-by-side with the CLI agents in the
+# default fan-out. The legacy `provider:` block keeps working for one
+# release with a stderr deprecation warning; see
+# examples/.local-review.unified.yml for the new shape, or just rename:
+#
+#   llms:
+#     ollama:
+#       base_url: https://api.openai.com/v1
+#       model: gpt-4o-mini
+#       api_key_env: LOCAL_REVIEW_API_KEY
+
 provider:
   # Any OpenAI-compatible endpoint. Examples:
   #   OpenAI       https://api.openai.com/v1

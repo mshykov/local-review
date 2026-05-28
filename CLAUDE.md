@@ -42,9 +42,9 @@ These apply to every task in this repo. They exist because each one has cost us 
 
 `local-review` is a local, BYOK AI code reviewer — a single Go binary that runs against git diffs (staged / commit / branch).
 
-**Two paths, picked automatically:**
-- **Multi-LLM (default)** — every authenticated LLM CLI (claude, gemini, codex, copilot) runs in parallel against the same diff; findings are merged into one consolidated report.
-- **Single-LLM fallback** — when no CLI is authenticated, hit the configured `provider:` (any OpenAI-compatible endpoint, including local Ollama).
+**Unified agent model (v0.14+):**
+- **Multi-agent (default)** — every authenticated LLM CLI (claude, gemini, codex, copilot) AND every reachable provider entry (any `llms.<name>:` with a `base_url:` set — Ollama, vLLM, OpenAI, Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter, …) runs in parallel against the same diff; findings are merged into one consolidated report.
+- **Legacy single-LLM fallback** — the v0.13-and-earlier top-level `provider:` block still works for one release with a stderr deprecation warning, then is slated for removal. Migrate to `llms.<your-name>.base_url` with the same field names — no path-specific code, no separate fallback to maintain.
 
 **Hard constraints:**
 - No vendor SDKs (keeps the binary small and portable).
