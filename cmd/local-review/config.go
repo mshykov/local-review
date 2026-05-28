@@ -47,6 +47,22 @@ which settings are being used.`,
 				}
 			}
 
+			// Strip credentials embedded in base_url values
+			// (`https://user:pass@host` or `?api_key=…`). A config dump
+			// is meant to be shareable like the masked api_key above;
+			// without this, basic-auth or query-string creds leak
+			// verbatim. Same sanitizer as the v0.14 deprecation
+			// warning so both surfaces behave identically.
+			if cfg.Provider.BaseURL != "" {
+				cfg.Provider.BaseURL = config.SanitizeBaseURLForDisplay(cfg.Provider.BaseURL)
+			}
+			for name, llmCfg := range cfg.LLMs {
+				if llmCfg.BaseURL != "" {
+					llmCfg.BaseURL = config.SanitizeBaseURLForDisplay(llmCfg.BaseURL)
+					cfg.LLMs[name] = llmCfg
+				}
+			}
+
 			enc := yaml.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent(2)
 			if err := enc.Encode(cfg); err != nil {

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-05-28
+
+### Fixed
+
+- **`provider:` deprecation warning fired on every invocation, even with no user config.** `Defaults()` pre-populates `Provider.BaseURL` / `Model` / `APIKeyEnv`, so post-cascade `cfg.Provider.BaseURL` was never empty — the v0.14.0 `shouldWarnDeprecatedProvider` predicate fell straight through to the "warn" branch on `doctor` / `config` / `review` / `audit` whether the user had a legacy `provider:` block or not. Now the predicate also suppresses when the resolved Provider equals `Defaults()` verbatim (no-config or tautological-config case); a user-configured non-default `provider.base_url` (e.g. Ollama at `http://localhost:11434/v1`) still triggers the migration nudge. Two new tests in `internal/config/config_test.go` pin both directions.
+- **`local-review config` leaked credentials embedded in `base_url` values.** The `api_key:` field was masked, but a basic-auth userinfo URL (`https://user:pass@host/v1`) or a query-string key (`?api_key=sk-…`) printed verbatim — a pre-existing bug, not a v0.14 regression. The config printer now runs every `base_url` (top-level `provider.base_url` AND each `llms.<name>.base_url`) through the same `SanitizeBaseURLForDisplay` helper introduced for the v0.14.0 deprecation warning. Scheme + host + path survive; userinfo, query, and fragment are dropped. The helper moves from unexported to exported in `internal/config` so both surfaces share one implementation. Five new tests in `cmd/local-review/config_test.go` pin basic-auth masking, query-string masking, and plain-URL roundtrip for both the `provider:` block and the `llms.<name>` entries.
+
 ## [0.14.0] - 2026-05-28
 
 **Theme: unified agent model.**

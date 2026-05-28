@@ -666,12 +666,33 @@ func warnDeprecatedAPIKeys(cfg *Config) {
 
 // shouldWarnDeprecatedProvider decides whether the legacy `provider:`
 // block deserves a deprecation warning. Pulled out as a pure function
-// so the suppression rule (fire ONLY when legacy is set AND no
-// `llms.*` entry already carries a `base_url`) is unit-testable
-// without capturing stderr — the warning printer below has no logic
-// worth testing once this returns true.
+// so the suppression rule is unit-testable without capturing stderr —
+// the warning printer below has no logic worth testing once this
+// returns true.
+//
+// Suppression rules:
+//
+//  1. No legacy block at all (BaseURL == "") → silent.
+//  2. Resolved Provider equals Defaults() verbatim → silent. This is
+//     the no-user-config case: `Defaults()` pre-populates BaseURL +
+//     Model + APIKeyEnv + TimeoutSec, so a post-cascade
+//     `cfg.Provider.BaseURL` is never empty even when the user has no
+//     YAML at all. v0.14.0 fired the warning on every invocation in
+//     that case (regression — see v0.14.1 CHANGELOG). The comparison
+//     is on the FULL struct (not just BaseURL/Model/APIKeyEnv) so a
+//     user who sets ONLY `provider.api_key:` or
+//     `provider.timeout_seconds:` (other legacy fields without
+//     touching base_url) still trips the warning — that user IS using
+//     the deprecated block, just on a different field. A user who
+//     explicitly wrote every default verbatim gets the same behavior
+//     either way, so silencing the tautological case is correct.
+//  3. At least one `llms.<name>.base_url` is set → already migrated;
+//     leftover legacy block is harmless.
 func shouldWarnDeprecatedProvider(cfg *Config) bool {
 	if cfg.Provider.BaseURL == "" {
+		return false
+	}
+	if cfg.Provider == Defaults().Provider {
 		return false
 	}
 	for _, llmCfg := range cfg.LLMs {
@@ -682,16 +703,17 @@ func shouldWarnDeprecatedProvider(cfg *Config) bool {
 	return true
 }
 
-// sanitizeBaseURLForDisplay strips potentially-sensitive parts of a
-// configured base_url before echoing it back into the deprecation
-// warning (which lands in stderr / terminal history / CI logs).
-// Basic-auth userinfo (`https://user:pass@host`) and the query /
-// fragment (`?api_key=…`) get dropped; scheme + host + path survive
-// because that's the part the user actually needs to copy. A URL
-// that fails to parse is replaced with a literal placeholder rather
-// than leaked verbatim — fail-closed (CLAUDE.md rule 4) and beats
-// printing garbage into a YAML stanza we're telling the user to copy.
-func sanitizeBaseURLForDisplay(raw string) string {
+// SanitizeBaseURLForDisplay strips potentially-sensitive parts of a
+// configured base_url before echoing it back into any user-facing
+// surface (stderr deprecation warning, `local-review config` dump,
+// CI logs, terminal history). Basic-auth userinfo
+// (`https://user:pass@host`) and the query / fragment
+// (`?api_key=…`) get dropped; scheme + host + path survive because
+// that's the part the user actually needs to copy. A URL that fails
+// to parse is replaced with a literal placeholder rather than leaked
+// verbatim — fail-closed (CLAUDE.md rule 4) and beats printing
+// garbage into a YAML stanza we're telling the user to copy.
+func SanitizeBaseURLForDisplay(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return "<your-provider-url>"
@@ -710,7 +732,7 @@ func sanitizeBaseURLForDisplay(raw string) string {
 //
 // The migration snippet quotes the user's actual base_url / model /
 // api_key_env values back at them so they can paste it verbatim,
-// minus anything sensitive: see sanitizeBaseURLForDisplay above.
+// minus anything sensitive: see SanitizeBaseURLForDisplay above.
 func warnDeprecatedProviderBlock(cfg *Config) {
 	if !shouldWarnDeprecatedProvider(cfg) {
 		return
@@ -720,7 +742,7 @@ func warnDeprecatedProviderBlock(cfg *Config) {
 	fmt.Fprintln(os.Stderr, "         Example:")
 	fmt.Fprintln(os.Stderr, "           llms:")
 	fmt.Fprintln(os.Stderr, "             ollama:")
-	fmt.Fprintf(os.Stderr, "               base_url: %s\n", sanitizeBaseURLForDisplay(cfg.Provider.BaseURL))
+	fmt.Fprintf(os.Stderr, "               base_url: %s\n", SanitizeBaseURLForDisplay(cfg.Provider.BaseURL))
 	if cfg.Provider.Model != "" {
 		fmt.Fprintf(os.Stderr, "               model: %s\n", cfg.Provider.Model)
 	}

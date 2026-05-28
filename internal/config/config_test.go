@@ -964,11 +964,60 @@ func TestShouldWarnDeprecatedProvider_LLMsWithoutBaseURL_StillFires(t *testing.T
 	}
 }
 
+func TestShouldWarnDeprecatedProvider_DefaultsOnly_Suppresses(t *testing.T) {
+	// v0.14.1 regression guard: Defaults() pre-populates Provider with
+	// BaseURL+Model+APIKeyEnv, so a no-config invocation post-cascade
+	// has a non-empty cfg.Provider.BaseURL even though the user wrote
+	// nothing. v0.14.0 fired the deprecation warning on every doctor /
+	// config / review run in that case. Treat "resolved Provider ==
+	// Defaults()" as "user did not explicitly set this" and stay silent.
+	cfg := Defaults()
+	if shouldWarnDeprecatedProvider(&cfg) {
+		t.Error("warning must NOT fire when Provider matches Defaults() verbatim (no user config)")
+	}
+}
+
+func TestShouldWarnDeprecatedProvider_NonDefaultBaseURL_StillFires(t *testing.T) {
+	// The intended case: a real user-configured legacy provider: block
+	// pointing at something other than the default OpenAI endpoint
+	// (e.g. local Ollama). This MUST still trigger the migration nudge.
+	cfg := Defaults()
+	cfg.Provider.BaseURL = "http://localhost:11434/v1"
+	if !shouldWarnDeprecatedProvider(&cfg) {
+		t.Error("warning must fire for a non-default provider.base_url (the actual migration target)")
+	}
+}
+
+func TestShouldWarnDeprecatedProvider_APIKeyOverride_StillFires(t *testing.T) {
+	// Edge case the v0.14.1 review caught: a user writing
+	// `provider: { api_key: "..." }` is using the deprecated block
+	// even though base_url / model / api_key_env still equal defaults.
+	// Full-struct comparison must catch this; partial-field comparison
+	// would mis-suppress the warning and hide the migration nudge.
+	cfg := Defaults()
+	cfg.Provider.APIKey = "sk-user-set-this"
+	if !shouldWarnDeprecatedProvider(&cfg) {
+		t.Error("warning must fire when ONLY provider.api_key differs from defaults")
+	}
+}
+
+func TestShouldWarnDeprecatedProvider_TimeoutSecOverride_StillFires(t *testing.T) {
+	// Same shape as the api_key edge case — a user with only
+	// `provider: { timeout_seconds: 30 }` IS using the deprecated
+	// block, and the warning must fire on any Provider field that
+	// differs from Defaults(), not just base_url / model / api_key_env.
+	cfg := Defaults()
+	cfg.Provider.TimeoutSec = 30
+	if !shouldWarnDeprecatedProvider(&cfg) {
+		t.Error("warning must fire when ONLY provider.timeout_seconds differs from defaults")
+	}
+}
+
 func TestSanitizeBaseURLForDisplay_StripsBasicAuth(t *testing.T) {
 	// The whole point: a URL with embedded `user:password@` must NOT
 	// land in stderr / CI logs / terminal history. Lose userinfo;
 	// keep scheme + host + path so the suggestion is still useful.
-	got := sanitizeBaseURLForDisplay("https://user:s3cret@api.openai.com/v1")
+	got := SanitizeBaseURLForDisplay("https://user:s3cret@api.openai.com/v1")
 	if strings.Contains(got, "s3cret") || strings.Contains(got, "user") {
 		t.Errorf("basic-auth credentials must be stripped; got %q", got)
 	}
@@ -981,7 +1030,7 @@ func TestSanitizeBaseURLForDisplay_StripsQueryAndFragment(t *testing.T) {
 	// Some providers accept the key on the query string (`?api_key=…`)
 	// or a session id on the fragment. Both belong in env vars, not
 	// stderr — drop them.
-	got := sanitizeBaseURLForDisplay("https://example.test/v1?api_key=sk-leak#sid=abc")
+	got := SanitizeBaseURLForDisplay("https://example.test/v1?api_key=sk-leak#sid=abc")
 	if strings.Contains(got, "api_key") || strings.Contains(got, "sk-leak") || strings.Contains(got, "sid=") {
 		t.Errorf("query/fragment must be stripped; got %q", got)
 	}
@@ -997,7 +1046,7 @@ func TestSanitizeBaseURLForDisplay_UnparseableReturnsPlaceholder(t *testing.T) {
 	// ("refuse on invalid input rather than silently passing it
 	// through") for the display path.
 	for _, raw := range []string{"", "://bad", "not a url"} {
-		got := sanitizeBaseURLForDisplay(raw)
+		got := SanitizeBaseURLForDisplay(raw)
 		if got != "<your-provider-url>" {
 			t.Errorf("expected placeholder for unparseable %q, got %q", raw, got)
 		}
@@ -1007,7 +1056,7 @@ func TestSanitizeBaseURLForDisplay_UnparseableReturnsPlaceholder(t *testing.T) {
 func TestSanitizeBaseURLForDisplay_PlainURLRoundtrips(t *testing.T) {
 	// The common case: an unauthenticated URL stays exactly itself.
 	const in = "http://localhost:11434/v1"
-	if got := sanitizeBaseURLForDisplay(in); got != in {
+	if got := SanitizeBaseURLForDisplay(in); got != in {
 		t.Errorf("plain URL must roundtrip; got %q", got)
 	}
 }
