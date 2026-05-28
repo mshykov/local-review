@@ -63,14 +63,11 @@ func helpHeader() string {
 }
 
 // sharedFlags collects every flag accepted by the review-shape commands.
-// Single-LLM-fallback flags (--model, --base-url) and multi-LLM flags
-// (--only, --<agent>-model) coexist: which one applies depends on
-// whether any LLM CLI is active at runtime.
+// v0.15 removed the v0 single-LLM-API fallback flags (`--model`,
+// `--base-url`) along with the top-level `provider:` block — every
+// endpoint now flows through `llms.<name>:` in config, and per-agent
+// model overrides go through `--<agent>-model`.
 type sharedFlags struct {
-	// v0 single-LLM-API fallback flags
-	model   string
-	baseURL string
-
 	// shared review-tuning flags
 	minSeverity string
 	maxFindings int
@@ -158,16 +155,17 @@ Quick start:
   local-review audit --topic security    # full-tree security sweep
   local-review audit --topic tech-debt   # full-tree tech-debt sweep
 
-By default, every LLM CLI that is both installed AND authenticated runs
-in parallel for review mode and the findings are merged into one
-report. Audit mode is single-LLM by design — picks one authenticated
-agent. Use ~/.local-review.yml or ./.local-review.yml to override;
-CLI flags override config.
+By default, every authenticated LLM CLI AND every reachable provider
+endpoint (any 'llms.<name>:' entry with a base_url in your config)
+runs in parallel for review mode and the findings are merged into
+one report. Audit mode is single-LLM — picks one authenticated agent
+by default; pin a specific one with --with. Use ~/.local-review.yml
+or ./.local-review.yml to override; CLI flags override config.
 
-If no LLM CLI is active, the review-shape commands fall back to the
-configured 'provider:' (any OpenAI-compatible endpoint: OpenAI,
+Any OpenAI-compatible endpoint works as a provider: OpenAI,
 Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter, Ollama,
-vLLM, etc.).
+vLLM, etc. (The v0 top-level 'provider:' fallback block was removed
+in v0.15 — every endpoint now lives under 'llms'.)
 
 See README and https://mshykov.github.io/local-review/ for details.`,
 		SilenceUsage: true,
@@ -178,13 +176,9 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	}
 
 	// review-tuning (apply to all review-shape commands)
-	root.PersistentFlags().StringVar(&sf.minSeverity, "min-severity", "", "filter findings: nit|info|warning|major|critical")
-	root.PersistentFlags().IntVar(&sf.maxFindings, "max-findings", 0, "cap total findings shown")
-	root.PersistentFlags().BoolVar(&sf.jsonOut, "json", false, "emit JSON instead of human-readable text")
-
-	// single-LLM-fallback flags
-	root.PersistentFlags().StringVar(&sf.model, "model", "", "override provider.model (single-LLM fallback)")
-	root.PersistentFlags().StringVar(&sf.baseURL, "base-url", "", "override provider.base_url (single-LLM fallback)")
+	root.PersistentFlags().StringVar(&sf.minSeverity, "min-severity", "", "filter findings: nit|info|warning|major|critical (audit + bench only; ignored on review)")
+	root.PersistentFlags().IntVar(&sf.maxFindings, "max-findings", 0, "cap total findings shown (audit + bench only; ignored on review)")
+	root.PersistentFlags().BoolVar(&sf.jsonOut, "json", false, "emit JSON instead of markdown (audit + bench only; ignored on review)")
 
 	// multi-LLM flags
 	root.PersistentFlags().StringVar(&sf.only, "only", "", "comma-separated agents to run (e.g. claude,gemini); overrides config")
@@ -361,8 +355,11 @@ func loadConfig() (config.Config, error) {
 }
 
 // runUnifiedReview is the dispatch point: detects active LLMs, applies
-// flag overrides, runs multi-LLM if any are active, otherwise falls back
-// to the v0 single-LLM API path.
+// flag overrides, and runs the multi-agent fan-out. v0.15 removed the
+// v0 single-LLM-API fallback path along with the top-level `provider:`
+// config block, so "no active agents" is now a hard error pointing at
+// the actionable next steps (authenticate a CLI, or add an
+// `llms.<name>.base_url` provider entry).
 func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref string) error {
 	// Trap Ctrl-C so an in-flight LLM call can be cancelled.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -385,35 +382,38 @@ func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref s
 
 	if len(active) == 0 {
 		// `--only` is an explicit allow-list. If the user typed
-		// `--only clude` (typo) or named an unauthenticated agent, the
-		// safe behavior is to error rather than silently fall back to
-		// the configured single-LLM provider — that would send the
-		// diff to a different vendor than the one explicitly named,
-		// which is a privacy / cost / surprise footgun.
+		// `--only clude` (typo) or named an unauthenticated agent,
+		// surface that distinct from "nothing's configured" so the
+		// fix is obvious.
 		if sf.only != "" {
-			return fmt.Errorf("--only %q matched no ready LLMs (run `local-review doctor` to see what's authenticated; refusing to fall back to single-LLM since --only is an explicit allow-list)", sf.only)
+			return fmt.Errorf("--only %q matched no ready LLMs (run `local-review doctor` to see what's authenticated)", sf.only)
 		}
+		// v0.15 removed the single-LLM-fallback path (the v0
+		// `provider:` block). With no active CLI agents AND no
+		// provider entries in cfg.LLMs, there's nothing to dispatch
+		// to — surface the actionable next steps instead of
+		// silently no-op'ing.
+		fmt.Fprintln(os.Stderr, "No active LLMs to review with.")
 		if len(configDisabled) > 0 {
-			fmt.Fprintf(os.Stderr, "All authenticated LLM CLIs are disabled in config: %v\n", configDisabled)
-			fmt.Fprintln(os.Stderr, "Pass --only <agent> to override config, or run `local-review doctor` for status.")
-			fmt.Fprintln(os.Stderr, "Falling back to single-LLM via the configured provider...")
-			fmt.Fprintln(os.Stderr)
+			fmt.Fprintf(os.Stderr, "  - Authenticated CLIs disabled in config: %v — pass --only <agent> to override.\n", configDisabled)
 		}
-		return runSingleLLMFallback(ctx, cfg, sf, mode, ref)
+		fmt.Fprintln(os.Stderr, "  - Authenticate a CLI agent (`claude login`, `codex login`, `copilot login`, or `gemini /auth`)")
+		fmt.Fprintln(os.Stderr, "  - OR add a provider endpoint to your config:")
+		fmt.Fprintln(os.Stderr, "      llms:")
+		fmt.Fprintln(os.Stderr, "        ollama:")
+		fmt.Fprintln(os.Stderr, "          base_url: http://localhost:11434/v1")
+		fmt.Fprintln(os.Stderr, "          model: qwen2.5-coder:7b")
+		fmt.Fprintln(os.Stderr, "Run `local-review doctor` for current status.")
+		return fmt.Errorf("no active LLMs (v0.15 dropped the single-LLM `provider:` fallback; see above)")
 	}
 	return runMultiLLMReview(ctx, cfg, sf, active, configDisabled, mode, ref)
 }
 
 // applyFlagsToConfig overlays --flag values onto the resolved config.
-// Single-LLM flags (--model, --base-url) hit cfg.Provider; per-agent
-// overrides (--<agent>-model) hit cfg.LLMs.
+// The v0 single-LLM `--model` / `--base-url` flags hit cfg.Provider in
+// v0.14 and earlier — removed in v0.15 along with the `provider:` block.
+// Per-agent model overrides (`--<agent>-model`) hit cfg.LLMs.
 func applyFlagsToConfig(cfg *config.Config, sf *sharedFlags) {
-	if sf.model != "" {
-		cfg.Provider.Model = sf.model
-	}
-	if sf.baseURL != "" {
-		cfg.Provider.BaseURL = sf.baseURL
-	}
 	if sf.minSeverity != "" {
 		cfg.Review.MinSeverity = sf.minSeverity
 	}

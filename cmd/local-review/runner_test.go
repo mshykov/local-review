@@ -224,21 +224,16 @@ func TestApplyFlagsToConfig_MergeWithReflectsInConfig(t *testing.T) {
 	}
 }
 
-func TestApplyFlagsToConfig_v0SingleLLMFlags(t *testing.T) {
+func TestApplyFlagsToConfig_ReviewTuningFlags(t *testing.T) {
+	// v0.15 dropped --model / --base-url along with the v0 single-LLM
+	// `provider:` block. This test now only covers what applyFlagsToConfig
+	// has left to do: overlay --min-severity / --max-findings onto Review.
 	cfg := config.Defaults()
 	sf := &sharedFlags{
-		model:       "gpt-4o",
-		baseURL:     "https://example.test/v1",
 		minSeverity: "major",
 		maxFindings: 5,
 	}
 	applyFlagsToConfig(&cfg, sf)
-	if cfg.Provider.Model != "gpt-4o" {
-		t.Errorf("provider model: %q", cfg.Provider.Model)
-	}
-	if cfg.Provider.BaseURL != "https://example.test/v1" {
-		t.Errorf("base url: %q", cfg.Provider.BaseURL)
-	}
 	if cfg.Review.MinSeverity != "major" {
 		t.Errorf("min severity: %q", cfg.Review.MinSeverity)
 	}

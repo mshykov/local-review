@@ -44,7 +44,7 @@ These apply to every task in this repo. They exist because each one has cost us 
 
 **Unified agent model (v0.14+):**
 - **Multi-agent (default)** — every authenticated LLM CLI (claude, gemini, codex, copilot) AND every reachable provider entry (any `llms.<name>:` with a `base_url:` set — Ollama, vLLM, OpenAI, Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter, …) runs in parallel against the same diff; findings are merged into one consolidated report.
-- **Legacy single-LLM fallback** — the v0.13-and-earlier top-level `provider:` block still works for one release with a stderr deprecation warning, then is slated for removal. Migrate to `llms.<your-name>.base_url` with the same field names — no path-specific code, no separate fallback to maintain.
+- **Legacy `provider:` block — removed in v0.15.** Loading a v0.13-shaped config (top-level `provider:` key) now surfaces a migration error pointing at `llms.<your-name>.base_url` with the same field shape. There is no separate fallback path to maintain.
 
 **Hard constraints:**
 - No vendor SDKs (keeps the binary small and portable).

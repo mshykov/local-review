@@ -23,10 +23,16 @@ import (
 )
 
 // Config is the resolved (post-cascade) configuration.
+//
+// The v0.13-and-earlier top-level `provider:` block was removed in v0.15
+// (deprecated in v0.14). Loading a YAML file that still contains a
+// `provider:` key surfaces a migration error from mergeFrom — see
+// detectRemovedProviderBlock below — rather than silently dropping the
+// fields. Provider endpoints now live under `llms.<name>:` with the
+// same field shape (`base_url`, `model`, `api_key_env`, `timeout_seconds`).
 type Config struct {
-	Provider Provider `yaml:"provider"` // v0: single-LLM API mode
-	Review   Review   `yaml:"review"`
-	Org      Org      `yaml:"org"`
+	Review Review `yaml:"review"`
+	Org    Org    `yaml:"org"`
 
 	// v0.1: multi-LLM support
 	LLMs    map[string]LLMConfig `yaml:"llms"`
@@ -36,17 +42,6 @@ type Config struct {
 	// v0.8: prompt-pack customization (issue #55). Lets teams ship
 	// their own house rules without forking the binary.
 	Prompts PromptsConfig `yaml:"prompts"`
-}
-
-// Provider holds LLM endpoint settings. Defaults to OpenAI; any
-// OpenAI-compatible endpoint works (Anthropic via /v1/chat/completions,
-// Together, Groq, OpenRouter, Ollama, vLLM, etc.).
-type Provider struct {
-	BaseURL    string `yaml:"base_url"`        // e.g. https://api.openai.com/v1
-	Model      string `yaml:"model"`           // e.g. gpt-4o, claude-3-5-sonnet
-	APIKey     string `yaml:"api_key"`         // DEPRECATED: use environment variable instead
-	APIKeyEnv  string `yaml:"api_key_env"`     // env var name to read; defaults to LOCAL_REVIEW_API_KEY
-	TimeoutSec int    `yaml:"timeout_seconds"` // per-call timeout, default 60
 }
 
 // Review holds tuning knobs for what gets surfaced.
@@ -131,19 +126,6 @@ func boolPtr(b bool) *bool {
 // Defaults returns the built-in starting point.
 func Defaults() Config {
 	return Config{
-		// v0: single-LLM API mode defaults
-		Provider: Provider{
-			BaseURL:   "https://api.openai.com/v1",
-			Model:     "gpt-4o-mini",
-			APIKeyEnv: "LOCAL_REVIEW_API_KEY",
-			// 10 minutes. The v0 single-LLM API path is usually fast,
-			// but a long thinking-model response on a big diff can run
-			// 3-5 min; user feedback after v0.6.3 was that the prior
-			// 60s default surfaced as confusing timeouts on real branch
-			// reviews. Per-config override still works for users who
-			// want shorter timeouts.
-			TimeoutSec: 600,
-		},
 		Review: Review{
 			MinSeverity:  "warning",
 			MaxFindings:  20,
@@ -240,15 +222,41 @@ func Load(repoConfigPath string) (Config, error) {
 	// Warn about deprecated api_key in YAML (security risk)
 	warnDeprecatedAPIKeys(&cfg)
 
-	// Warn about deprecated `provider:` block (superseded in v0.14 by
-	// the unified agent model — see warnDeprecatedProviderBlock).
-	warnDeprecatedProviderBlock(&cfg)
-
-	// Env-driven API keys — resolve for v0 and v0.1
-	resolveAPIKey(&cfg)
+	// Env-driven API keys — resolve per-LLM API keys (the v0
+	// single-LLM Provider variant of this was removed in v0.15).
 	resolveAPIKeys(&cfg)
 
 	return cfg, nil
+}
+
+// detectRemovedProviderBlock returns true when the raw YAML bytes
+// contain a top-level `provider` key (regardless of value, including
+// null / empty / merged-in-via-anchor). The `provider:` block was
+// hard-removed in v0.15 — we look for it pre-decode so a stale v0.14
+// config gets a migration error from mergeFrom instead of being
+// silently dropped (yaml.v3 ignores unknown fields).
+//
+// Implementation note: we decode into `map[string]interface{}` so
+// yaml.v3's YAML-1.1 merge-key resolution (`<<: *anchor`) runs as
+// part of the parse. A pure node walk over the unresolved document
+// tree would miss a provider: key that was merged in via an anchor
+// — and "silently miss the legacy block" defeats the hard-rejection
+// contract, exactly the bypass the v0.15 self-review caught. The
+// map also handles the null-value edge case (`provider:` with no
+// value) — yaml.v3 sets the key with a nil value, which the lookup
+// sees regardless.
+//
+// A parse error here is non-fatal: we return (false, err) so the
+// caller can fall through to the real decode, which will surface a
+// proper "parse %s" error. Either way, the user sees something
+// actionable.
+func detectRemovedProviderBlock(b []byte) (bool, error) {
+	var m map[string]interface{}
+	if err := yaml.Unmarshal(b, &m); err != nil {
+		return false, err
+	}
+	_, present := m["provider"]
+	return present, nil
 }
 
 // FindRepoConfig walks up from start looking for a .local-review.yml. Returns
@@ -277,6 +285,23 @@ func mergeFrom(dst *Config, path string) error {
 			return nil
 		}
 		return err
+	}
+	// v0.15 hard removal: detect the dropped top-level `provider:`
+	// block and refuse with a migration message before the main
+	// decode runs. yaml.v3 silently ignores unknown fields, so
+	// without this check a stale v0.14 config would parse cleanly
+	// and the user would see "no LLMs configured" downstream
+	// without ever learning their provider: stanza was dropped.
+	if removed, lerr := detectRemovedProviderBlock(b); lerr == nil && removed {
+		return fmt.Errorf("%s: the top-level `provider:` block was removed in v0.15 (deprecated in v0.14).\n"+
+			"         Migrate the same fields under `llms.<name>:` — pick any name (e.g. `ollama`, `qwen`, `cloud`):\n\n"+
+			"           llms:\n"+
+			"             ollama:\n"+
+			"               base_url: <your previous provider.base_url>\n"+
+			"               model: <your previous provider.model>\n"+
+			"               api_key_env: <your previous provider.api_key_env>\n"+
+			"               timeout_seconds: <your previous provider.timeout_seconds>  # optional\n\n"+
+			"         See examples/.local-review.yml in the repo for a full annotated example, or `local-review init` for an interactive wizard.", path)
 	}
 	var layer Config
 	if err := yaml.Unmarshal(b, &layer); err != nil {
@@ -472,7 +497,7 @@ func deepestExistingAncestor(path string) string {
 // merger (mergo, etc.) would be terser but the project deliberately
 // avoids vendor SDKs / heavy reflection to keep the binary small and
 // the cascade behavior auditable. The cost is: when you add a field
-// to Config / Provider / Review / LLMConfig / MergeConfig / StorageConfig
+// to Config / Review / LLMConfig / MergeConfig / StorageConfig
 // / PromptsConfig, you MUST add a corresponding overlay branch here, or
 // user overrides for that field will silently no-op.
 //
@@ -484,23 +509,6 @@ func deepestExistingAncestor(path string) string {
 // fail at test time when a new exported field is added without an
 // overlay branch here. Don't bypass the test — extend merge() instead.
 func merge(dst *Config, src Config) {
-	// v0: Provider settings
-	if src.Provider.BaseURL != "" {
-		dst.Provider.BaseURL = src.Provider.BaseURL
-	}
-	if src.Provider.Model != "" {
-		dst.Provider.Model = src.Provider.Model
-	}
-	if src.Provider.APIKey != "" {
-		dst.Provider.APIKey = src.Provider.APIKey
-	}
-	if src.Provider.APIKeyEnv != "" {
-		dst.Provider.APIKeyEnv = src.Provider.APIKeyEnv
-	}
-	if src.Provider.TimeoutSec != 0 {
-		dst.Provider.TimeoutSec = src.Provider.TimeoutSec
-	}
-
 	// Review settings
 	if src.Review.MinSeverity != "" {
 		dst.Review.MinSeverity = src.Review.MinSeverity
@@ -591,7 +599,7 @@ func merge(dst *Config, src Config) {
 	}
 }
 
-// resolveAPIKey resolves cfg.Provider.APIKey with **env vars taking
+// resolveAPIKeys resolves per-LLM API keys with **env vars taking
 // precedence over the YAML-stored key** when both are present.
 // YAML-stored keys are explicitly marked DEPRECATED in the schema
 // AND warned about at load time (see warnDeprecatedAPIKeys), but
@@ -599,24 +607,12 @@ func merge(dst *Config, src Config) {
 // YAML over env — meaning a developer who committed a test key to
 // `.local-review.yml` and later set a correct prod key in the
 // environment would silently keep using the stale YAML value.
-// Env-first closes that footgun. Empty env var falls back to the
-// YAML key (preserves v0 compat for users who put a key in YAML
-// and never set an env var).
-func resolveAPIKey(cfg *Config) {
-	envName := cfg.Provider.APIKeyEnv
-	if envName == "" {
-		envName = "LOCAL_REVIEW_API_KEY"
-	}
-	if envVal := os.Getenv(envName); envVal != "" {
-		cfg.Provider.APIKey = envVal
-	}
-	// else: leave whatever was already in cfg.Provider.APIKey
-	// (possibly a deprecated YAML key, warned about separately).
-}
-
-// resolveAPIKeys is the per-LLM counterpart of resolveAPIKey for
-// the multi-LLM path. Same env-first precedence and same fallback
-// rule: env wins when set; empty env preserves whatever YAML had.
+// Env-first closes that footgun. Empty env var preserves whatever
+// YAML had (v0 compat for users who put a key in YAML and never
+// set an env var).
+//
+// The v0 single-LLM `cfg.Provider.APIKey` variant of this resolver
+// was removed in v0.15 along with the `provider:` block itself.
 func resolveAPIKeys(cfg *Config) {
 	for name, llmCfg := range cfg.LLMs {
 		if llmCfg.APIKeyEnv == "" {
@@ -636,16 +632,10 @@ func resolveAPIKeys(cfg *Config) {
 // when set, so a YAML key is only "in effect" when there's no env
 // var of the corresponding name. Either way, committing keys to
 // YAML is the wrong shape and the warning surfaces that.
+//
+// The v0 `cfg.Provider.APIKey` branch was removed in v0.15 along
+// with the `provider:` block itself.
 func warnDeprecatedAPIKeys(cfg *Config) {
-	if cfg.Provider.APIKey != "" {
-		envName := cfg.Provider.APIKeyEnv
-		if envName == "" {
-			envName = "LOCAL_REVIEW_API_KEY"
-		}
-		fmt.Fprintf(os.Stderr, "WARNING: api_key in YAML config is deprecated and insecure.\n")
-		fmt.Fprintf(os.Stderr, "         Use environment variable %s instead (when set, it takes precedence over this YAML key).\n", envName)
-	}
-
 	for name, llmCfg := range cfg.LLMs {
 		if llmCfg.APIKey != "" {
 			fmt.Fprintf(os.Stderr, "WARNING: api_key for %s in YAML config is deprecated and insecure.\n", name)
@@ -664,55 +654,19 @@ func warnDeprecatedAPIKeys(cfg *Config) {
 	}
 }
 
-// shouldWarnDeprecatedProvider decides whether the legacy `provider:`
-// block deserves a deprecation warning. Pulled out as a pure function
-// so the suppression rule is unit-testable without capturing stderr —
-// the warning printer below has no logic worth testing once this
-// returns true.
-//
-// Suppression rules:
-//
-//  1. No legacy block at all (BaseURL == "") → silent.
-//  2. Resolved Provider equals Defaults() verbatim → silent. This is
-//     the no-user-config case: `Defaults()` pre-populates BaseURL +
-//     Model + APIKeyEnv + TimeoutSec, so a post-cascade
-//     `cfg.Provider.BaseURL` is never empty even when the user has no
-//     YAML at all. v0.14.0 fired the warning on every invocation in
-//     that case (regression — see v0.14.1 CHANGELOG). The comparison
-//     is on the FULL struct (not just BaseURL/Model/APIKeyEnv) so a
-//     user who sets ONLY `provider.api_key:` or
-//     `provider.timeout_seconds:` (other legacy fields without
-//     touching base_url) still trips the warning — that user IS using
-//     the deprecated block, just on a different field. A user who
-//     explicitly wrote every default verbatim gets the same behavior
-//     either way, so silencing the tautological case is correct.
-//  3. At least one `llms.<name>.base_url` is set → already migrated;
-//     leftover legacy block is harmless.
-func shouldWarnDeprecatedProvider(cfg *Config) bool {
-	if cfg.Provider.BaseURL == "" {
-		return false
-	}
-	if cfg.Provider == Defaults().Provider {
-		return false
-	}
-	for _, llmCfg := range cfg.LLMs {
-		if llmCfg.BaseURL != "" {
-			return false // already migrated; legacy block is harmless leftover
-		}
-	}
-	return true
-}
-
 // SanitizeBaseURLForDisplay strips potentially-sensitive parts of a
 // configured base_url before echoing it back into any user-facing
-// surface (stderr deprecation warning, `local-review config` dump,
-// CI logs, terminal history). Basic-auth userinfo
-// (`https://user:pass@host`) and the query / fragment
-// (`?api_key=…`) get dropped; scheme + host + path survive because
-// that's the part the user actually needs to copy. A URL that fails
-// to parse is replaced with a literal placeholder rather than leaked
-// verbatim — fail-closed (CLAUDE.md rule 4) and beats printing
-// garbage into a YAML stanza we're telling the user to copy.
+// surface (`local-review config` dump, CI logs, terminal history).
+// Basic-auth userinfo (`https://user:pass@host`) and the query /
+// fragment (`?api_key=…`) get dropped; scheme + host + path survive
+// because that's the part the user actually needs. A URL that fails
+// to parse is replaced with a literal placeholder rather than
+// leaked verbatim — fail-closed (CLAUDE.md rule 4) and beats
+// printing garbage into a YAML stanza we're showing the user.
+//
+// Introduced in v0.14 for the (since-removed) deprecation warning;
+// the `local-review config` printer still uses it for every
+// `llms.<name>.base_url` value.
 func SanitizeBaseURLForDisplay(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
@@ -722,34 +676,6 @@ func SanitizeBaseURLForDisplay(raw string) string {
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String()
-}
-
-// warnDeprecatedProviderBlock surfaces the v0.14 migration off the
-// top-level `provider:` block onto the unified `llms.<name>.base_url`
-// shape. The legacy block still works (single-LLM-fallback path is
-// kept for one release per the migration plan); the warning is the
-// pointer at the new shape.
-//
-// The migration snippet quotes the user's actual base_url / model /
-// api_key_env values back at them so they can paste it verbatim,
-// minus anything sensitive: see SanitizeBaseURLForDisplay above.
-func warnDeprecatedProviderBlock(cfg *Config) {
-	if !shouldWarnDeprecatedProvider(cfg) {
-		return
-	}
-	fmt.Fprintln(os.Stderr, "WARNING: the top-level `provider:` block is deprecated in v0.14 and will be removed in a future release.")
-	fmt.Fprintln(os.Stderr, "         Migrate to the unified agent model by moving the same fields under `llms.<name>:` — pick any name you like (e.g. `ollama`, `qwen`, `cloud`).")
-	fmt.Fprintln(os.Stderr, "         Example:")
-	fmt.Fprintln(os.Stderr, "           llms:")
-	fmt.Fprintln(os.Stderr, "             ollama:")
-	fmt.Fprintf(os.Stderr, "               base_url: %s\n", SanitizeBaseURLForDisplay(cfg.Provider.BaseURL))
-	if cfg.Provider.Model != "" {
-		fmt.Fprintf(os.Stderr, "               model: %s\n", cfg.Provider.Model)
-	}
-	if cfg.Provider.APIKeyEnv != "" {
-		fmt.Fprintf(os.Stderr, "               api_key_env: %s\n", cfg.Provider.APIKeyEnv)
-	}
-	fmt.Fprintln(os.Stderr, "         Provider entries run side-by-side with the CLI agents — no separate fallback path needed.")
 }
 
 // Validate checks the configuration for common errors.

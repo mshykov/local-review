@@ -133,7 +133,7 @@ prompts:
     Output language: English only.
 ```
 
-All three apply to both the multi-LLM CLI path and the single-LLM fallback so customizations reach every reviewer. `--prompt-pack-dir <dir>` overrides for one-off runs. Full details in [Customise the review prompt](#customise-the-review-prompt-v08) below.
+All three apply uniformly across CLI agents and provider endpoints in the fan-out, so customizations reach every reviewer. `--prompt-pack-dir <dir>` overrides for one-off runs. Full details in [Customise the review prompt](#customise-the-review-prompt-v08) below.
 
 ---
 
@@ -257,7 +257,7 @@ merge:
   preferred_llm: auto        # or: claude, gemini, codex
 ```
 
-See [`examples/.local-review-multi.yml`](examples/.local-review-multi.yml) for full schema.
+See [`examples/.local-review.yml`](examples/.local-review.yml) for full schema.
 
 ## Audit — whole-codebase deep analysis (v0.10+)
 
@@ -312,25 +312,25 @@ review:
 
 Any entry under `llms:` with a `base_url:` becomes a **provider agent** — an OpenAI-compatible HTTP endpoint (Ollama, vLLM, OpenAI, Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter). Provider agents run side-by-side with the CLI agents (`claude`, `codex`, `gemini`, `copilot`) in the same `local-review review` fan-out — no separate single-LLM-fallback path.
 
-> **Deprecated in v0.14:** the top-level `provider:` block (single-LLM-fallback mode). It still works for one release with a stderr warning at startup; new configs should use the unified `llms.<name>.base_url` shape above. The migration is a verbatim field-rename — `provider.base_url` → `llms.<your-name>.base_url`, same for `model` / `api_key_env`.
+> **Removed in v0.15:** the top-level `provider:` block (the v0 single-LLM-fallback mode). Loading a YAML file that still carries a `provider:` key now surfaces a migration error pointing at this shape. The migration is a verbatim field-rename — `provider.base_url` → `llms.<your-name>.base_url`, same for `model` / `api_key_env`. (Deprecated in v0.14, removed in v0.15; the CHANGELOG carries the full migration snippet.)
 
-See [`examples/.local-review.unified.yml`](examples/.local-review.unified.yml) for the recommended schema with comments. The legacy [`examples/.local-review.yml`](examples/.local-review.yml) still illustrates the deprecated `provider:` block for users mid-migration.
+See [`examples/.local-review.yml`](examples/.local-review.yml) for the full annotated example.
 
 ### Switching providers
 
-The same `base_url` / `model` / `api_key_env` fields work under both shapes — the recommended `llms.<name>:` (unified, v0.14+) and the deprecated top-level `provider:`. local-review speaks the OpenAI chat-completions API — every major provider supports it:
+Every provider entry lives under `llms.<your-name>:` with `base_url` / `model` / `api_key_env` fields (v0.14 unified-agent model; v0 top-level `provider:` block removed in v0.15). local-review speaks the OpenAI chat-completions API — every major provider supports it:
 
 | Provider | `base_url` | Notes |
 |---|---|---|
 | OpenAI | `https://api.openai.com/v1` | Default. `gpt-4o-mini` is cheap; `gpt-4o` for harder reviews. |
 | Anthropic | `https://api.anthropic.com/v1` | Anthropic's [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk). Use exact model names (e.g. `claude-sonnet-4-6`, `claude-opus-4-7`). |
-| Mistral | `https://api.mistral.ai/v1` | EU-hosted; Codestral is code-tuned. See [`examples/.local-review.mistral.yml`](examples/.local-review.mistral.yml). |
-| DeepSeek | `https://api.deepseek.com/v1` | Cheapest cloud option. See [`examples/.local-review.deepseek.yml`](examples/.local-review.deepseek.yml). |
+| Mistral | `https://api.mistral.ai/v1` | EU-hosted; Codestral is code-tuned. |
+| DeepSeek | `https://api.deepseek.com/v1` | Cheapest cloud option. |
 | Groq | `https://api.groq.com/openai/v1` | Fast inference; Llama, Qwen, etc. |
 | Together | `https://api.together.xyz/v1` | Llama, Mixtral, Qwen — many open-weights options. |
 | OpenRouter | `https://openrouter.ai/api/v1` | One key, all models. |
 | Ollama | `http://localhost:11434/v1` | **Fully offline.** No data leaves your machine. |
-| Ollama on a LAN host | `http://192.168.1.50:11434/v1` *(or any RFC1918 IP)* | **Stays on your network.** Same as local Ollama for one machine, but with the model server on a separate box (typically a GPU host). Set `OLLAMA_HOST=0.0.0.0:11434` on the server so it accepts connections beyond loopback. local-review treats RFC1918 / link-local / IPv6 ULA hosts as auth-free by default (see `isLocalURL`); set `provider.api_key` explicitly if your LAN gateway DOES authenticate. |
+| Ollama on a LAN host | `http://192.168.1.50:11434/v1` *(or any RFC1918 IP)* | **Stays on your network.** Same as local Ollama for one machine, but with the model server on a separate box (typically a GPU host). Set `OLLAMA_HOST=0.0.0.0:11434` on the server so it accepts connections beyond loopback. local-review treats RFC1918 / link-local / IPv6 ULA hosts as auth-free by default (see `isLocalURL`); set `llms.<name>.api_key_env` explicitly if your LAN gateway DOES authenticate. |
 | vLLM | `http://your-host/v1` | Self-hosted. |
 
 The fastest way to set any of these up is `local-review init`, which writes a working `.local-review.yml` from a preset.
@@ -349,7 +349,7 @@ Bypass for emergencies: `LOCAL_REVIEW_SKIP=1 git commit ...`.
 ## CLI
 
 ```
-# Review (multi-LLM by default; falls back to single-LLM via configured provider if no CLI is active)
+# Review (multi-agent: every authenticated CLI + every reachable provider endpoint runs in parallel)
 local-review review [<base>]         # canonical: current branch vs <base> (default: main)
 local-review staged                  # review git diff --cached (pre-commit)
 local-review commit [<rev>]          # review one commit (default: HEAD)
@@ -374,13 +374,11 @@ Common flags (review):
 | `--claude-model <id>` | Override claude's model (same for `--gemini-model`, `--codex-model`, `--copilot-model`) |
 | `--merge-with <agent>` | Pick which agent merges findings (default: auto) |
 | `--no-preflight` | Skip the pre-flight readiness probe; go straight to the real fan-out (v0.10.1+). Use in CI / non-interactive scripts where the ~10s probe budget isn't worth it. |
-| `--model <id>` | Override `provider.model` (single-LLM fallback only) |
-| `--base-url <url>` | Override `provider.base_url` (single-LLM fallback only) |
-| `--min-severity <tier>` | `nit` / `info` / `warning` / `major` / `critical` (single-LLM fallback only) |
-| `--max-findings <n>` | Cap output (single-LLM fallback only) |
-| `--json` | Emit JSON in the single-LLM fallback path. **Note:** `--json` is ALSO a root-level flag picked up by `audit` and `bench`, where it emits JSON instead of markdown. In multi-LLM `review` it's ignored (see paragraph below the audit flag table). |
+| `--min-severity <tier>` | `nit` / `info` / `warning` / `major` / `critical` — honoured by `audit` and `bench`; ignored on `review` (multi-agent filtering happens inside the merge prompt). |
+| `--max-findings <n>` | Cap output — honoured by `audit` and `bench`; ignored on `review`. |
+| `--json` | Emit JSON. Honoured by `audit` and `bench` (output goes to stdout); ignored on `review` (the merged report is markdown). |
 
-In multi-LLM `review` mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: they only take effect in the single-LLM fallback path (when no LLM CLI is authenticated and we hit the configured `provider:` directly). Multi-LLM emits a stderr warning when those flags are passed so you know they had no effect. A structured-JSON multi-LLM output mode (where the merger emits both markdown and a JSON envelope) is on the post-v0.8 roadmap — no fixed date; we'll unpark it when the third user asks for it.
+In `review` mode the merger returns markdown, not structured findings, so `--json`, `--min-severity`, and `--max-findings` are **ignored**: multi-LLM trimming happens inside the merge prompt instead. The audit and bench paths still honour all three flags. Multi-LLM emits a stderr warning when those review-shape flags are passed so you know they had no effect. A structured-JSON multi-LLM review mode (where the merger emits both markdown and a JSON envelope) is on the roadmap — no fixed date.
 
 Audit-specific flags:
 
@@ -441,7 +439,7 @@ prompts:
     Output language: English only.
 ```
 
-All three apply to the multi-LLM path AND the single-LLM fallback, so a team's customizations reach every reviewer (claude, gemini, codex, copilot).
+All three apply uniformly to every active agent (claude, codex, copilot, gemini, plus any `llms.<name>` provider endpoints), so a team's customizations reach every reviewer.
 
 For one-off runs, `--prompt-pack-dir <dir>` overrides `prompts.pack_dir` for a single review without touching the YAML.
 
@@ -495,9 +493,9 @@ Distributing to a few hundred engineers? Two patterns work:
 
 | Mode | Where your diff goes |
 |---|---|
-| Single-LLM, `provider.base_url: http://localhost:11434/v1` (Ollama) | **Stays on your machine.** Fully offline. |
+| Provider agent only (`llms.ollama.base_url: http://localhost:11434/v1`) | **Stays on your machine.** Fully offline. |
 | Single-LLM, any cloud provider (OpenAI, Anthropic, Mistral, etc.) | The provider you configured, over TLS. Their privacy policy applies. |
-| Multi-LLM (default) — Claude / Gemini / Codex / Copilot CLIs | **Each authenticated CLI calls its own backend** (Anthropic, Google AI, OpenAI, GitHub). One review fans out to multiple cloud vendors. Your `provider.base_url` is irrelevant in this mode. |
+| Multi-agent (default) — Claude / Gemini / Codex / Copilot CLIs + any provider entries | **Each authenticated CLI calls its own backend** (Anthropic, Google AI, OpenAI, GitHub) and each provider hits the endpoint you configured. One review fans out to multiple vendors in parallel. |
 | Multi-LLM with `--only` restricted to a fully-local agent | Roadmap. Will be possible once a fully-local-agent preset lands; today every multi-LLM agent (claude / gemini / codex / copilot) calls its own cloud backend. |
 
 If you need air-gapped review today, use single-LLM mode against a local Ollama and stay off `local-review review` (which fans out to authenticated cloud CLIs by default).

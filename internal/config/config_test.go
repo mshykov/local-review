@@ -10,15 +10,9 @@ import (
 	"testing"
 )
 
-func TestDefaults(t *testing.T) {
-	d := Defaults()
-	if d.Provider.Model == "" {
-		t.Error("default model is empty")
-	}
-	if d.Review.MinSeverity != "warning" {
-		t.Errorf("default min_severity = %q, want warning", d.Review.MinSeverity)
-	}
-}
+// v0 single-LLM TestDefaults removed in v0.15 — Defaults() no longer
+// has a Provider struct to assert on. The multi-LLM equivalent below
+// covers the same shape from the v0.1+ side.
 
 func TestDefaults_MultiLLMModelsAreEmpty(t *testing.T) {
 	// Multi-LLM defaults intentionally leave Model unset so each vendor
@@ -42,49 +36,82 @@ func TestDefaults_MultiLLMModelsAreEmpty(t *testing.T) {
 	}
 }
 
-func TestMergeReplaces(t *testing.T) {
-	dst := Defaults()
-	src := Config{
-		Provider: Provider{Model: "claude-opus-4-6", BaseURL: "https://api.anthropic.com/v1"},
-		Review:   Review{MinSeverity: "major", MaxFindings: 5},
-	}
-	merge(&dst, src)
-	if dst.Provider.Model != "claude-opus-4-6" {
-		t.Errorf("model = %q", dst.Provider.Model)
-	}
-	if dst.Review.MinSeverity != "major" {
-		t.Errorf("min_severity = %q", dst.Review.MinSeverity)
-	}
-	if dst.Review.MaxFindings != 5 {
-		t.Errorf("max_findings = %d", dst.Review.MaxFindings)
-	}
-}
+// TestMergeReplaces (v0 Provider variant) and TestLoadUsesRepoYAML
+// (v0 single-LLM YAML shape) removed in v0.15. The Review-block
+// merge contract is now covered by TestMergeReplaces_V01 below and
+// the load + cascade tests by TestLoadUsesRepoYAML_V01.
 
-func TestLoadUsesRepoYAML(t *testing.T) {
+func TestLoad_RejectsRemovedProviderBlock(t *testing.T) {
+	// v0.15 removal: a YAML config that still contains the legacy
+	// `provider:` block must surface an actionable migration error
+	// rather than silently load (yaml.v3 ignores unknown fields).
+	// The error text must point at the new shape so the fix is
+	// obvious without grepping the CHANGELOG.
 	dir := t.TempDir()
 	repoCfg := filepath.Join(dir, ".local-review.yml")
 	if err := os.WriteFile(repoCfg, []byte(`
 provider:
-  model: gpt-4o
-review:
-  min_severity: critical
-  max_findings: 3
+  base_url: http://localhost:11434/v1
+  model: qwen
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	_, err := Load(repoCfg)
+	if err == nil {
+		t.Fatal("expected Load to reject the legacy provider: block, got nil")
+	}
+	msg := err.Error()
+	for _, must := range []string{"provider:", "removed in v0.15", "llms."} {
+		if !strings.Contains(msg, must) {
+			t.Errorf("error must mention %q so the migration path is obvious; got %q", must, msg)
+		}
+	}
+}
 
-	cfg, err := Load(repoCfg)
+func TestDetectRemovedProviderBlock(t *testing.T) {
+	cases := map[string]bool{
+		// Legacy shape — must trip the detector.
+		"provider:\n  base_url: x\n":          true,
+		"provider: {}\n":                      true,
+		"provider:\n":                         true, // bare key, null value
+		"review: {}\nprovider:\n  model: x\n": true,
+		// New unified shape — must NOT trip.
+		"llms:\n  ollama:\n    base_url: x\n": false,
+		"review:\n  min_severity: warning\n":  false,
+		"":                                    false,
+	}
+	for in, want := range cases {
+		got, err := detectRemovedProviderBlock([]byte(in))
+		if err != nil {
+			t.Errorf("detectRemovedProviderBlock(%q) unexpected parse error: %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("detectRemovedProviderBlock(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestDetectRemovedProviderBlock_YAMLMergeKeyDoesNotBypass(t *testing.T) {
+	// v0.15 self-review (codex) caught the "hard-rejection bypass via
+	// YAML merge keys" hole: a legacy `provider:` block reached
+	// through `<<: *anchor` would slip past a node-tree walker that
+	// only sees literal top-level keys. The detector must use a
+	// merge-resolving decode (yaml.v3 does this for
+	// map[string]interface{}) so the resulting top-level keyset
+	// contains `provider` even when it arrived via an anchor.
+	yamlWithMergeKey := `defaults: &legacy
+  base_url: http://localhost:11434/v1
+  model: qwen
+provider:
+  <<: *legacy
+`
+	got, err := detectRemovedProviderBlock([]byte(yamlWithMergeKey))
 	if err != nil {
-		t.Fatalf("Load: %v", err)
+		t.Fatalf("unexpected parse error: %v", err)
 	}
-	if cfg.Provider.Model != "gpt-4o" {
-		t.Errorf("model = %q, want gpt-4o", cfg.Provider.Model)
-	}
-	if cfg.Review.MinSeverity != "critical" {
-		t.Errorf("min_severity = %q", cfg.Review.MinSeverity)
-	}
-	if cfg.Review.MaxFindings != 3 {
-		t.Errorf("max_findings = %d", cfg.Review.MaxFindings)
+	if !got {
+		t.Error("detector must catch provider: even when its body is supplied via a YAML merge key (`<<: *anchor`); silent bypass defeats the hard-rejection contract")
 	}
 }
 
@@ -95,7 +122,7 @@ func TestFindRepoConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := filepath.Join(dir, ".local-review.yml")
-	if err := os.WriteFile(cfg, []byte("provider: {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(cfg, []byte("llms: {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := FindRepoConfig(deep)
@@ -107,55 +134,9 @@ func TestFindRepoConfig(t *testing.T) {
 	}
 }
 
-func TestResolveAPIKeyFromEnv(t *testing.T) {
-	t.Setenv("LOCAL_REVIEW_API_KEY", "sk-test-123")
-	cfg := Defaults()
-	resolveAPIKey(&cfg)
-	if cfg.Provider.APIKey != "sk-test-123" {
-		t.Errorf("api_key = %q, want sk-test-123", cfg.Provider.APIKey)
-	}
-}
-
-func TestResolveAPIKeyCustomEnv(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "sk-from-openai")
-	cfg := Defaults()
-	cfg.Provider.APIKeyEnv = "OPENAI_API_KEY"
-	resolveAPIKey(&cfg)
-	if cfg.Provider.APIKey != "sk-from-openai" {
-		t.Errorf("api_key = %q, want sk-from-openai", cfg.Provider.APIKey)
-	}
-}
-
-// TestResolveAPIKey_EnvVarOverridesYAMLKey covers the v0.10.0
-// audit-dogfood finding: when both a YAML-stored API key AND a
-// corresponding env var are present, env wins. Closes the
-// developer-commits-test-key-then-sets-prod-env-var footgun the
-// pre-v0.10.0 resolver silently passed through.
-func TestResolveAPIKey_EnvVarOverridesYAMLKey(t *testing.T) {
-	t.Setenv("LOCAL_REVIEW_API_KEY", "sk-from-env")
-	cfg := Defaults()
-	cfg.Provider.APIKey = "sk-stale-yaml-key" // simulates a YAML-loaded key
-	resolveAPIKey(&cfg)
-	if cfg.Provider.APIKey != "sk-from-env" {
-		t.Errorf("env should override deprecated YAML key; got %q, want sk-from-env", cfg.Provider.APIKey)
-	}
-}
-
-// TestResolveAPIKey_YAMLKeyKeptWhenEnvUnset preserves the v0
-// backwards-compat shape: users who put a key in YAML and never
-// set an env var (the original supported workflow) keep using
-// that key. Only present-env wins; empty env doesn't clobber.
-func TestResolveAPIKey_YAMLKeyKeptWhenEnvUnset(t *testing.T) {
-	// Belt-and-suspenders: ensure no leaked env var from the
-	// outer test environment colours the result.
-	t.Setenv("LOCAL_REVIEW_API_KEY", "")
-	cfg := Defaults()
-	cfg.Provider.APIKey = "sk-yaml-only"
-	resolveAPIKey(&cfg)
-	if cfg.Provider.APIKey != "sk-yaml-only" {
-		t.Errorf("empty env should leave YAML key intact; got %q, want sk-yaml-only", cfg.Provider.APIKey)
-	}
-}
+// The v0 resolveAPIKey tests removed in v0.15 along with the function
+// itself. The per-LLM resolveAPIKeys (multi-LLM path) is covered by
+// TestResolveAPIKeys_EnvOverridesYAMLPerLLM and TestResolveAPIKeys_V01.
 
 // TestResolveAPIKeys_EnvOverridesYAMLPerLLM is the multi-LLM
 // counterpart of TestResolveAPIKey_EnvVarOverridesYAMLKey. The
@@ -821,17 +802,15 @@ func TestMergeCoversAllExportedFields(t *testing.T) {
 // nonZeroConfig returns a Config where every exported (non-deprecated)
 // field is set to a unique non-zero value. Sentinel values aren't
 // meaningful — we only assert presence after merge.
+//
+// v0.15: the v0 single-LLM Provider block was removed; the test
+// previously exercised Provider.BaseURL/Model/APIKey/APIKeyEnv/
+// TimeoutSec — that surface is gone, the corresponding overlay
+// branch in merge() is gone, and so is the entry here.
 func nonZeroConfig() Config {
 	enabled := true
 	dedup := true
 	return Config{
-		Provider: Provider{
-			BaseURL:    "https://example.test/v1",
-			Model:      "test-model",
-			APIKey:     "sk-test", // merge() does copy this for v0.4.x compat; warnDeprecatedAPIKeys nudges
-			APIKeyEnv:  "TEST_KEY",
-			TimeoutSec: 99,
-		},
 		Review: Review{
 			MinSeverity:  "major",
 			MaxFindings:  42,
@@ -909,109 +888,18 @@ func findZeroFields(v reflect.Value, prefix string) []string {
 }
 
 // --- v0.14 provider: deprecation -----------------------------------------
-
-// The warning printer writes to os.Stderr directly (matching the
-// warnDeprecatedAPIKeys precedent), so we test the *decision* — the
-// only place behavior can drift — via the extracted pure predicate.
-// Coupled with the sanitizer tests below, these pin the contract that
-// the self-review caught us missing in the first cut of PR 5/5: the
-// suppression rule has real branching, and the printed URL must
-// never leak basic-auth credentials into a CI log.
-
-func TestShouldWarnDeprecatedProvider_NoLegacyBlock(t *testing.T) {
-	cfg := &Config{}
-	if shouldWarnDeprecatedProvider(cfg) {
-		t.Error("warning should not fire when provider: block is absent")
-	}
-}
-
-func TestShouldWarnDeprecatedProvider_LegacyOnly_Fires(t *testing.T) {
-	cfg := &Config{Provider: Provider{BaseURL: "https://api.openai.com/v1"}}
-	if !shouldWarnDeprecatedProvider(cfg) {
-		t.Error("warning should fire when only the legacy provider: block carries a base_url")
-	}
-}
-
-func TestShouldWarnDeprecatedProvider_AlreadyMigrated_Suppresses(t *testing.T) {
-	// Mid-migration: both legacy provider: and a new llms.<name>.base_url
-	// are present. The user has done the new-shape part — don't yell at
-	// them for the leftover legacy block (which they may keep around as
-	// a backup or remove in a follow-up commit).
-	cfg := &Config{
-		Provider: Provider{BaseURL: "https://api.openai.com/v1"},
-		LLMs: map[string]LLMConfig{
-			"ollama": {BaseURL: "http://localhost:11434/v1"},
-		},
-	}
-	if shouldWarnDeprecatedProvider(cfg) {
-		t.Error("warning should NOT fire when at least one llms.<name>.base_url is already set")
-	}
-}
-
-func TestShouldWarnDeprecatedProvider_LLMsWithoutBaseURL_StillFires(t *testing.T) {
-	// CLI agent entries under llms: (no base_url) don't count as a
-	// migration — they're just per-CLI config knobs. The legacy
-	// provider: is still the only HTTP endpoint configured.
-	cfg := &Config{
-		Provider: Provider{BaseURL: "https://api.openai.com/v1"},
-		LLMs: map[string]LLMConfig{
-			"claude": {Model: "claude-sonnet-4-6"},
-			"codex":  {},
-		},
-	}
-	if !shouldWarnDeprecatedProvider(cfg) {
-		t.Error("CLI-only llms entries (no base_url) must not count as migrated")
-	}
-}
-
-func TestShouldWarnDeprecatedProvider_DefaultsOnly_Suppresses(t *testing.T) {
-	// v0.14.1 regression guard: Defaults() pre-populates Provider with
-	// BaseURL+Model+APIKeyEnv, so a no-config invocation post-cascade
-	// has a non-empty cfg.Provider.BaseURL even though the user wrote
-	// nothing. v0.14.0 fired the deprecation warning on every doctor /
-	// config / review run in that case. Treat "resolved Provider ==
-	// Defaults()" as "user did not explicitly set this" and stay silent.
-	cfg := Defaults()
-	if shouldWarnDeprecatedProvider(&cfg) {
-		t.Error("warning must NOT fire when Provider matches Defaults() verbatim (no user config)")
-	}
-}
-
-func TestShouldWarnDeprecatedProvider_NonDefaultBaseURL_StillFires(t *testing.T) {
-	// The intended case: a real user-configured legacy provider: block
-	// pointing at something other than the default OpenAI endpoint
-	// (e.g. local Ollama). This MUST still trigger the migration nudge.
-	cfg := Defaults()
-	cfg.Provider.BaseURL = "http://localhost:11434/v1"
-	if !shouldWarnDeprecatedProvider(&cfg) {
-		t.Error("warning must fire for a non-default provider.base_url (the actual migration target)")
-	}
-}
-
-func TestShouldWarnDeprecatedProvider_APIKeyOverride_StillFires(t *testing.T) {
-	// Edge case the v0.14.1 review caught: a user writing
-	// `provider: { api_key: "..." }` is using the deprecated block
-	// even though base_url / model / api_key_env still equal defaults.
-	// Full-struct comparison must catch this; partial-field comparison
-	// would mis-suppress the warning and hide the migration nudge.
-	cfg := Defaults()
-	cfg.Provider.APIKey = "sk-user-set-this"
-	if !shouldWarnDeprecatedProvider(&cfg) {
-		t.Error("warning must fire when ONLY provider.api_key differs from defaults")
-	}
-}
-
-func TestShouldWarnDeprecatedProvider_TimeoutSecOverride_StillFires(t *testing.T) {
-	// Same shape as the api_key edge case — a user with only
-	// `provider: { timeout_seconds: 30 }` IS using the deprecated
-	// block, and the warning must fire on any Provider field that
-	// differs from Defaults(), not just base_url / model / api_key_env.
-	cfg := Defaults()
-	cfg.Provider.TimeoutSec = 30
-	if !shouldWarnDeprecatedProvider(&cfg) {
-		t.Error("warning must fire when ONLY provider.timeout_seconds differs from defaults")
-	}
-}
+//
+// The v0.14 deprecation-warning predicate (shouldWarnDeprecatedProvider)
+// + its 8 unit tests were removed in v0.15 along with the warning
+// itself — the `provider:` block is now hard-rejected at config-load
+// time. The replacement guard is TestLoad_RejectsRemovedProviderBlock
+// near the top of this file, plus the table-driven
+// TestDetectRemovedProviderBlock just below it.
+//
+// The SanitizeBaseURLForDisplay function itself still survives, used
+// by `local-review config` to mask credentials embedded in each
+// `llms.<name>.base_url` value before printing. The tests below pin
+// its sanitization contract independent of any caller.
 
 func TestSanitizeBaseURLForDisplay_StripsBasicAuth(t *testing.T) {
 	// The whole point: a URL with embedded `user:password@` must NOT

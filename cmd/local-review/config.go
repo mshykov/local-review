@@ -36,31 +36,22 @@ which settings are being used.`,
 			// command silently dropped flag overrides on the floor.
 			applyFlagsToConfig(&cfg, sf)
 
-			// Mask API keys before printing (config dumps should be shareable)
-			if cfg.Provider.APIKey != "" {
-				cfg.Provider.APIKey = "***"
-			}
+			// Mask API keys + strip credentials embedded in base_url
+			// values before printing (config dumps should be
+			// shareable). Same sanitizer (SanitizeBaseURLForDisplay)
+			// covers basic-auth userinfo (`https://user:pass@host`)
+			// and query-string keys (`?api_key=…`). The v0
+			// `cfg.Provider` branch was removed in v0.15 along with
+			// the top-level `provider:` block; all endpoints now
+			// flow through `cfg.LLMs[*]`.
 			for name, llmCfg := range cfg.LLMs {
 				if llmCfg.APIKey != "" {
 					llmCfg.APIKey = "***"
-					cfg.LLMs[name] = llmCfg
 				}
-			}
-
-			// Strip credentials embedded in base_url values
-			// (`https://user:pass@host` or `?api_key=…`). A config dump
-			// is meant to be shareable like the masked api_key above;
-			// without this, basic-auth or query-string creds leak
-			// verbatim. Same sanitizer as the v0.14 deprecation
-			// warning so both surfaces behave identically.
-			if cfg.Provider.BaseURL != "" {
-				cfg.Provider.BaseURL = config.SanitizeBaseURLForDisplay(cfg.Provider.BaseURL)
-			}
-			for name, llmCfg := range cfg.LLMs {
 				if llmCfg.BaseURL != "" {
 					llmCfg.BaseURL = config.SanitizeBaseURLForDisplay(llmCfg.BaseURL)
-					cfg.LLMs[name] = llmCfg
 				}
+				cfg.LLMs[name] = llmCfg
 			}
 
 			enc := yaml.NewEncoder(cmd.OutOrStdout())
