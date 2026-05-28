@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -101,6 +103,34 @@ func runDoctor(out io.Writer) error {
 		}
 	}
 	llms := cli.DetectAllWithOverrides(overrides)
+	// Provider agents (entries with base_url in cfg.LLMs) — detected via
+	// HTTP /v1/models probe and rendered alongside CLI agents in the same
+	// readiness summary. Empty when no provider entries are configured.
+	// Specs sorted by name so doctor's provider rows appear in a stable
+	// order across runs (Go map iteration is randomised; without the sort
+	// the output flickered between invocations).
+	var providerSpecs []cli.ProviderSpec
+	if cfgErr == nil {
+		names := make([]string, 0, len(cfg.LLMs))
+		for name, c := range cfg.LLMs {
+			if c.BaseURL == "" {
+				continue
+			}
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			c := cfg.LLMs[name]
+			providerSpecs = append(providerSpecs, cli.ProviderSpec{
+				Name:       name,
+				BaseURL:    c.BaseURL,
+				Model:      c.Model,
+				APIKey:     c.APIKey,
+				TimeoutSec: c.TimeoutSec,
+			})
+		}
+	}
+	llms = append(llms, cli.DetectProviders(context.Background(), providerSpecs)...)
 
 	readyCount := 0
 	reviewCapable := 0
@@ -271,11 +301,12 @@ func (ew *errWriter) Write(p []byte) (int, error) {
 type llmStatus int
 
 const (
-	statusReady         llmStatus = iota // installed, version-detected, authenticated
-	statusBrokenInstall                  // binary found, version probe failed
-	statusNotAuthed                      // installed + version-detected, but no credentials
-	statusNotInstalled                   // binary not in PATH
-	statusExperimental                   // installed but excluded from the review fan-out (cli.IsReviewCapable == false)
+	statusReady               llmStatus = iota // installed, version-detected, authenticated
+	statusBrokenInstall                        // binary found, version probe failed
+	statusNotAuthed                            // installed + version-detected, but no credentials
+	statusNotInstalled                         // binary not in PATH
+	statusExperimental                         // installed but excluded from the review fan-out (cli.IsReviewCapable == false)
+	statusProviderUnreachable                  // provider entry (BaseURL set) but /v1/models probe failed
 )
 
 // classify returns both the bucket and the underlying authStatus so
@@ -286,6 +317,18 @@ const (
 // makes us look at $MY_GEMINI_KEY instead of $GEMINI_API_KEY). Empty
 // keeps the canonical default.
 func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
+	// Provider agents (HTTP /v1 endpoints) — discriminate by BaseURL.
+	// Available here means "the /v1/models probe succeeded" (set by
+	// cli.DetectProviders). No subprocess, no version, no env-var auth
+	// check: if the endpoint accepted us, we're ready. If it didn't,
+	// surface a provider-specific status so printLLMRow renders an
+	// endpoint-shaped error row instead of "binary not in PATH."
+	if llm.BaseURL != "" {
+		if llm.Available {
+			return statusReady, authStatus{detail: llm.BaseURL}
+		}
+		return statusProviderUnreachable, authStatus{}
+	}
 	if !llm.Available {
 		if llm.Path != "" {
 			return statusBrokenInstall, authStatus{}
@@ -316,6 +359,28 @@ func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 // and the model line would be noise.
 func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string) {
 	displayName := getDisplayName(llm.Name)
+
+	// Provider agents render an HTTP-endpoint-shaped row (no Path,
+	// no Version — those are CLI-specific). Branched here rather than
+	// in the switch below to keep CLI cases untouched.
+	if llm.BaseURL != "" {
+		switch status {
+		case statusReady:
+			fmt.Fprintf(out, "✓ %-15s provider     ready\n", displayName)
+			fmt.Fprintf(out, "    endpoint:      %s\n", llm.BaseURL)
+			if llm.Model != "" {
+				fmt.Fprintf(out, "    model:         %s\n", llm.Model)
+			} else {
+				fmt.Fprintf(out, "    model:         (none pinned — set `llms.%s.model:` to the model id loaded on the endpoint)\n", llm.Name)
+			}
+		case statusProviderUnreachable:
+			fmt.Fprintf(out, "✗ %-15s provider     unreachable\n", displayName)
+			fmt.Fprintf(out, "    endpoint:  %s\n", llm.BaseURL)
+			fmt.Fprintln(out, "    note:      the /v1/models probe failed; check the endpoint is up, the host/port is reachable, and the api_key (if any) is correct")
+		}
+		fmt.Fprintln(out)
+		return
+	}
 
 	switch status {
 	case statusReady:

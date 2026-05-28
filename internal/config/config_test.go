@@ -846,6 +846,7 @@ func nonZeroConfig() Config {
 			"claude": {
 				Enabled:    &enabled,
 				CLIPath:    "/opt/test/claude",
+				BaseURL:    "http://test.invalid/v1", // not actually used for claude — present so the merge-coverage reflection sees the BaseURL field exercised
 				Model:      "claude-test",
 				APIKeyEnv:  "TEST_ANTHROPIC",
 				APIKey:     "sk-test", // merge() copies for v0.4.x compat; deprecated, warnings nudge to env

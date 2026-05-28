@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mshykov/local-review/internal/agents"
+	"github.com/mshykov/local-review/internal/agents/provider"
 )
 
 // Invoker is the review-agent contract. Moved to internal/agents in
@@ -69,8 +70,17 @@ func buildReviewPrompt(systemPrompt string) string {
 // An empty Model leaves the CLI on its default; an empty APIKey
 // means "rely on the CLI's own auth flow / OAuth session."
 //
-// Returns nil if the LLM name is unknown.
+// Returns nil if the LLM name is unknown (for CLI agents) — provider
+// agents (BaseURL set) are always recognised, so they never return nil
+// here regardless of name.
 func NewInvoker(llm LLM) Invoker {
+	// Provider agents — discriminated by BaseURL, not by name. Name is
+	// free-form for providers (user picks "qwen", "local-fast", …) so a
+	// name-switch wouldn't work. The provider invoker is one type that
+	// covers every OpenAI-compatible endpoint.
+	if llm.BaseURL != "" {
+		return provider.New(llm.Name, llm.BaseURL, llm.APIKey, "" /* apiKeyEnv unused at this layer */, llm.Model, llm.TimeoutSec)
+	}
 	switch llm.Name {
 	case "claude":
 		return &ClaudeInvoker{path: llm.Path, model: llm.Model, apiKey: llm.APIKey}

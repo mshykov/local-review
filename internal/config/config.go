@@ -71,9 +71,18 @@ type Org struct {
 // fields. The "API fallback when CLI auth fails" idea is parked in
 // do-not-merge/v06-fully-local-ollama-preset.md.
 type LLMConfig struct {
-	Enabled    *bool  `yaml:"enabled"`
-	CLIPath    string `yaml:"cli_path"`        // path to CLI binary (auto-detect if empty)
-	Model      string `yaml:"model"`           // model name passed to the agent CLI
+	Enabled *bool  `yaml:"enabled"`
+	CLIPath string `yaml:"cli_path"` // path to CLI binary (auto-detect if empty)
+	// BaseURL turns an entry into a PROVIDER agent (HTTP / OpenAI-
+	// compatible: Ollama, vLLM, OpenAI, Together, Groq, OpenRouter,
+	// Anthropic-compat, …). When set, the runtime treats this entry
+	// as a provider, not a CLI subprocess. cli_path is then ignored.
+	// User-chosen entry name is the agent's identifier (free-form;
+	// "qwen", "local-fast", "air-gapped"). Added in v0.14 as part of
+	// the unified agent model — providers can now run side-by-side
+	// with the CLI agents in the same `local-review review` fan-out.
+	BaseURL    string `yaml:"base_url"`
+	Model      string `yaml:"model"`           // model name passed to the agent CLI OR provider
 	APIKeyEnv  string `yaml:"api_key_env"`     // env var name for API key
 	APIKey     string `yaml:"api_key"`         // DEPRECATED: use environment variable instead
 	TimeoutSec int    `yaml:"timeout_seconds"` // per-call timeout
@@ -519,6 +528,9 @@ func merge(dst *Config, src Config) {
 			if existing, ok := dst.LLMs[name]; ok {
 				if llmCfg.CLIPath != "" {
 					existing.CLIPath = llmCfg.CLIPath
+				}
+				if llmCfg.BaseURL != "" {
+					existing.BaseURL = llmCfg.BaseURL
 				}
 				if llmCfg.Model != "" {
 					existing.Model = llmCfg.Model
