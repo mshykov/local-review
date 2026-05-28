@@ -298,23 +298,27 @@ This project audits itself: [`audit/security.md`](audit/security.md) and [`audit
 
 local-review loads YAML from a cascade — built-in defaults → `~/.local-review.yml` → `./.local-review.yml` → CLI flags.
 
-A minimal `~/.local-review.yml`:
+A minimal `~/.local-review.yml` (unified shape, v0.14+):
 
 ```yaml
-provider:
-  base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-  api_key_env: LOCAL_REVIEW_API_KEY
+llms:
+  ollama:                              # any name you like — "ollama", "qwen", "cloud", ...
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
 review:
   min_severity: warning
   max_findings: 20
 ```
 
-See [`examples/.local-review.yml`](examples/.local-review.yml) for the full schema with comments.
+Any entry under `llms:` with a `base_url:` becomes a **provider agent** — an OpenAI-compatible HTTP endpoint (Ollama, vLLM, OpenAI, Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter). Provider agents run side-by-side with the CLI agents (`claude`, `codex`, `gemini`, `copilot`) in the same `local-review review` fan-out — no separate single-LLM-fallback path.
+
+> **Deprecated in v0.14:** the top-level `provider:` block (single-LLM-fallback mode). It still works for one release with a stderr warning at startup; new configs should use the unified `llms.<name>.base_url` shape above. The migration is a verbatim field-rename — `provider.base_url` → `llms.<your-name>.base_url`, same for `model` / `api_key_env`.
+
+See [`examples/.local-review.unified.yml`](examples/.local-review.unified.yml) for the recommended schema with comments. The legacy [`examples/.local-review.yml`](examples/.local-review.yml) still illustrates the deprecated `provider:` block for users mid-migration.
 
 ### Switching providers
 
-local-review speaks the OpenAI chat-completions API — every major provider supports it:
+The same `base_url` / `model` / `api_key_env` fields work under both shapes — the recommended `llms.<name>:` (unified, v0.14+) and the deprecated top-level `provider:`. local-review speaks the OpenAI chat-completions API — every major provider supports it:
 
 | Provider | `base_url` | Notes |
 |---|---|---|

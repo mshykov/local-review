@@ -907,3 +907,107 @@ func findZeroFields(v reflect.Value, prefix string) []string {
 	}
 	return out
 }
+
+// --- v0.14 provider: deprecation -----------------------------------------
+
+// The warning printer writes to os.Stderr directly (matching the
+// warnDeprecatedAPIKeys precedent), so we test the *decision* — the
+// only place behavior can drift — via the extracted pure predicate.
+// Coupled with the sanitizer tests below, these pin the contract that
+// the self-review caught us missing in the first cut of PR 5/5: the
+// suppression rule has real branching, and the printed URL must
+// never leak basic-auth credentials into a CI log.
+
+func TestShouldWarnDeprecatedProvider_NoLegacyBlock(t *testing.T) {
+	cfg := &Config{}
+	if shouldWarnDeprecatedProvider(cfg) {
+		t.Error("warning should not fire when provider: block is absent")
+	}
+}
+
+func TestShouldWarnDeprecatedProvider_LegacyOnly_Fires(t *testing.T) {
+	cfg := &Config{Provider: Provider{BaseURL: "https://api.openai.com/v1"}}
+	if !shouldWarnDeprecatedProvider(cfg) {
+		t.Error("warning should fire when only the legacy provider: block carries a base_url")
+	}
+}
+
+func TestShouldWarnDeprecatedProvider_AlreadyMigrated_Suppresses(t *testing.T) {
+	// Mid-migration: both legacy provider: and a new llms.<name>.base_url
+	// are present. The user has done the new-shape part — don't yell at
+	// them for the leftover legacy block (which they may keep around as
+	// a backup or remove in a follow-up commit).
+	cfg := &Config{
+		Provider: Provider{BaseURL: "https://api.openai.com/v1"},
+		LLMs: map[string]LLMConfig{
+			"ollama": {BaseURL: "http://localhost:11434/v1"},
+		},
+	}
+	if shouldWarnDeprecatedProvider(cfg) {
+		t.Error("warning should NOT fire when at least one llms.<name>.base_url is already set")
+	}
+}
+
+func TestShouldWarnDeprecatedProvider_LLMsWithoutBaseURL_StillFires(t *testing.T) {
+	// CLI agent entries under llms: (no base_url) don't count as a
+	// migration — they're just per-CLI config knobs. The legacy
+	// provider: is still the only HTTP endpoint configured.
+	cfg := &Config{
+		Provider: Provider{BaseURL: "https://api.openai.com/v1"},
+		LLMs: map[string]LLMConfig{
+			"claude": {Model: "claude-sonnet-4-6"},
+			"codex":  {},
+		},
+	}
+	if !shouldWarnDeprecatedProvider(cfg) {
+		t.Error("CLI-only llms entries (no base_url) must not count as migrated")
+	}
+}
+
+func TestSanitizeBaseURLForDisplay_StripsBasicAuth(t *testing.T) {
+	// The whole point: a URL with embedded `user:password@` must NOT
+	// land in stderr / CI logs / terminal history. Lose userinfo;
+	// keep scheme + host + path so the suggestion is still useful.
+	got := sanitizeBaseURLForDisplay("https://user:s3cret@api.openai.com/v1")
+	if strings.Contains(got, "s3cret") || strings.Contains(got, "user") {
+		t.Errorf("basic-auth credentials must be stripped; got %q", got)
+	}
+	if !strings.Contains(got, "api.openai.com/v1") {
+		t.Errorf("scheme+host+path must survive sanitization; got %q", got)
+	}
+}
+
+func TestSanitizeBaseURLForDisplay_StripsQueryAndFragment(t *testing.T) {
+	// Some providers accept the key on the query string (`?api_key=…`)
+	// or a session id on the fragment. Both belong in env vars, not
+	// stderr — drop them.
+	got := sanitizeBaseURLForDisplay("https://example.test/v1?api_key=sk-leak#sid=abc")
+	if strings.Contains(got, "api_key") || strings.Contains(got, "sk-leak") || strings.Contains(got, "sid=") {
+		t.Errorf("query/fragment must be stripped; got %q", got)
+	}
+	if !strings.Contains(got, "example.test/v1") {
+		t.Errorf("scheme+host+path must survive sanitization; got %q", got)
+	}
+}
+
+func TestSanitizeBaseURLForDisplay_UnparseableReturnsPlaceholder(t *testing.T) {
+	// Fail-closed: if url.Parse rejects the value or it has no host,
+	// don't echo the raw string into the migration snippet — print a
+	// neutral placeholder instead. Matches CLAUDE.md rule 4
+	// ("refuse on invalid input rather than silently passing it
+	// through") for the display path.
+	for _, raw := range []string{"", "://bad", "not a url"} {
+		got := sanitizeBaseURLForDisplay(raw)
+		if got != "<your-provider-url>" {
+			t.Errorf("expected placeholder for unparseable %q, got %q", raw, got)
+		}
+	}
+}
+
+func TestSanitizeBaseURLForDisplay_PlainURLRoundtrips(t *testing.T) {
+	// The common case: an unauthenticated URL stays exactly itself.
+	const in = "http://localhost:11434/v1"
+	if got := sanitizeBaseURLForDisplay(in); got != in {
+		t.Errorf("plain URL must roundtrip; got %q", got)
+	}
+}

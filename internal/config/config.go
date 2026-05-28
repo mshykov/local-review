@@ -14,6 +14,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -238,6 +239,10 @@ func Load(repoConfigPath string) (Config, error) {
 
 	// Warn about deprecated api_key in YAML (security risk)
 	warnDeprecatedAPIKeys(&cfg)
+
+	// Warn about deprecated `provider:` block (superseded in v0.14 by
+	// the unified agent model — see warnDeprecatedProviderBlock).
+	warnDeprecatedProviderBlock(&cfg)
 
 	// Env-driven API keys — resolve for v0 and v0.1
 	resolveAPIKey(&cfg)
@@ -657,6 +662,72 @@ func warnDeprecatedAPIKeys(cfg *Config) {
 			}
 		}
 	}
+}
+
+// shouldWarnDeprecatedProvider decides whether the legacy `provider:`
+// block deserves a deprecation warning. Pulled out as a pure function
+// so the suppression rule (fire ONLY when legacy is set AND no
+// `llms.*` entry already carries a `base_url`) is unit-testable
+// without capturing stderr — the warning printer below has no logic
+// worth testing once this returns true.
+func shouldWarnDeprecatedProvider(cfg *Config) bool {
+	if cfg.Provider.BaseURL == "" {
+		return false
+	}
+	for _, llmCfg := range cfg.LLMs {
+		if llmCfg.BaseURL != "" {
+			return false // already migrated; legacy block is harmless leftover
+		}
+	}
+	return true
+}
+
+// sanitizeBaseURLForDisplay strips potentially-sensitive parts of a
+// configured base_url before echoing it back into the deprecation
+// warning (which lands in stderr / terminal history / CI logs).
+// Basic-auth userinfo (`https://user:pass@host`) and the query /
+// fragment (`?api_key=…`) get dropped; scheme + host + path survive
+// because that's the part the user actually needs to copy. A URL
+// that fails to parse is replaced with a literal placeholder rather
+// than leaked verbatim — fail-closed (CLAUDE.md rule 4) and beats
+// printing garbage into a YAML stanza we're telling the user to copy.
+func sanitizeBaseURLForDisplay(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "<your-provider-url>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+// warnDeprecatedProviderBlock surfaces the v0.14 migration off the
+// top-level `provider:` block onto the unified `llms.<name>.base_url`
+// shape. The legacy block still works (single-LLM-fallback path is
+// kept for one release per the migration plan); the warning is the
+// pointer at the new shape.
+//
+// The migration snippet quotes the user's actual base_url / model /
+// api_key_env values back at them so they can paste it verbatim,
+// minus anything sensitive: see sanitizeBaseURLForDisplay above.
+func warnDeprecatedProviderBlock(cfg *Config) {
+	if !shouldWarnDeprecatedProvider(cfg) {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "WARNING: the top-level `provider:` block is deprecated in v0.14 and will be removed in a future release.")
+	fmt.Fprintln(os.Stderr, "         Migrate to the unified agent model by moving the same fields under `llms.<name>:` — pick any name you like (e.g. `ollama`, `qwen`, `cloud`).")
+	fmt.Fprintln(os.Stderr, "         Example:")
+	fmt.Fprintln(os.Stderr, "           llms:")
+	fmt.Fprintln(os.Stderr, "             ollama:")
+	fmt.Fprintf(os.Stderr, "               base_url: %s\n", sanitizeBaseURLForDisplay(cfg.Provider.BaseURL))
+	if cfg.Provider.Model != "" {
+		fmt.Fprintf(os.Stderr, "               model: %s\n", cfg.Provider.Model)
+	}
+	if cfg.Provider.APIKeyEnv != "" {
+		fmt.Fprintf(os.Stderr, "               api_key_env: %s\n", cfg.Provider.APIKeyEnv)
+	}
+	fmt.Fprintln(os.Stderr, "         Provider entries run side-by-side with the CLI agents — no separate fallback path needed.")
 }
 
 // Validate checks the configuration for common errors.

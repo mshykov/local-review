@@ -24,7 +24,9 @@ body:
       description: Which mode were you using?
       options:
         - Review (local-review review/staged/commit/branch — multi-LLM by default)
-        - Single-LLM fallback (no LLM CLI authenticated, hit configured provider:)
+        - Audit (local-review audit --topic …)
+        - Provider agent via llms.<name>.base_url (Ollama / vLLM / OpenAI / …)
+        - Single-LLM fallback via the deprecated top-level provider: block
         - Doctor (local-review doctor)
         - Init (local-review init)
         - Other
@@ -58,9 +60,10 @@ body:
       description: Paste your .local-review.yml (remove any API keys!)
       render: yaml
       placeholder: |
-        provider:
-          base_url: https://api.openai.com/v1
-          model: gpt-4o-mini
+        llms:
+          ollama:
+            base_url: http://localhost:11434/v1
+            model: qwen2.5-coder:7b
 
   - type: textarea
     id: logs
