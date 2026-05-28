@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+**In progress: unified agent model.** Provider endpoints (Ollama / vLLM / any OpenAI-compatible) become first-class agents alongside the CLI subprocess invokers, so review and audit both work with mixed cloud + local agents from one config. Landing across several PRs; full release once all the pieces are in.
+
+### Refactored
+
+- **`agents.Invoker` contract moved to its own package (PR 1 of the unified-agent series).** The review-agent interface and `TokenUsage` shape, previously in `internal/cli`, now live in `internal/agents` so both the CLI-subprocess invokers (`internal/cli`) and the new HTTP-provider invoker (`internal/agents/provider`) can implement the same contract without depending on each other. `cli.Invoker` and `cli.TokenUsage` are now type aliases to the new home — all existing callers keep working unchanged. No user-visible behavior change in this PR; foundation only.
+- **`llm.Client.Complete` now returns `(text, Usage, error)`.** The HTTP client surfaces the provider's `usage` object so `provider.Invoker` (below) can map it to `agents.TokenUsage` for per-call token counts. Single caller (`internal/review`) updated; usage discarded there for now (a later PR threads it into the Report meta).
+
+### Added
+
+- **`internal/agents/provider.Invoker`** — HTTP-backed implementation of `agents.Invoker`, wraps `llm.Client`. Sends `system` + `user` messages, never sets `response_format` (the prompt drives output format, not the wire header), maps token usage from the response. Folds `total_tokens`-only responses into `InputTokens` with `TotalOnly=true` so partial OpenAI-compat providers (some Ollama builds) still show a count. Compile-time `var _ agents.Invoker = (*provider.Invoker)(nil)` assertion + 6 unit tests against an `httptest` server (wire shape, usage mapping, total-only folding, missing-usage degrades to zero, error attribution by agent name, output trimming). Not wired into review/audit yet — that's PRs 2–4.
+
 ## [0.13.1] - 2026-05-27
 
 **Theme: workflow guardrails + the local/cloud two-pass flow.**

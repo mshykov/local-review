@@ -7,28 +7,20 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/mshykov/local-review/internal/agents"
 )
 
-// Invoker runs an LLM CLI with a diff and returns the review output
-// plus token-usage metadata.
+// Invoker is the review-agent contract. Moved to internal/agents in
+// v0.14 so the HTTP provider invoker (internal/agents/provider) could
+// share it without depending on this CLI-subprocess package. CLI
+// callers continue to use cli.Invoker unchanged via this alias.
 //
-// Review takes a `systemPrompt` (the language-specific prompt pack
-// content the runner has already loaded via lang.Dominant +
-// prompts.Get) so each agent reviews against the same review-rules,
-// severity tiering, and hard rules the single-LLM path uses. Empty
-// systemPrompt means "fall back to the agent's built-in generic
-// prompt" — useful for tests and as a defensive default.
-//
-// Returns the review text, a TokenUsage from the CLI's structured
-// output (zero values when the CLI version or invocation didn't
-// surface token counts), and any error.
-type Invoker interface {
-	Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error)
-	// RunPrompt sends a raw prompt to the LLM without wrapping it
-	// in a code-review context. Used by the merger; tokens returned
-	// for cost-attribution symmetry with Review.
-	RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error)
-}
+// See agents.Invoker for the full contract; the CLI subprocess
+// invokers below all satisfy it (they shell out to the vendor CLI,
+// parse its structured output for tokens, and return markdown or
+// JSON depending on what the resolved system prompt asked for).
+type Invoker = agents.Invoker
 
 // multiLLMOutputOverride tells the agent to respond in markdown
 // instead of JSON. The prompt packs mandate JSON output for the
