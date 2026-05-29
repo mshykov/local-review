@@ -7,11 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-05-29
+
+**Theme: the unified-agent v2.** v0.14 introduced the unified `llms.<name>.base_url` shape and deprecated the v0 top-level `provider:` block. v0.15 is the breaking removal — `provider:` is gone, the single-LLM-fallback code path is gone, the `--model` / `--base-url` flags are gone. Loading a stale v0.14 config now surfaces a copy-pastable migration error from the cascade loader, not a silent drop.
+
+Alongside the cleanup, v0.15 lands the **Gemini CLI sunset hardening**: Google announced the CLI stops serving Pro / Ultra / free-tier requests on **2026-06-18** (now ~20 days out). `doctor` shows a live countdown banner; the multi-agent runner auto-drops gemini from the default fan-out as soon as the cutoff passes; an opt-out (`llms.gemini.force_after_sunset: true`) lets users keep trying past the cutoff in case Google extends or their tier survives.
+
+This shipped across four PRs (#110 / #111 / #112 / #113):
+
+- **PR 1** removed the `provider:` block + single-LLM fallback (-767 lines).
+- **PR 2** added the gemini sunset + force_after_sunset opt-out.
+- **PR 3** flipped `docs/index.html` + `audit/README.md` over to v0.15 messaging.
+- **PR 3.5** (QA-found) fixed two real defects in the sunset machinery: a name-based gate that would auto-drop user-named provider entries called `gemini`, and a doctor `X/Y ready` display where numerator and denominator could disagree near the cutoff boundary.
+
 ### Removed (BREAKING)
 
 - **Top-level `provider:` config block** (and the v0 single-LLM fallback code path it drove). Deprecated in v0.14, scheduled for removal in v0.15 — this is that removal. A `.local-review.yml` that still carries a `provider:` key now surfaces an actionable migration error at load time pointing at the unified `llms.<name>.base_url` shape (verbatim field rename — `provider.base_url` → `llms.<name>.base_url`, same for `model` / `api_key_env` / `timeout_seconds`). Internals dropped alongside: `config.Provider` struct + field, `resolveAPIKey`, `warnDeprecatedProviderBlock`, `shouldWarnDeprecatedProvider`, the `internal/review` single-LLM orchestration (`Reviewer.Run`, `parseFindings`, `topLevelJSONObjects`, `applyFilters`, `buildUserMessage`), and the `runSingleLLMFallback` runner branch.
 - **`--model` and `--base-url` CLI flags** went with the same removal — they only overlaid `cfg.Provider`. Per-agent equivalents (`--claude-model`, `--codex-model`, …) and the config-time `llms.<name>.model` field cover the same use case under the unified shape.
 - **Legacy example configs**: `examples/.local-review.mistral.yml`, `examples/.local-review.deepseek.yml`, `examples/.local-review-multi.yml` deleted. The previous `examples/.local-review.unified.yml` is promoted to the canonical `examples/.local-review.yml`.
+
+### Fixed (pre-release QA)
+
+- **Sunset auto-disable now only matches CLI agents.** The PR 2 gate matched on `llm.Name` alone, which would have auto-dropped a user-named provider entry like `llms.gemini: { base_url: http://my-self-hosted-llm/v1 }` post-2026-06-18 — even though Google's sunset only applies to the Gemini CLI subprocess. The predicate now also requires `llm.BaseURL == ""` (CLI only); provider agents short-circuit out regardless of name. Caught by the pre-release multi-agent review (codex). New regression test `TestSelectAgents_PostSunsetDoesNotAffectProviderNamedGemini`.
+- **`doctor`'s `X/Y LLMs ready` denominator is now consistent with the runtime fan-out.** Pre-fix `readyCount` (numerator) excluded sunset-gated gemini but `reviewCapable` (denominator) still counted it, so output read "3/4 ready" when the 4th was about to be auto-dropped. Both now apply the same gate. `time.Now()` is also hoisted to function scope so per-agent rows and the readiness footer always see the same instant — near the 2026-06-18 boundary the previous shape could produce a row reading "sunset" while the denominator still counted the agent.
 
 ### Documentation
 
