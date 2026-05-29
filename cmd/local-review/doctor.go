@@ -132,30 +132,39 @@ func runDoctor(out io.Writer) error {
 	}
 	llms = append(llms, cli.DetectProviders(context.Background(), providerSpecs)...)
 
+	// Capture `now` once so every clock-driven decision in this
+	// run (sunset gate on the numerator AND denominator, sunset
+	// banner rendering) sees the same instant. Pre-fix doctor
+	// called time.Now() three times across the loop and the
+	// banner; near the cutoff boundary that could produce a row
+	// that says "sunset" while the denominator still counted the
+	// agent as available, or vice versa. (v0.15 pre-release QA
+	// catch from codex.)
+	now := time.Now().UTC()
 	readyCount := 0
 	reviewCapable := 0
 	for _, llm := range llms {
-		if cli.IsReviewCapable(llm.Name) {
-			reviewCapable++
-		}
-		status, auth := classify(llm, customEnvVars[llm.Name])
 		var force bool
 		if c, ok := cfg.LLMs[llm.Name]; ok && c.ForceAfterSunset != nil {
 			force = *c.ForceAfterSunset
 		}
+		// Sunset gate applies to CLI agents only — a user-named
+		// provider entry (`llms.gemini: { base_url: ... }`) is
+		// NOT a Google CLI subprocess and must not be auto-dropped.
+		sunsetGated := llm.BaseURL == "" && cli.IsAgentSunset(llm.Name, now) && !force
+
+		if cli.IsReviewCapable(llm.Name) && !sunsetGated {
+			reviewCapable++
+		}
+		status, auth := classify(llm, customEnvVars[llm.Name])
 		// Mirror the runtime fan-out: a sunset CLI without
 		// force_after_sunset is NOT going to participate, so it
 		// must NOT count toward "N/M LLMs ready for multi-review".
-		// Pre-fix doctor said "5/5 ready" while selectAgents dropped
-		// gemini behind the scenes, giving users a false picture of
-		// available agents (codex self-review on PR 2/4).
-		if status == statusReady {
-			sunsetGated := cli.IsAgentSunset(llm.Name, time.Now().UTC()) && !force
-			if !sunsetGated {
-				readyCount++
-			}
+		// Numerator and denominator both apply the same gate now.
+		if status == statusReady && !sunsetGated {
+			readyCount++
 		}
-		printLLMRow(w, llm, status, auth, models[llm.Name], force)
+		printLLMRow(w, llm, status, auth, models[llm.Name], force, now)
 	}
 
 	fmt.Fprintln(w)
@@ -370,7 +379,7 @@ func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 // know how to take control. For not-authed rows we still elide when
 // no model is pinned, since the row's primary signal is the auth fix
 // and the model line would be noise.
-func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string, forceAfterSunset bool) {
+func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string, forceAfterSunset bool, now time.Time) {
 	displayName := getDisplayName(llm.Name)
 
 	// Provider agents render an HTTP-endpoint-shaped row (no Path,
@@ -457,7 +466,7 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 	// the active fan-out. Remove this block once gemini support is
 	// dropped entirely in a post-cutoff release.
 	if llm.Name == "gemini" {
-		geminiSunsetBanner(out, time.Now().UTC(), forceAfterSunset)
+		geminiSunsetBanner(out, now, forceAfterSunset)
 	}
 
 	fmt.Fprintln(out)
