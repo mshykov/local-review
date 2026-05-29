@@ -33,10 +33,14 @@ Both reports are produced by:
 local-review audit --topic <security|tech-debt> --out audit/<topic>.md
 ```
 
-Run against the `main` branch at the v0.10.0 tag. Single-LLM by
-design (Claude); audit cost is per-package × per-topic and
-multi-LLM would multiply spend without obvious quality return at
-this scale — see CHANGELOG entry for v0.10.0 for the reasoning.
+Re-run against the `main` branch at each release that materially
+changes the code surface (v0.10.0, v0.14.0, v0.15.0). The committed
+files in this directory reflect the latest run; see the
+`_Generated …_` line at the top of each report for the exact
+timestamp + LLM. Single-LLM by design (Claude); audit cost is
+per-package × per-topic and multi-LLM would multiply spend without
+obvious quality return at this scale — see CHANGELOG entry for
+v0.10.0 for the reasoning.
 
 Under the hood:
 
