@@ -986,6 +986,32 @@ func TestSelectAgents_PreSunsetGeminiStaysActive(t *testing.T) {
 	}
 }
 
+func TestSelectAgents_PostSunsetDoesNotAffectProviderNamedGemini(t *testing.T) {
+	// v0.15 pre-release QA (codex) catch: the sunset check matched
+	// on `llm.Name` alone, which would auto-drop a user-named
+	// provider entry like `llms.gemini: { base_url: http://my-llm/v1 }`
+	// post-2026-06-18 — even though the sunset only applies to
+	// Google's Gemini CLI subprocess, NOT any agent that happens
+	// to share the name. The fix gates the predicate on
+	// `llm.BaseURL == ""` (CLI only); providers short-circuit out
+	// regardless of name. This test pins that semantic so a future
+	// refactor can't quietly re-broaden it.
+	ready := map[string]bool{"gemini": true}
+	postSunset := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	// Detected as a PROVIDER named "gemini" (BaseURL set is the
+	// kind discriminator used across the codebase).
+	detected := []cli.LLM{
+		{Name: "gemini", BaseURL: "http://my-self-hosted-llm/v1", Available: true},
+	}
+	active, _, sunsetDropped := selectAgents(detected, ready, config.Config{}, &sharedFlags{}, postSunset)
+	if got, want := names(active), []string{"gemini"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("user-named provider 'gemini' must NOT be sunset-dropped (the cutoff applies to Google's CLI subprocess only), got active=%v", got)
+	}
+	if len(sunsetDropped) != 0 {
+		t.Errorf("sunsetDropped must be empty for a provider entry named 'gemini', got %v", sunsetDropped)
+	}
+}
+
 func TestSelectAgents_PostSunsetForceFalseAlsoAutoDisables(t *testing.T) {
 	// Edge case: `force_after_sunset: false` is explicitly set
 	// (distinct from the default nil). Both should auto-disable —
