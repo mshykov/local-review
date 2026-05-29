@@ -87,7 +87,19 @@ npm install -g @anthropic-ai/claude-code
 claude login
 ```
 
-Or use Codex (ChatGPT Plus / OpenAI API), Copilot (GitHub Copilot subscription), or Gemini (free key — *deprecated, stops serving 2026-06-18*). Any combination works — every authenticated LLM joins the review automatically. `local-review doctor` shows the state.
+Or use Codex (ChatGPT Plus / OpenAI API), Copilot (GitHub Copilot subscription), or Gemini (free key — *sunset 2026-06-18; v0.15+ auto-disables in the fan-out on/after the cutoff*). Any combination works — every authenticated CLI joins the review automatically. `local-review doctor` shows the state.
+
+**Want a local-only or hybrid setup?** Add a provider entry under `llms.<name>:` with a `base_url:` pointing at any OpenAI-compatible endpoint (Ollama / vLLM / OpenAI / Anthropic / Mistral / DeepSeek / Together / Groq / OpenRouter). It runs alongside the CLI agents in the same fan-out — no separate config path:
+
+```yaml
+# Append to ~/.local-review.yml — Ollama as one more agent
+llms:
+  ollama:
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+```
+
+Run `local-review doctor` after editing to confirm the provider shows up as `✓ ollama provider ready`.
 
 **3. (Optional) Add a `.local-review.yml` to your repo** for house rules:
 
@@ -148,29 +160,32 @@ All three apply uniformly across CLI agents and provider endpoints in the fan-ou
 > - **Pre-flight LLM readiness probe.** Before fanning out to every LLM, `local-review review` now issues a tiny `Reply OK` probe per agent with a 10s timeout. Printed as a ✓/✗ block at the top of the run — and when an LLM times out, the probe surfaces the vendor's actual diagnostic (`gemini ✗ timeout after 10s — Error: You have exhausted your capacity on this model.`) instead of leaving you to guess. `--no-preflight` opts out for CI/scripting.
 > - **Swift / Kotlin / Liquid prompt packs.** Activates automatically on `.swift`, `.kt`, `.kts`, `.liquid` files. Same shape as the existing Go / TS / Python / Rust packs (language-specific pitfalls, security, idioms).
 > - **`bench --swe-bench`** — catch-rate measurements against bug-introducing diffs from the SWE-bench-lite dataset (real bugs from projects we didn't author). New section in [`bench/RESULTS.md`](bench/RESULTS.md) alongside the existing F1 leaderboard.
-> - **Ollama on a LAN host now works without dummy api_key.** Point `provider.base_url` at `http://192.168.x.x:11434/v1` and it Just Works — RFC1918 + IPv6 ULA / link-local hosts are treated as auth-free. Corporate-gateway invariant preserved (set `provider.api_key` if your LAN endpoint authenticates).
+> - **Ollama on a LAN host works without dummy api_key.** Point `llms.<name>.base_url` at `http://192.168.x.x:11434/v1` and it Just Works — RFC1918 + IPv6 ULA / link-local hosts are treated as auth-free. Corporate-gateway invariant preserved (set `llms.<name>.api_key_env` if your LAN endpoint authenticates). Tailscale CGNAT (`100.64.0.0/10`) added in v0.13.0.
 > - **`install.sh` prompts before skipping checksum verification when a TTY is available.** Closes the env-var-only-opt-out gap the v0.10.0 audit dogfood flagged.
 >
 > Full notes in [CHANGELOG](CHANGELOG.md). The session pattern worth noting: every v0.10.x release was driven by either the previous release's `audit/` output or by reviewers (3-LLM / Copilot / CodeRabbit) catching real findings inside the PR. The multi-reviewer redundancy IS the trust signal.
 
 ---
 
-## Multi-LLM is the default
+## Multi-agent is the default (v0.14+)
 
-**Every authenticated LLM CLI runs by default.** No opt-in, no enabling — if you `claude login`, claude runs. If you `export OPENAI_API_KEY=...`, codex runs. If you don't authenticate one, it's silently skipped.
+**Every authenticated LLM CLI AND every reachable provider endpoint runs by default.** No opt-in, no enabling — if you `claude login`, claude runs. If you `export OPENAI_API_KEY=...`, codex runs. If you add a `llms.ollama.base_url: http://localhost:11434/v1` entry to your config, the Ollama provider runs alongside the CLIs. If an agent isn't authenticated / reachable, it's silently skipped.
 
 ```sh
-# Default: all active LLMs
+# Default: all active agents (CLI + provider)
 local-review review
 
 # Restrict to a subset (overrides config)
-local-review review --only claude,gemini
+local-review review --only claude,ollama
 
-# Pick a specific model for one agent
+# Pick a specific model for one CLI agent
 local-review review --claude-model claude-opus-4-7
 
 # Use a specific agent to do the merge
 local-review review --merge-with claude
+
+# Audit (single-LLM by design) — pin the agent that handles it
+local-review audit --topic security --with ollama
 ```
 
 ### Supported LLMs
@@ -178,12 +193,12 @@ local-review review --merge-with claude
 | LLM | Free Option | Installation |
 |-----|-------------|--------------|
 | **Claude** | ✅ Free tier via `claude login` (claude.ai account) | `npm install -g @anthropic-ai/claude-code` |
-| **Gemini** *(deprecated — stops serving 2026-06-18)* | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` |
+| **Gemini** *(sunset 2026-06-18 — v0.15+ auto-disables)* | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` |
 | **Codex** | ⚠️ ChatGPT Plus ($20/mo) **or** OpenAI API key (pay-per-token) | `npm install -g @openai/codex` |
 | **Copilot** | ⚠️ GitHub Copilot subscription (one Premium request per run) | `npm install -g @github/copilot` |
 | **Antigravity** *(detected — review integration experimental)* | Google OAuth (`agy` login) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (binary: `agy`) |
 
-> **Gemini is deprecated.** Google's Gemini CLI stops serving Pro/Ultra/free-tier requests on **2026-06-18**. Antigravity (`agy`) is Google's successor and `local-review doctor` will detect it, but **agy is not yet wired into the review fan-out**: its headless `--print` mode runs an autonomous agent loop (explores the repo, rebuilds its own diff, emits step-narration) instead of returning a clean review, so it's surfaced as *experimental* until a structured-output path is found. Until then, keep using Gemini (until the cutoff) or any of the other CLIs.
+> **Gemini sunset 2026-06-18.** Google's Gemini CLI stops serving Pro/Ultra/free-tier requests on this date. **v0.15+ handles this automatically**: pre-sunset `doctor` shows a live countdown banner ("N days until sunset"); on/after the cutoff, gemini is auto-disabled in the review fan-out with a clear note. Want to keep trying past the cutoff (in case Google extends, or your network sees a different rollout)? Set `llms.gemini.force_after_sunset: true` to opt back in. Antigravity (`agy`) is Google's announced successor and `local-review doctor` detects it as *experimental* — its headless `--print` mode runs an autonomous agent loop (explores the repo, rebuilds its own diff, emits step-narration) instead of returning a clean review, so it isn't yet in the fan-out. Until that lands, keep using Gemini (until the cutoff) or any of the other CLIs / providers.
 
 **How it works:**
 1. Detects installed LLM CLIs and which are authenticated (`local-review doctor`)
@@ -241,23 +256,59 @@ Run `local-review doctor` to see which CLIs you have installed and authenticated
 **Configuration is optional.** If `~/.local-review.yml` or `./.local-review.yml` exists it overrides defaults; CLI flags override config:
 
 ```yaml
-# .local-review.yml — example: pin specific models, disable codex
+# .local-review.yml — example: mix CLI agents with a local Ollama provider
 llms:
+  # CLI agents — names are well-known (claude / codex / copilot / gemini).
+  # Just set the per-agent knobs you care about; auto-detection handles the rest.
   claude:
     model: claude-opus-4-7
-
-  gemini:
-    model: gemini-2.0-flash
-    api_key_env: GEMINI_API_KEY
 
   codex:
     enabled: false           # opt-out (still runs if --only codex is passed)
 
+  gemini:
+    model: gemini-2.0-flash
+    # llms.gemini.force_after_sunset: true   # uncomment to keep trying past 2026-06-18
+
+  # Provider agents — ANY entry under `llms:` with a `base_url:` becomes an
+  # HTTP provider agent (Ollama / vLLM / OpenAI-compat). Name is free-form.
+  ollama:
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+
 merge:
-  preferred_llm: auto        # or: claude, gemini, codex
+  preferred_llm: auto        # or: claude, codex, copilot, ollama, ...
 ```
 
 See [`examples/.local-review.yml`](examples/.local-review.yml) for full schema.
+
+**Three common shapes:**
+
+```yaml
+# Shape A — fully local (offline, no cloud calls)
+llms:
+  ollama:
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+  claude:  { enabled: false }
+  codex:   { enabled: false }
+  gemini:  { enabled: false }
+  copilot: { enabled: false }
+```
+
+```yaml
+# Shape B — cloud-only multi-agent (default for a fresh install with CLIs authenticated)
+# No config file needed — every authenticated CLI runs automatically.
+```
+
+```yaml
+# Shape C — hybrid (CLIs + a local Ollama for fast iteration / cost smoothing)
+llms:
+  ollama:
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+  # claude / codex / copilot / gemini auto-detected, no need to list them
+```
 
 ## Audit — whole-codebase deep analysis (v0.10+)
 
@@ -489,16 +540,16 @@ Distributing to a few hundred engineers? Two patterns work:
 
 ## Privacy
 
-**local-review is telemetry-free**: no analytics, no auto-update calls, no signup, no SaaS. The only network traffic is to the LLM endpoint(s) *you* configure — either an HTTP call from local-review's built-in client (single-LLM mode) or the authenticated CLI subprocesses (multi-LLM mode). What "private" means therefore depends on which LLM(s) you point it at:
+**local-review is telemetry-free**: no analytics, no auto-update calls, no signup, no SaaS. The only network traffic is to the LLM endpoint(s) *you* configure — every authenticated CLI calls its own backend as a subprocess, every `llms.<name>.base_url` entry hits the HTTP endpoint you configured. What "private" means therefore depends on which agents you point it at:
 
-| Mode | Where your diff goes |
+| Configuration | Where your diff goes |
 |---|---|
-| Provider agent only (`llms.ollama.base_url: http://localhost:11434/v1`) | **Stays on your machine.** Fully offline. |
-| Single-LLM, any cloud provider (OpenAI, Anthropic, Mistral, etc.) | The provider you configured, over TLS. Their privacy policy applies. |
-| Multi-agent (default) — Claude / Gemini / Codex / Copilot CLIs + any provider entries | **Each authenticated CLI calls its own backend** (Anthropic, Google AI, OpenAI, GitHub) and each provider hits the endpoint you configured. One review fans out to multiple vendors in parallel. |
-| Multi-LLM with `--only` restricted to a fully-local agent | Roadmap. Will be possible once a fully-local-agent preset lands; today every multi-LLM agent (claude / gemini / codex / copilot) calls its own cloud backend. |
+| **Provider agent only** — a single `llms.ollama.base_url: http://localhost:11434/v1` (or any local-only endpoint), every CLI agent `enabled: false` | **Stays on your machine.** Fully offline. |
+| **Provider agent only** against a cloud endpoint (`llms.openai.base_url: https://api.openai.com/v1`, every CLI agent `enabled: false`) | The provider you configured, over TLS. Their privacy policy applies. |
+| **Multi-agent (default)** — every authenticated CLI (claude / codex / copilot / gemini) AND every reachable provider endpoint | **Each authenticated CLI calls its own backend** (Anthropic, Google AI, OpenAI, GitHub) and each provider hits the endpoint you configured. One review fans out to multiple vendors in parallel. |
+| Multi-agent with `--only ollama` (or any other local-only agent name) | **Stays on your machine** for that run. The other agents are gated out by the explicit allow-list. |
 
-If you need air-gapped review today, use single-LLM mode against a local Ollama and stay off `local-review review` (which fans out to authenticated cloud CLIs by default).
+If you need air-gapped review today, configure a single `llms.ollama:` entry pointing at a local (or LAN / Tailscale) Ollama, set every CLI agent `enabled: false`, and run `local-review review`. The fan-out resolves to just the one provider agent — no cloud calls. Or use `--only <name>` ad-hoc to lock a single run to your local agent.
 
 ## Develop
 
