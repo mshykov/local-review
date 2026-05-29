@@ -7,22 +7,27 @@ Thanks for considering a contribution. local-review is small on purpose — plea
 ```
 cmd/local-review/  CLI entry point (cobra). Thin wrapper around internal/.
   main.go          Root command + shared flag plumbing + ASCII banner
-  runner.go        Unified review dispatcher (multi-LLM with single-LLM fallback)
-  doctor.go        Check LLM CLI installations + auth
+  runner.go        Multi-agent fan-out dispatcher (CLI agents + provider agents)
+  doctor.go        Check LLM CLI installations + auth + provider reachability
   init.go          Interactive .local-review.yml scaffolding wizard
-  config.go        Print resolved config (API keys masked)
+  config.go        Print resolved config (API keys + URL credentials masked)
+  audit.go         `audit` subcommand (single-LLM, --with <agent>)
+  bench.go         `bench` subcommand (regression dataset, contributor tooling)
   version.go       Print version (set via -ldflags at build time)
 
 internal/
-  config/          YAML cascade loader (defaults → ~/.yml → ./.yml → flags)
+  config/          YAML cascade loader (defaults → ~/.yml → ./.yml → flags); rejects the removed v0 `provider:` block with a migration error
   git/             Diff extraction (shells out to `git`)
   lang/            File-extension → language identifier
-  llm/             OpenAI-compat HTTP client (no vendor SDKs)
-  cli/             LLM CLI detection + invocation (claude, gemini, codex)
-  multi/           Multi-LLM orchestration, merging, storage
-  prompts/         Embedded prompt packs (`go:embed packs/*.md`)
-  review/          Orchestration: diff → LLM → filtered findings
+  llm/             OpenAI-compat HTTP client (no vendor SDKs); used by internal/agents/provider
+  agents/          Invoker contract + TokenUsage type — shared by CLI and provider invokers
+  agents/provider/ HTTP provider agent (Ollama / vLLM / OpenAI-compat) — implements agents.Invoker via internal/llm
+  cli/             LLM CLI detection + invocation (claude / codex / copilot / gemini); GeminiSunsetDate constant lives here
+  multi/           Multi-agent orchestration, merging, on-disk storage
+  prompts/         Embedded prompt packs (`go:embed packs/*.md`) + audit packs
+  review/          Diff-filter helpers (FilterDiffs, glob matchers) + structured Severity/Finding/Report types
   output/          Terminal + JSON formatters
+  audit/           Walker (git ls-files), chunk packer, run orchestrator, report renderer
 
 .github/workflows/ CI + the consolidated release pipeline (release.yml)
 examples/          Sample configs (one per provider) + pre-commit hook
