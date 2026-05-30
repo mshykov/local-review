@@ -2,12 +2,18 @@ package audit
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/mshykov/local-review/internal/agents"
+	"github.com/mshykov/local-review/internal/cli"
 )
 
 // TestParseFindings_HeaderRowsAndBodies covers the audit-pack-
@@ -201,6 +207,209 @@ func TestWalker_IsAuditable(t *testing.T) {
 	} {
 		if isAuditable(path) {
 			t.Errorf("expected NOT auditable: %s", path)
+		}
+	}
+}
+
+// --- v0.15.1 parallel audit dispatch ---------------------------------
+
+// fakeAuditInvoker satisfies cli.Invoker for runner tests. Each
+// Review call sleeps `delay` so a parallel run can be distinguished
+// from a sequential one by wallclock: N chunks at delay D run in
+// ~N*D sequentially vs. ~ceil(N/parallelism)*D in parallel. inFlight
+// also peaks at parallelism, which a thread-safe gauge exposes.
+type fakeAuditInvoker struct {
+	delay        time.Duration
+	mu           sync.Mutex
+	inFlight     int
+	peakInFlight int
+	totalCalls   int
+}
+
+func (f *fakeAuditInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, agents.TokenUsage, error) {
+	f.mu.Lock()
+	f.inFlight++
+	if f.inFlight > f.peakInFlight {
+		f.peakInFlight = f.inFlight
+	}
+	f.totalCalls++
+	f.mu.Unlock()
+
+	// Simulate per-chunk LLM latency.
+	select {
+	case <-time.After(f.delay):
+	case <-ctx.Done():
+		f.mu.Lock()
+		f.inFlight--
+		f.mu.Unlock()
+		return "", agents.TokenUsage{}, ctx.Err()
+	}
+
+	f.mu.Lock()
+	f.inFlight--
+	f.mu.Unlock()
+	return "clean — no issues found", agents.TokenUsage{}, nil
+}
+
+func (f *fakeAuditInvoker) RunPrompt(ctx context.Context, prompt string) (string, agents.TokenUsage, error) {
+	return "", agents.TokenUsage{}, nil
+}
+
+// TestRun_ParallelDispatch_ReducesWallclock pins the v0.15.1
+// audit-perf contract: with Parallelism=N (N>1) and chunks taking
+// `delay` each, total wallclock is approximately ceil(numChunks/N)
+// * delay, not numChunks * delay. The peak-in-flight gauge also
+// hits N — direct proof concurrent dispatch happened, not just a
+// coincidentally-fast sequential run.
+//
+// User-driven motivation: a 37-chunk Ollama audit took 22 min in
+// v0.15.0 (sequential). With Parallelism=4 and OLLAMA_NUM_PARALLEL=4
+// server-side, expected wallclock is ~6 min. This test pins the
+// runtime shape so a future refactor can't silently re-serialise.
+func TestRun_ParallelDispatch_ReducesWallclock(t *testing.T) {
+	chunks := make([]Chunk, 8)
+	for i := range chunks {
+		chunks[i] = Chunk{Package: fmtPkg(i), Files: []string{"f.go"}, Body: "x", SizeBytes: 1}
+	}
+	const delay = 100 * time.Millisecond
+
+	// The real invariants are peakInFlight (proves concurrent
+	// dispatch happened) and result-order preservation; wallclock
+	// is a sanity check only. Self-review caught that strict
+	// timing thresholds flake on noisy CI hosts — so we just
+	// require par/seq RATIO ≤ 0.6, far more lenient than absolute
+	// numbers and doesn't care about CI noise level as long as
+	// both runs see the same noise.
+	fakeSeq := &fakeAuditInvoker{delay: delay}
+	startSeq := time.Now()
+	repSeq, err := Run(context.Background(), chunks, Options{
+		Topic:       "security",
+		LLM:         cli.LLM{Name: "fake"},
+		Invoker:     fakeSeq,
+		Parallelism: 1,
+	})
+	if err != nil {
+		t.Fatalf("sequential Run: %v", err)
+	}
+	elapsedSeq := time.Since(startSeq)
+	if fakeSeq.peakInFlight != 1 {
+		t.Errorf("sequential peak in-flight: got %d, want 1", fakeSeq.peakInFlight)
+	}
+
+	fakePar := &fakeAuditInvoker{delay: delay}
+	startPar := time.Now()
+	repPar, err := Run(context.Background(), chunks, Options{
+		Topic:       "security",
+		LLM:         cli.LLM{Name: "fake"},
+		Invoker:     fakePar,
+		Parallelism: 4,
+	})
+	if err != nil {
+		t.Fatalf("parallel Run: %v", err)
+	}
+	elapsedPar := time.Since(startPar)
+	// Primary assertion — peak concurrency. This is the actual
+	// concurrency contract; if it passes, dispatch IS parallel
+	// regardless of CI clock noise.
+	if fakePar.peakInFlight != 4 {
+		t.Errorf("parallel peak in-flight: got %d, want 4 (Parallelism cap)", fakePar.peakInFlight)
+	}
+	if fakePar.totalCalls != 8 {
+		t.Errorf("parallel total calls: got %d, want 8 (one per chunk)", fakePar.totalCalls)
+	}
+	// Secondary sanity — ratio, not absolute. On a flaky CI the
+	// ratio still holds as long as both runs see the same noise.
+	ratio := float64(elapsedPar) / float64(elapsedSeq)
+	if ratio > 0.6 {
+		t.Errorf("parallel/sequential wallclock ratio %.2f exceeds 0.6 — concurrent dispatch likely didn't take effect (seq=%v par=%v)", ratio, elapsedSeq, elapsedPar)
+	}
+
+	// Order preservation: results must stay in chunk order regardless
+	// of which goroutine completed first.
+	if len(repSeq.Packages) != len(chunks) || len(repPar.Packages) != len(chunks) {
+		t.Fatalf("package counts: seq=%d par=%d want=%d", len(repSeq.Packages), len(repPar.Packages), len(chunks))
+	}
+	for i := range chunks {
+		if got, want := repPar.Packages[i].Package, fmtPkg(i); got != want {
+			t.Errorf("parallel result order broken at index %d: got %q, want %q (completion order leaked into final report)", i, got, want)
+		}
+	}
+}
+
+func fmtPkg(i int) string { return "pkg-" + strconv.Itoa(i) }
+
+// TestClampParallelism pins the v0.15.1 self-review fix for the
+// unbounded-worker concern. A user passing --parallel 1000 must not
+// spawn 1000 goroutines + 1000 concurrent LLM calls. Clamp by both
+// the hard ceiling (MaxAuditParallelism) and the work-unit count
+// (no point in more workers than chunks).
+func TestClampParallelism(t *testing.T) {
+	cases := []struct {
+		requested, numChunks, want int
+		note                       string
+	}{
+		{requested: 4, numChunks: 100, want: 4, note: "happy path within ceiling and chunk count"},
+		{requested: 1, numChunks: 100, want: 1, note: "sequential default preserved"},
+		{requested: 0, numChunks: 10, want: 1, note: "zero falls back to 1"},
+		{requested: -5, numChunks: 10, want: 1, note: "negative falls back to 1"},
+		{requested: 1000, numChunks: 100, want: MaxAuditParallelism, note: "huge request clamped to ceiling"},
+		{requested: 8, numChunks: 3, want: 3, note: "request exceeding chunk count clamped to chunk count"},
+		{requested: 20, numChunks: 4, want: 4, note: "request exceeds both — chunk count wins (smallest cap)"},
+		{requested: 4, numChunks: 0, want: 4, note: "zero chunks: respect request (caller handles empty)"},
+	}
+	for _, tc := range cases {
+		if got := clampParallelism(tc.requested, tc.numChunks); got != tc.want {
+			t.Errorf("clampParallelism(req=%d, chunks=%d) = %d, want %d (%s)", tc.requested, tc.numChunks, got, tc.want, tc.note)
+		}
+	}
+}
+
+// TestWalker_IsAuditable_LockfilesAndMinified_v0151 pins the v0.15.1
+// fix where lockfiles AND minified bundles must be skipped BEFORE
+// the extension allowlist gets a vote. Pre-fix, pnpm-lock.yaml
+// matched the .yaml allowlist (CI workflows / k8s manifests) and
+// returned auditable=true — a 272 KiB lockfile chunk was burning
+// ~5 minutes on Ollama for zero useful signal (user-reported).
+func TestWalker_IsAuditable_LockfilesAndMinified_v0151(t *testing.T) {
+	mustSkip := []string{
+		// Lockfile family — base-name match must beat any extension
+		// allowlist (pnpm-lock.yaml is the real-world repro case).
+		"pnpm-lock.yaml",
+		"apps/web/pnpm-lock.yaml", // nested locations still match base
+		"package-lock.json",
+		"yarn.lock",
+		"npm-shrinkwrap.json",
+		"bun.lockb",
+		"Cargo.lock",
+		"Gemfile.lock",
+		"Podfile.lock",
+		"composer.lock",
+		"poetry.lock",
+		"Pipfile.lock",
+		"mix.lock",
+		"pubspec.lock",
+		"flake.lock",
+		// Minified bundles — source lives elsewhere.
+		"static/app.min.js",
+		"public/bundle.min.css",
+		"dist/vendor.min.map",
+	}
+	for _, p := range mustSkip {
+		if isAuditable(p) {
+			t.Errorf("v0.15.1 default skip: %s must NOT be auditable (regression in lockfile/minified gate)", p)
+		}
+	}
+
+	// Sanity: legitimate `.yaml` files still get audited — the
+	// fix is targeted, not a blanket yaml skip.
+	mustAudit := []string{
+		".github/workflows/ci.yml",
+		"k8s/deployment.yaml",
+		"compose.yaml",
+	}
+	for _, p := range mustAudit {
+		if !isAuditable(p) {
+			t.Errorf("legitimate yaml %s should still be auditable; v0.15.1 fix must not over-skip", p)
 		}
 	}
 }

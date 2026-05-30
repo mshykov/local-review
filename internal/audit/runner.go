@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mshykov/local-review/internal/cli"
@@ -38,6 +39,38 @@ type Options struct {
 	// progress to stderr so an audit on a large repo doesn't look
 	// hung. Pass nil from tests.
 	Progress io.Writer
+
+	// Parallelism caps the number of chunks dispatched to the LLM
+	// concurrently. Default (zero or 1) preserves the strict
+	// sequential ordering audit shipped with in v0.10-v0.15.0.
+	// Setting >1 fans out N chunks at a time to the same agent,
+	// which is the right knob for Ollama with `OLLAMA_NUM_PARALLEL`
+	// configured (or any backend that serves concurrent requests).
+	//
+	// Returned PackageReports stay in chunk order regardless of
+	// completion order — internal write to a pre-sized slice by
+	// index, not append.
+	//
+	// Constraints:
+	//  - Cloud LLM rate limits: claude / codex tier limits may
+	//    rate-limit at >1; users on cloud should leave Parallelism=1.
+	//  - Local model VRAM: a 7B model on 12GB Apple Silicon can
+	//    sustain ~2 concurrent; a 32B on 24GB ~3. The runner
+	//    doesn't introspect; if you OOM the server, lower the
+	//    flag.
+	//
+	// v0.15.1: added per the audit-perf patch after user-reported
+	// 22-minute runs on a 37-chunk repo via Ollama qwen 7B.
+	Parallelism int
+
+	// Invoker is an unexported test seam: when non-nil, Run uses it
+	// directly instead of `cli.NewInvoker(opts.LLM)`. Production
+	// callers leave it nil; tests inject a fake so parallel-
+	// dispatch behaviour (concurrent calls observed, results
+	// stay in chunk order) is verifiable without touching real
+	// LLM subprocess / HTTP plumbing. Fakes need only satisfy
+	// cli.Invoker.Review — RunPrompt isn't exercised by audit.
+	Invoker cli.Invoker
 }
 
 // Run executes the audit: for each chunk, invoke the LLM with the
@@ -59,9 +92,12 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	invoker := cli.NewInvoker(opts.LLM)
+	invoker := opts.Invoker
 	if invoker == nil {
-		return Report{}, fmt.Errorf("no invoker for LLM %q", opts.LLM.Name)
+		invoker = cli.NewInvoker(opts.LLM)
+		if invoker == nil {
+			return Report{}, fmt.Errorf("no invoker for LLM %q", opts.LLM.Name)
+		}
 	}
 
 	rep := Report{
@@ -74,21 +110,94 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 	}
 
 	timeout := resolveTimeout(opts.Timeout, opts.LLM)
-	for i, c := range chunks {
-		if opts.Progress != nil {
-			// Stderr-shaped progress write: explicitly discard.
-			// Same policy as the walker's Warn writer — see
-			// walker.go for the rationale (aborting an audit
-			// because a progress line failed to flush would
-			// be the wrong choice).
-			_, _ = fmt.Fprintf(opts.Progress, "[%d/%d] auditing %s (%d file%s, %s)...\n",
-				i+1, len(chunks), c.Package, len(c.Files), pluralS(len(c.Files)), FormatBytes(c.SizeBytes))
-		}
-		pr := runOne(ctx, c, pack, invoker, timeout)
-		rep.Packages = append(rep.Packages, pr)
+	parallelism := clampParallelism(opts.Parallelism, len(chunks))
+
+	// Pre-allocate by index so completion order doesn't shuffle the
+	// final report. Worker pool reads chunks in walker order; each
+	// worker writes to its assigned slot. fillAggregates traverses
+	// the slice in order, so users still see packages in the same
+	// walker order they would have under sequential dispatch.
+	results := make([]PackageReport, len(chunks))
+	type job struct {
+		idx int
+		c   Chunk
 	}
+	jobs := make(chan job, len(chunks))
+	for i, c := range chunks {
+		jobs <- job{idx: i, c: c}
+	}
+	close(jobs)
+
+	// Progress markers fire BEFORE each chunk is dispatched. With
+	// parallelism > 1 the dispatch order matches the walker order
+	// (we feed jobs sequentially) but completion order doesn't —
+	// so the "[N/M] auditing X..." lines describe what's STARTING,
+	// not what's FINISHED. The matching summary in the report
+	// (chunk-clean / chunk-findings) is the authoritative per-chunk
+	// signal; progress is just a liveness indicator.
+	var progMu sync.Mutex
+	var wg sync.WaitGroup
+	for w := 0; w < parallelism; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				if opts.Progress != nil {
+					progMu.Lock()
+					// Stderr-shaped progress write: explicitly
+					// discard the error. Same policy as the
+					// walker's Warn writer — see walker.go for
+					// the rationale (aborting an audit because a
+					// progress line failed to flush would be the
+					// wrong choice).
+					_, _ = fmt.Fprintf(opts.Progress, "[%d/%d] auditing %s (%d file%s, %s)...\n",
+						j.idx+1, len(chunks), j.c.Package, len(j.c.Files), pluralS(len(j.c.Files)), FormatBytes(j.c.SizeBytes))
+					progMu.Unlock()
+				}
+				results[j.idx] = runOne(ctx, j.c, pack, invoker, timeout)
+			}
+		}()
+	}
+	wg.Wait()
+
+	rep.Packages = results
 	fillAggregates(&rep)
 	return rep, nil
+}
+
+// MaxAuditParallelism is the hard ceiling on the worker pool size,
+// regardless of what the user passes via --parallel. Picked to match
+// the workflow concurrency cap elsewhere in the codebase:
+//
+//   - Spawning more workers than chunks is pointless (nothing for
+//     the extras to do); we clamp to len(chunks) too.
+//   - Beyond ~16 concurrent inference calls, the bottleneck is
+//     almost always GPU memory / vendor rate limits on the backend
+//     side, not the runner; letting the user spawn 1000 goroutines
+//     just degrades reliability without buying throughput.
+//   - The 16 ceiling matches min(16, cpu_cores-2) used by the
+//     workflow harness — same reasoning, same shape.
+//
+// A user with a beefier setup who genuinely wants >16 can either
+// raise this constant locally or, more reasonably, run multiple
+// audits in parallel from a shell.
+const MaxAuditParallelism = 16
+
+// clampParallelism bounds the requested Parallelism by both the
+// chunk count (no point spawning more workers than work units) and
+// MaxAuditParallelism (resource-exhaustion guard, self-review catch
+// on PR for v0.15.1). Negative / zero values fall back to 1.
+func clampParallelism(requested, numChunks int) int {
+	if requested < 1 {
+		return 1
+	}
+	if requested > MaxAuditParallelism {
+		requested = MaxAuditParallelism
+	}
+	if numChunks > 0 && requested > numChunks {
+		requested = numChunks
+	}
+	return requested
 }
 
 // runOne audits a single chunk. Builds the per-chunk PackageReport
