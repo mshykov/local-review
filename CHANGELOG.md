@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-05-29
+
+**Theme: audit performance.** Real-world dogfood on a 37-chunk monorepo via Ollama qwen2.5-coder:7b ran 22 min — a clear cost of audit's sequential per-chunk dispatch. v0.15.1 ships two related fixes that together can take that same run to ~5 min with no quality loss.
+
+### Added
+
+- **`audit --parallel <N>` flag.** Caps concurrent per-chunk LLM calls. Default 1 (sequential — preserves the v0.10-v0.15.0 behaviour). Set `>1` against backends that serve concurrent requests (local Ollama with `OLLAMA_NUM_PARALLEL=4`, vLLM, self-hosted endpoints) to fan out N chunks at a time — wallclock drops roughly N×. Cloud LLMs (claude/codex/copilot) typically rate-limit per-tier; keep at 1 there to avoid 429s. New `Options.Parallelism` field in `internal/audit`; matching `Options.Invoker` test seam (production callers leave nil) so the concurrency contract (peak-in-flight, order-preserved results) is verifiable without real LLM plumbing.
+- **New test `TestRun_ParallelDispatch_ReducesWallclock`** pins the runtime shape: with Parallelism=4 and 8 chunks at 100ms each, total wallclock is ≤500ms (vs ≥700ms sequential) AND peak-in-flight hits exactly 4, AND result order matches chunk order regardless of completion order. Catches both the "concurrent dispatch happened" and "completion-order leaks into final report" failure modes.
+
+### Fixed
+
+- **`pnpm-lock.yaml` (and other lockfiles ending in `.yaml`) were being audited.** The walker's `isAuditable` check evaluated the extension allowlist (which returned `true` for `.yaml` because of CI workflows / k8s manifests) BEFORE the lockfile base-name skip. A 272 KiB `pnpm-lock.yaml` chunk was burning ~5 min on Ollama per real-world v0.15 dogfood. Reordered so the lockfile + minified-bundle skip set wins absolutely. Skip set expanded: added `bun.lockb`, `mix.lock`, `pubspec.lock`, `flake.lock`, `Pipfile.lock`, `npm-shrinkwrap.json`, and the `*.min.js` / `*.min.css` / `*.min.map` suffix family. New regression test `TestWalker_IsAuditable_LockfilesAndMinified_v0151` covers each entry + sanity-checks that legitimate `.yaml` files (CI workflows, k8s manifests, compose files) still get audited.
+
 ## [0.15.0] - 2026-05-29
 
 **Theme: the unified-agent v2.** v0.14 introduced the unified `llms.<name>.base_url` shape and deprecated the v0 top-level `provider:` block. v0.15 is the breaking removal — `provider:` is gone, the single-LLM-fallback code path is gone, the `--model` / `--base-url` flags are gone. Loading a stale v0.14 config now surfaces a copy-pastable migration error from the cascade loader, not a silent drop.

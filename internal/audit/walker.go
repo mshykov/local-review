@@ -473,9 +473,44 @@ func pathHasPrefix(path, prefix string) bool {
 // Binary / image / archive / lockfile / minified-vendor files are
 // skipped — the LLM can't usefully audit them and they bloat the
 // chunk past context windows.
+//
+// IMPORTANT order-of-operations: the skip list at the top runs
+// BEFORE the extension allowlist below. Pre-v0.15.1 the order was
+// reversed — `pnpm-lock.yaml` matched `.yaml` (allowlist returns
+// true) before the base-name `switch` got a chance to skip it, so
+// a 272 KiB lockfile ended up as its own audit chunk and burned
+// ~5 minutes on Ollama. Surfaced by a real-world v0.15 dogfood.
 func isAuditable(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
 	ext := strings.ToLower(filepath.Ext(path))
+
+	// HARD SKIP: lockfiles + obvious generated/minified content.
+	// These match BEFORE any allowlist below — file-extension can
+	// agree with an allowlist (e.g. .yaml → pnpm-lock.yaml) but
+	// the base-name still wins because there's no useful audit
+	// signal in a lockfile or minified bundle.
+	switch base {
+	case "go.sum",
+		"package-lock.json",
+		"yarn.lock",
+		"pnpm-lock.yaml",
+		"npm-shrinkwrap.json",
+		"bun.lockb",
+		"cargo.lock",
+		"gemfile.lock",
+		"podfile.lock",
+		"composer.lock",
+		"poetry.lock",
+		"pipfile.lock",
+		"mix.lock",
+		"pubspec.lock",
+		"flake.lock":
+		return false
+	}
+	// Minified bundles — same logic: the source lives elsewhere.
+	if strings.HasSuffix(base, ".min.js") || strings.HasSuffix(base, ".min.css") || strings.HasSuffix(base, ".min.map") {
+		return false
+	}
 
 	// Known source extensions via the existing lang package.
 	if lang.Detect(path) != lang.Default {
@@ -507,11 +542,5 @@ func isAuditable(path string) bool {
 		return true
 	}
 
-	// Lockfiles are skipped — they're not human-edited, audit
-	// findings on them are noise.
-	switch base {
-	case "go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "cargo.lock", "gemfile.lock", "podfile.lock", "composer.lock", "poetry.lock":
-		return false
-	}
 	return false
 }

@@ -61,6 +61,16 @@ type auditFlags struct {
 	// fails the same way as `--with claude` against an
 	// unauthenticated claude.
 	with string
+
+	// parallel caps concurrent per-chunk LLM calls (v0.15.1+).
+	// Default 1 = strict sequential (the v0.10-v0.15.0 behaviour).
+	// Set >1 against backends that serve concurrent requests
+	// (Ollama with OLLAMA_NUM_PARALLEL configured, vLLM, etc.) to
+	// fan out N chunks at a time — wallclock drops roughly N× on
+	// a 37-chunk job. Cloud LLMs (claude/codex/copilot) typically
+	// have per-tier rate limits; leave at 1 there to avoid 429s.
+	// See internal/audit.Options.Parallelism for the constraints.
+	parallel int
 }
 
 // auditCmd wires the `local-review audit` subcommand. v0.10.0-c:
@@ -125,6 +135,7 @@ committed.`,
 	// `--with local-review doctor` in --help (cobra parses the
 	// first backtick-quoted run as the placeholder).
 	cmd.Flags().StringVar(&af.with, "with", "", "pin the audit to a specific `agent` (CLI or provider name from `local-review doctor`, e.g. claude / qwen); single-valued")
+	cmd.Flags().IntVar(&af.parallel, "parallel", 1, "concurrent per-chunk LLM calls. 1 = sequential (default; safe everywhere). >1 = fan out (good for local Ollama with OLLAMA_NUM_PARALLEL set; cloud LLMs may rate-limit, keep at 1)")
 
 	return cmd
 }
@@ -164,6 +175,15 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 		return fmt.Errorf("no auditable files found (include filters too narrow, or repo has no tracked source?)")
 	}
 
+	// Validate --parallel BEFORE the --dry-run early-return so an
+	// invalid value (e.g. `--parallel 0`) gets the same error in
+	// both modes. Pre-fix v0.15.1 self-review caught that dry-run
+	// silently accepted bad values while the real run rejected them
+	// — confusing for automation pipelines that ran dry-run first.
+	if af.parallel < 1 {
+		return fmt.Errorf("--parallel must be >= 1 (got %d); use 1 for sequential, >1 to fan out chunks", af.parallel)
+	}
+
 	if af.dryRun {
 		return writeAuditPlan(os.Stdout, af.topic, chunks)
 	}
@@ -174,9 +194,10 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 	}
 
 	rep, err := audit.Run(ctx, chunks, audit.Options{
-		Topic:    af.topic,
-		LLM:      llm,
-		Progress: os.Stderr,
+		Topic:       af.topic,
+		LLM:         llm,
+		Progress:    os.Stderr,
+		Parallelism: af.parallel,
 	})
 	if err != nil {
 		return err
