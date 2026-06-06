@@ -23,6 +23,16 @@
        see in the README + GitHub avatar. -->
   <link rel="apple-touch-icon" href="logo.png">
   <meta name="apple-mobile-web-app-title" content="local-review">
+  <!-- theme-color: mobile browser address bar + PWA standalone-mode
+       chrome match the site's primary brand color (the lighter end of
+       the #667eea → #764ba2 hero gradient — picks up well on both
+       light and dark UI variants). -->
+  <meta name="theme-color" content="#667eea">
+  <!-- PWA manifest: Android Chrome "Add to Home Screen" uses this to
+       install a standalone-app-shaped bookmark (icon + name + theme)
+       instead of a plain browser-tab shortcut. iOS Safari falls back
+       to apple-touch-icon above; both surfaces now have a real icon. -->
+  <link rel="manifest" href="manifest.json">
   <link rel="preload" href="fonts/Inter-Regular.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="fonts/Inter-Bold.woff2" as="font" type="font/woff2" crossorigin>
