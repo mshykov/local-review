@@ -1,0 +1,24 @@
+{
+  "name": "local-review",
+  "short_name": "local-review",
+  "description": "Run AI code reviews locally with Claude, Gemini, Codex, and Copilot in parallel. Privacy-first, no telemetry, no SaaS. Free options available.",
+  "start_url": "/local-review/",
+  "scope": "/local-review/",
+  "display": "minimal-ui",
+  "background_color": "#ffffff",
+  "theme_color": "#667eea",
+  "icons": [
+    {
+      "src": "logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
