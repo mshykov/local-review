@@ -63,22 +63,28 @@ func TestComplete_NoAPIKeyReturnsError(t *testing.T) {
 	if !strings.Contains(msg, "local-review init") {
 		t.Errorf("error should suggest `local-review init`, got: %v", err)
 	}
-	if !strings.Contains(msg, "local-review review") {
-		t.Errorf("error should suggest `local-review review` as alternative, got: %v", err)
+	if !strings.Contains(msg, "local-review doctor") {
+		t.Errorf("error should point CLI-auth users at `local-review doctor` as alternative, got: %v", err)
 	}
 }
 
-func TestComplete_NoAPIKeyFallsBackToLegacyEnvName(t *testing.T) {
-	// When APIKeyEnv is empty (e.g., older callers or buggy config),
-	// the error should fall back to the legacy default rather than
-	// printing "$" with no name.
+func TestComplete_NoAPIKeyEnv_PointsAtConfigFieldNotRemovedVar(t *testing.T) {
+	// When APIKeyEnv is empty (no api_key_env wired for the provider),
+	// the error must point at the live config knob (llms.<name>.api_key_env)
+	// and must NOT name the LOCAL_REVIEW_API_KEY variable, which was
+	// removed in v0.15 — the old fallback sent users to set a var the tool
+	// no longer reads.
 	c := New("https://api.example.com", "", "", "gpt-4", 0)
 	_, _, err := c.Complete(context.Background(), nil, false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "LOCAL_REVIEW_API_KEY") {
-		t.Errorf("empty APIKeyEnv should fall back to LOCAL_REVIEW_API_KEY, got: %v", err)
+	msg := err.Error()
+	if strings.Contains(msg, "LOCAL_REVIEW_API_KEY") {
+		t.Errorf("error must not name the removed LOCAL_REVIEW_API_KEY var, got: %v", err)
+	}
+	if !strings.Contains(msg, "api_key_env") {
+		t.Errorf("error should point at the llms.<name>.api_key_env config field, got: %v", err)
 	}
 }
 

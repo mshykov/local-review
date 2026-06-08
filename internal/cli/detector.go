@@ -45,6 +45,12 @@ type LLM struct {
 	// Populated by DetectProviders (this package) from the matching
 	// cfg.LLMs[name].BaseURL entry.
 	BaseURL string
+	// APIKeyEnv is the NAME of the env var the provider key was sourced
+	// from (cfg.LLMs[name].APIKeyEnv), threaded through so an auth-miss
+	// error names the variable the user actually configured rather than
+	// a generic/removed default. Only meaningful for provider agents;
+	// CLI agents inject under CanonicalAPIKeyEnv instead.
+	APIKeyEnv string
 	// TimeoutSec is the per-call timeout (from config).
 	TimeoutSec int
 }

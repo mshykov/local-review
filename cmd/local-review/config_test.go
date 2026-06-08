@@ -16,6 +16,12 @@ import (
 // and real invocation.
 func runConfigCmdIn(t *testing.T, yamlContent string) string {
 	t.Helper()
+	// These tests inject security-sensitive fields (base_url) via the
+	// REPO-level .local-review.yml to exercise the `config` printer's
+	// masking. Repo-layer base_url is untrusted-and-stripped by default
+	// (see config.Load), so opt this synthetic repo into trust — masking
+	// only matters for a value that's actually honored.
+	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "1")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".local-review.yml"), []byte(yamlContent), 0o644); err != nil {
 		t.Fatal(err)

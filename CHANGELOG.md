@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The repo-level `.local-review.yml` is now an untrusted config layer.** Because a `.local-review.yml` ships inside code you may be reviewing for the first time (a CI runner checking out a hostile commit, a fresh clone), the security-sensitive LLM fields it could carry are no longer honored from the repo layer by default: `cli_path` (the runner feeds it to `exec.LookPath` + `exec.CommandContext` → arbitrary binary execution), `base_url` (registers a provider agent that POSTs your diff — or, under `audit`, the whole tracked source tree — to that endpoint → silent exfiltration), and `api_key` (a credential committed into a repo). Each is stripped from the repo layer with a stderr warning naming what was dropped; non-sensitive fields (`prompts`, `review`, model/timeout/enabled) still apply. The user-home `~/.local-review.yml` is unaffected (it isn't writable by the code under review). A team that genuinely trusts a checked-in config (e.g. a standardised LAN Ollama `base_url`) opts back in with `LOCAL_REVIEW_TRUST_REPO_CONFIG=1`. This is the same trust boundary already drawn for `prompts.pack_dir`, extended to the execution / network / secret fields. (`config.sanitizeUntrustedLayer`; closes the two `major` findings from the v0.15.1 senior-engineer audit.)
+
+### Fixed
+
+- **Provider auth-failure error no longer names the removed `LOCAL_REVIEW_API_KEY`.** A provider configured with `llms.<name>.api_key_env: FOO` but no key exported previously errored `export LOCAL_REVIEW_API_KEY=…` — a variable removed in v0.15 that the tool never reads — because the configured env-var name was dropped before the HTTP client was built (`cli.NewInvoker` passed `apiKeyEnv=""`). The name is now threaded through (`cli.LLM.APIKeyEnv` → `ProviderSpec.APIKeyEnv` → `provider.New`), so the error names the variable you actually configured; when none is set it points at `llms.<name>.api_key_env` rather than the dead default.
+- **Setting `base_url` on a CLI agent name no longer double-runs it.** `llms.claude.base_url: …` with the claude CLI installed previously produced both a CLI `claude` and a provider `claude` in the roster — two same-named agents that both ran and collided in the name-keyed ready/merge maps. `pickAgents` now drops the CLI twin so the provider entry wins (`dropCLITwins`).
+
+### Internal
+
+- **Review exit-gate decision extracted into a pure, tested helper (`decideExitGate`).** The security-critical ordering — the per-LLM blocking scan must run even when the merged report is empty, so a merger timeout/rate-limit can't collapse an exit-2 (blocked) into an exit-1 (which pre-commit hooks let through) — was previously only testable through the full git/probe/orchestrator path. New `TestDecideExitGate` table-tests all four cases directly.
+
 ## [0.15.1] - 2026-05-29
 
 **Theme: audit performance.** Real-world dogfood on a 37-chunk monorepo via Ollama qwen2.5-coder:7b ran 22 min — a clear cost of audit's sequential per-chunk dispatch. v0.15.1 ships two related fixes that together can take that same run to ~5 min with no quality loss.

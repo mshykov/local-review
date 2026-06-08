@@ -212,11 +212,15 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 		// gateway that DOES authenticate just sets api_key as usual
 		// (the !c.APIKey guard here means the bypass only fires when
 		// no key is configured).
-		envName := c.APIKeyEnv
-		if envName == "" {
-			envName = "LOCAL_REVIEW_API_KEY"
+		// Name the env var the user actually configured
+		// (llms.<name>.api_key_env), threaded through from the provider
+		// spec. When it's empty the key was never wired to a var name, so
+		// point at the config field rather than the removed-in-v0.15
+		// LOCAL_REVIEW_API_KEY default the old fallback named.
+		if c.APIKeyEnv != "" {
+			return "", Usage{}, fmt.Errorf("no API key: $%s is unset or empty\n         export %s=... (or run `local-review init`), or use an LLM CLI instead (see `local-review doctor`)", c.APIKeyEnv, c.APIKeyEnv)
 		}
-		return "", Usage{}, fmt.Errorf("no API key: $%s is unset or empty\n         run `local-review init` to set up a provider, or `export %s=...`\n         or run `local-review review` if you have LLM CLIs installed (see `local-review doctor`)", envName, envName)
+		return "", Usage{}, fmt.Errorf("no API key configured for this provider\n         set llms.<name>.api_key_env to an env var name and export the key, or run `local-review init`\n         (local/LAN endpoints need no key — see `local-review doctor`)")
 	}
 
 	req := request{
