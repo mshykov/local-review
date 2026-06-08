@@ -220,16 +220,27 @@ func Defaults() Config {
 func Load(repoConfigPath string) (Config, error) {
 	cfg := Defaults()
 
-	// User config (~/.local-review.yml)
+	// User config (~/.local-review.yml) — trusted: it lives in the
+	// invoking user's home, not in a repo someone else can write to.
 	if home, err := os.UserHomeDir(); err == nil {
-		if err := mergeFrom(&cfg, filepath.Join(home, ".local-review.yml")); err != nil {
+		if err := mergeFrom(&cfg, filepath.Join(home, ".local-review.yml"), true); err != nil {
 			return cfg, fmt.Errorf("load user config: %w", err)
 		}
 	}
 
-	// Repo config
+	// Repo config (.local-review.yml at/above the project root) — UNtrusted
+	// by default. It is attacker-controllable whenever you review code you
+	// didn't write (a CI runner checking out a hostile commit, a freshly
+	// cloned repo). The security-sensitive LLM fields it could carry —
+	// cli_path (→ arbitrary binary exec), base_url (→ a new outbound
+	// endpoint your diff/source is POSTed to), and api_key (a secret in a
+	// repo) — are therefore stripped from this layer with a warning, the
+	// same defence resolveRelativePaths already gives prompts.pack_dir.
+	// A team that genuinely wants to check in a trusted config (e.g. a LAN
+	// Ollama base_url) opts back in with LOCAL_REVIEW_TRUST_REPO_CONFIG=1.
 	if repoConfigPath != "" {
-		if err := mergeFrom(&cfg, repoConfigPath); err != nil {
+		trusted := os.Getenv(envTrustRepoConfig) == "1"
+		if err := mergeFrom(&cfg, repoConfigPath, trusted); err != nil {
 			return cfg, fmt.Errorf("load repo config (%s): %w", repoConfigPath, err)
 		}
 	}
@@ -291,9 +302,17 @@ func FindRepoConfig(start string) string {
 	}
 }
 
+// envTrustRepoConfig, when set to "1", opts a repo-level
+// .local-review.yml back into the security-sensitive LLM fields
+// (cli_path / base_url / api_key) that are otherwise stripped from the
+// untrusted repo layer. See Load and sanitizeUntrustedLayer.
+const envTrustRepoConfig = "LOCAL_REVIEW_TRUST_REPO_CONFIG"
+
 // mergeFrom reads YAML from path (if it exists) and shallow-merges
-// non-zero fields into dst. Missing files are not an error.
-func mergeFrom(dst *Config, path string) error {
+// non-zero fields into dst. Missing files are not an error. When
+// trusted is false, security-sensitive LLM fields are stripped from the
+// layer (with a warning) before merging — see sanitizeUntrustedLayer.
+func mergeFrom(dst *Config, path string, trusted bool) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -332,8 +351,66 @@ func mergeFrom(dst *Config, path string) error {
 	if err := resolveRelativePaths(&layer, filepath.Dir(path)); err != nil {
 		return fmt.Errorf("resolve relative paths in %s: %w", path, err)
 	}
+	if !trusted {
+		sanitizeUntrustedLayer(&layer, path)
+	}
 	merge(dst, layer)
 	return nil
+}
+
+// sanitizeUntrustedLayer zeroes the LLM fields that must not be honored
+// from an untrusted (repo-level) config layer, warning about each one
+// dropped. Stripping happens on the parsed layer BEFORE merge, so the
+// trusted lower layers (embedded defaults + user-home config) are left
+// intact — an untrusted repo can refine model / timeout / enabled, but
+// cannot redirect execution, redirect the network, or inject a secret.
+//
+//   - cli_path → the runner feeds it to exec.LookPath + exec.CommandContext,
+//     so a checked-in value runs an arbitrary binary on `review`/`audit`/
+//     `doctor`. There is no legitimate per-repo use: where your claude /
+//     gemini / codex binary lives is a per-machine concern.
+//   - base_url → registers an OpenAI-compatible provider agent that the
+//     diff (or, under audit, the whole tracked source tree) is POSTed to.
+//     A checked-in value is a silent data-exfiltration channel.
+//   - api_key → a credential committed into a repo; never trust one from
+//     there (warnDeprecatedAPIKeys separately flags YAML keys at all).
+//
+// Opt back in for a genuinely trusted repo with
+// LOCAL_REVIEW_TRUST_REPO_CONFIG=1.
+func sanitizeUntrustedLayer(layer *Config, path string) {
+	for name, llmCfg := range layer.LLMs {
+		var dropped []string
+		if llmCfg.CLIPath != "" {
+			dropped = append(dropped, fmt.Sprintf("cli_path=%q", llmCfg.CLIPath))
+			llmCfg.CLIPath = ""
+		}
+		if llmCfg.BaseURL != "" {
+			dropped = append(dropped, fmt.Sprintf("base_url=%q", SanitizeBaseURLForDisplay(llmCfg.BaseURL)))
+			llmCfg.BaseURL = ""
+		}
+		if llmCfg.APIKey != "" {
+			dropped = append(dropped, "api_key")
+			llmCfg.APIKey = ""
+		}
+		// api_key_env redirects WHICH env var is read as the credential
+		// and injected into the agent's process. An untrusted repo setting
+		// it (e.g. api_key_env: SOME_OTHER_SECRET on an existing agent)
+		// could exfiltrate an arbitrary env var as that agent's auth token.
+		// Same credential-sourcing class as api_key — strip it too.
+		if llmCfg.APIKeyEnv != "" {
+			dropped = append(dropped, fmt.Sprintf("api_key_env=%q", llmCfg.APIKeyEnv))
+			llmCfg.APIKeyEnv = ""
+		}
+		if len(dropped) == 0 {
+			continue
+		}
+		layer.LLMs[name] = llmCfg
+		fmt.Fprintf(os.Stderr, "WARNING: ignoring security-sensitive field(s) for llms.%s from repo config %s: %s\n",
+			name, path, strings.Join(dropped, ", "))
+		fmt.Fprintf(os.Stderr, "         The repo-level .local-review.yml is untrusted by default — it could run an arbitrary\n")
+		fmt.Fprintf(os.Stderr, "         binary or redirect your code to another server. Move the field to ~/.local-review.yml,\n")
+		fmt.Fprintf(os.Stderr, "         or set %s=1 if you trust this repository.\n", envTrustRepoConfig)
+	}
 }
 
 // resolveRelativePaths rewrites path-typed config fields to absolute

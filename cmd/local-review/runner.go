@@ -44,6 +44,9 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 		}
 	}
 	detected := cli.DetectAllWithOverrides(overrides)
+	// Drop any CLI agent whose name is actually a provider entry (base_url
+	// set) before appending the provider twins — see dropCLITwins.
+	detected = dropCLITwins(detected, cfg)
 	detected = append(detected, cli.DetectProviders(context.Background(), providerSpecsFromConfig(cfg))...)
 
 	ready := make(map[string]bool, len(detected))
@@ -61,6 +64,42 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 	return selectAgents(detected, ready, cfg, sf, time.Now().UTC())
 }
 
+// dropCLITwins removes CLI-detected agents whose name also carries a
+// base_url in config. Such a name is a PROVIDER agent (the kind
+// discriminator is base_url != ""), and pickAgents appends its provider
+// twin separately. Without this filter, `llms.claude.base_url: ...` with
+// the claude CLI installed yields BOTH a CLI "claude" (from the hardcoded
+// supported list) AND a provider "claude" — two same-named agents that
+// both run, double-review the same diff, and collide in the name-keyed
+// ready/merge maps. Dropping the CLI twin makes the provider entry win,
+// matching the documented "sets BaseURL → routes to the provider path"
+// invariant. This is deliberate even if the provider endpoint is later
+// found unreachable: a user who set base_url on a CLI name asked for THAT
+// endpoint, and silently falling back to the local CLI would route around
+// their explicit choice (e.g. a policy-enforcing proxy). Only CLI entries
+// (BaseURL == "") are dropped, so the helper
+// is safe even if called on a slice that already contains provider twins.
+// Pure (no detection I/O) so it is unit-testable.
+func dropCLITwins(detected []cli.LLM, cfg config.Config) []cli.LLM {
+	providerNames := make(map[string]bool, len(cfg.LLMs))
+	for name, c := range cfg.LLMs {
+		if strings.TrimSpace(c.BaseURL) != "" {
+			providerNames[name] = true
+		}
+	}
+	if len(providerNames) == 0 {
+		return detected
+	}
+	kept := make([]cli.LLM, 0, len(detected))
+	for _, llm := range detected {
+		if providerNames[llm.Name] && llm.BaseURL == "" {
+			continue // CLI twin of a provider-named entry
+		}
+		kept = append(kept, llm)
+	}
+	return kept
+}
+
 // providerSpecsFromConfig extracts the provider entries from cfg.LLMs
 // (those with BaseURL set) into the runtime ProviderSpec shape
 // DetectProviders consumes. Specs are returned in name-sorted order so
@@ -74,8 +113,8 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 func providerSpecsFromConfig(cfg config.Config) []cli.ProviderSpec {
 	names := make([]string, 0, len(cfg.LLMs))
 	for name, c := range cfg.LLMs {
-		if c.BaseURL == "" {
-			continue // CLI entry, handled by DetectAllWithOverrides above
+		if strings.TrimSpace(c.BaseURL) == "" {
+			continue // CLI entry (or whitespace-only typo), handled by DetectAllWithOverrides above
 		}
 		names = append(names, name)
 	}
@@ -85,9 +124,10 @@ func providerSpecsFromConfig(cfg config.Config) []cli.ProviderSpec {
 		c := cfg.LLMs[name]
 		specs = append(specs, cli.ProviderSpec{
 			Name:       name,
-			BaseURL:    c.BaseURL,
+			BaseURL:    strings.TrimSpace(c.BaseURL),
 			Model:      c.Model,
 			APIKey:     c.APIKey,
+			APIKeyEnv:  c.APIKeyEnv,
 			TimeoutSec: c.TimeoutSec,
 		})
 	}
@@ -597,23 +637,54 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// tool failures (exit 1) as "let the commit through." Returning
 	// the sentinel (rather than os.Exit) lets cobra and main()
 	// unwind defers.
-	perLLMBlocking := anyPerLLMHasBlocking(results)
-
-	if strings.TrimSpace(mergedContent) == "" {
+	// The decision (and its ordering invariant) lives in the pure helper
+	// decideExitGate so it can be unit-tested without git / probe /
+	// orchestrator plumbing — see TestDecideExitGate. The I/O (the
+	// per-LLM-only warning and the merge-unavailable error message) stays
+	// here.
+	gateOut := decideExitGate(mergedContent, results)
+	if gateOut.mergeUnavailable {
 		// Merge step produced nothing (mergeLLM unavailable, merger
-		// error, save failed, whitespace-only). Per-LLM reviews are
-		// saved on disk and we still scanned them above.
-		if perLLMBlocking {
-			fmt.Fprintln(os.Stderr, "Warning: merge step produced no output, but per-LLM reviews flagged blocking findings — gate firing on the per-LLM signal.")
-			return errBlockingFindings
-		}
+		// error, save failed, whitespace-only) AND no per-LLM review
+		// flagged a blocking finding. Per-LLM reviews are saved on disk.
 		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s and showed no blocking findings, but the merged report is unavailable", cfg.Storage.BasePath)
 	}
-
-	if isBlockingMarkdown(mergedContent) || perLLMBlocking {
+	if gateOut.block {
+		if strings.TrimSpace(mergedContent) == "" {
+			fmt.Fprintln(os.Stderr, "Warning: merge step produced no output, but per-LLM reviews flagged blocking findings — gate firing on the per-LLM signal.")
+		}
 		return errBlockingFindings
 	}
 	return nil
+}
+
+// gateOutcome is the review exit-gate decision, computed independently of
+// any I/O so the ordering invariant is unit-testable. See decideExitGate.
+type gateOutcome struct {
+	// block is true when at least one blocking signal fired — the caller
+	// returns errBlockingFindings (exit 2).
+	block bool
+	// mergeUnavailable is true when the merged report is empty/whitespace
+	// AND no per-LLM review flagged a blocking finding: the run can't
+	// produce a report and isn't blocking, so the caller returns a
+	// tool-failure error (exit 1), not the gate sentinel.
+	mergeUnavailable bool
+}
+
+// decideExitGate computes the review exit gate from the merged report and
+// the per-LLM results. The per-LLM blocking scan is computed FIRST and
+// UNCONDITIONALLY, so an empty merged report (merger timeout, rate-limit,
+// SaveMerged failure) still trips the gate when any per-LLM review flagged
+// a Critical/Major finding. That ordering is the invariant that stops a
+// merge-step failure from collapsing exit-2 (blocked) into exit-1 (which
+// pre-commit hooks treat as "let the commit through"). Pure — no I/O — so
+// TestDecideExitGate can exercise all four cases directly.
+func decideExitGate(mergedContent string, results []multi.ReviewResult) gateOutcome {
+	perLLMBlocking := anyPerLLMHasBlocking(results)
+	if strings.TrimSpace(mergedContent) == "" {
+		return gateOutcome{block: perLLMBlocking, mergeUnavailable: !perLLMBlocking}
+	}
+	return gateOutcome{block: isBlockingMarkdown(mergedContent) || perLLMBlocking}
 }
 
 // anyPerLLMHasBlocking runs the same heuristic isBlockingMarkdown uses

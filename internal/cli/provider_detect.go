@@ -21,10 +21,15 @@ import (
 // shape DetectAllWithOverrides already uses — caller owns the config
 // vocabulary, this package owns the runtime-agent vocabulary.
 type ProviderSpec struct {
-	Name       string
-	BaseURL    string
-	Model      string
-	APIKey     string
+	Name    string
+	BaseURL string
+	Model   string
+	APIKey  string
+	// APIKeyEnv is the NAME of the env var APIKey was resolved from
+	// (cfg.LLMs[name].APIKeyEnv). Carried through so an auth-miss error
+	// can name the variable the user configured. Empty for keyless
+	// (local/LAN) providers.
+	APIKeyEnv  string
 	TimeoutSec int
 }
 
@@ -59,6 +64,7 @@ func DetectProviders(ctx context.Context, specs []ProviderSpec) []LLM {
 				BaseURL:    spec.BaseURL,
 				Model:      spec.Model,
 				APIKey:     spec.APIKey,
+				APIKeyEnv:  spec.APIKeyEnv,
 				TimeoutSec: spec.TimeoutSec,
 				Available:  available,
 				// Version stays empty for providers — there's no

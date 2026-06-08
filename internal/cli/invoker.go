@@ -79,7 +79,7 @@ func NewInvoker(llm LLM) Invoker {
 	// name-switch wouldn't work. The provider invoker is one type that
 	// covers every OpenAI-compatible endpoint.
 	if llm.BaseURL != "" {
-		return provider.New(llm.Name, llm.BaseURL, llm.APIKey, "" /* apiKeyEnv unused at this layer */, llm.Model, llm.TimeoutSec)
+		return provider.New(llm.Name, llm.BaseURL, llm.APIKey, llm.APIKeyEnv, llm.Model, llm.TimeoutSec)
 	}
 	switch llm.Name {
 	case "claude":
