@@ -22,6 +22,13 @@ func runConfigCmdIn(t *testing.T, yamlContent string) string {
 	// (see config.Load), so opt this synthetic repo into trust — masking
 	// only matters for a value that's actually honored.
 	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "1")
+	// Hermetic: point the user-home lookup at an empty temp dir so the
+	// dump reflects only the synthetic repo config, not the developer's
+	// real ~/.local-review.yml. os.UserHomeDir() reads $HOME (Unix) /
+	// %USERPROFILE% (Windows).
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".local-review.yml"), []byte(yamlContent), 0o644); err != nil {
 		t.Fatal(err)
