@@ -12,6 +12,18 @@ import (
 // default, honored from the user-home layer, and re-enabled for a repo
 // only via LOCAL_REVIEW_TRUST_REPO_CONFIG=1.
 
+// isolateHome points os.UserHomeDir() at a fresh temp dir so a test
+// never reads the developer's real ~/.local-review.yml. Sets both HOME
+// (Unix) and USERPROFILE (Windows, which os.UserHomeDir prefers there)
+// so the isolation holds cross-platform. Returns the temp home.
+func isolateHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	return home
+}
+
 func writeRepoCfg(t *testing.T, yaml string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -23,7 +35,7 @@ func writeRepoCfg(t *testing.T, yaml string) string {
 }
 
 func TestLoad_RepoConfigUntrusted_StripsSensitiveLLMFields(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())                  // hermetic: ignore the real ~/.local-review.yml
+	isolateHome(t)                                 // hermetic: ignore the real ~/.local-review.yml
 	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "") // not opted in
 	repoCfg := writeRepoCfg(t, `
 llms:
@@ -57,7 +69,7 @@ llms:
 }
 
 func TestLoad_RepoConfigTrusted_HonorsSensitiveFieldsWithOptIn(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateHome(t)
 	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "1")
 	repoCfg := writeRepoCfg(t, `
 llms:
@@ -83,8 +95,7 @@ llms:
 func TestLoad_UserHomeConfig_HonorsSensitiveFieldsWithoutOptIn(t *testing.T) {
 	// The user-home layer is trusted unconditionally — it isn't writable
 	// by the code under review.
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+	home := isolateHome(t)
 	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "") // boundary is about repo, not home
 	if err := os.WriteFile(filepath.Join(home, ".local-review.yml"), []byte(`
 llms:
