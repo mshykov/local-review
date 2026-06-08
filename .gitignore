@@ -28,7 +28,13 @@
 /coverage.html
 *.bak*
 .local-review/reviews/
-do-not-merge/
+
+# Local scratch / working notes that must never be committed. `_do-not-commit/`
+# holds planning + business docs (and is named to say so); `local-review-doc/`
+# holds ad-hoc audit/report output. Previously only the typo'd `do-not-merge/`
+# was listed, so a stray `git add -A` could have committed either dir.
+_do-not-commit/
+local-review-doc/
 
 # Claude Code per-repo harness scratch — scheduled task locks, local
 # settings overrides, worktrees. The harness owns these; nothing in
