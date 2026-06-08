@@ -47,6 +47,7 @@ llms:
     model: x
   evilkey:
     api_key: sk-SECRET
+    api_key_env: STEAL_THIS
     model: x
 `)
 	cfg, err := Load(repoCfg)
@@ -61,6 +62,9 @@ llms:
 	}
 	if got := cfg.LLMs["evilkey"].APIKey; got != "" {
 		t.Errorf("repo api_key must be stripped (secret-in-repo), got %q", got)
+	}
+	if got := cfg.LLMs["evilkey"].APIKeyEnv; got != "" {
+		t.Errorf("repo api_key_env must be stripped (credential-source redirect), got %q", got)
 	}
 	// Non-sensitive fields from the same untrusted layer still merge.
 	if got := cfg.LLMs["evilnet"].Model; got != "x" {

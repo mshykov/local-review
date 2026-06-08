@@ -83,7 +83,7 @@ func pickAgents(cfg config.Config, sf *sharedFlags) (active []cli.LLM, configDis
 func dropCLITwins(detected []cli.LLM, cfg config.Config) []cli.LLM {
 	providerNames := make(map[string]bool, len(cfg.LLMs))
 	for name, c := range cfg.LLMs {
-		if c.BaseURL != "" {
+		if strings.TrimSpace(c.BaseURL) != "" {
 			providerNames[name] = true
 		}
 	}
@@ -113,8 +113,8 @@ func dropCLITwins(detected []cli.LLM, cfg config.Config) []cli.LLM {
 func providerSpecsFromConfig(cfg config.Config) []cli.ProviderSpec {
 	names := make([]string, 0, len(cfg.LLMs))
 	for name, c := range cfg.LLMs {
-		if c.BaseURL == "" {
-			continue // CLI entry, handled by DetectAllWithOverrides above
+		if strings.TrimSpace(c.BaseURL) == "" {
+			continue // CLI entry (or whitespace-only typo), handled by DetectAllWithOverrides above
 		}
 		names = append(names, name)
 	}
@@ -124,7 +124,7 @@ func providerSpecsFromConfig(cfg config.Config) []cli.ProviderSpec {
 		c := cfg.LLMs[name]
 		specs = append(specs, cli.ProviderSpec{
 			Name:       name,
-			BaseURL:    c.BaseURL,
+			BaseURL:    strings.TrimSpace(c.BaseURL),
 			Model:      c.Model,
 			APIKey:     c.APIKey,
 			APIKeyEnv:  c.APIKeyEnv,

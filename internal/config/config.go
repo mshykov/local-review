@@ -392,6 +392,15 @@ func sanitizeUntrustedLayer(layer *Config, path string) {
 			dropped = append(dropped, "api_key")
 			llmCfg.APIKey = ""
 		}
+		// api_key_env redirects WHICH env var is read as the credential
+		// and injected into the agent's process. An untrusted repo setting
+		// it (e.g. api_key_env: SOME_OTHER_SECRET on an existing agent)
+		// could exfiltrate an arbitrary env var as that agent's auth token.
+		// Same credential-sourcing class as api_key — strip it too.
+		if llmCfg.APIKeyEnv != "" {
+			dropped = append(dropped, fmt.Sprintf("api_key_env=%q", llmCfg.APIKeyEnv))
+			llmCfg.APIKeyEnv = ""
+		}
 		if len(dropped) == 0 {
 			continue
 		}
