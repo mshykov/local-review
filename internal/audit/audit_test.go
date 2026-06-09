@@ -133,6 +133,11 @@ func TestFillAggregates_CountsAcrossPackagesAndStatuses(t *testing.T) {
 			},
 			{Package: "internal/git", Clean: true, InputTokens: 500, OutputTokens: 50},
 			{Package: "internal/multi", Error: "timeout", InputTokens: 100, OutputTokens: 0},
+			// Parser-miss: no error, not the clean sentinel, zero parsed
+			// findings (LLM phrased "looks fine" in prose). Documented to
+			// count as clean — pin that branch so a parseFindings
+			// regression that drops real findings here is at least visible.
+			{Package: "internal/lang", Raw: "Looks fine to me, nothing to flag."},
 		},
 	}
 	fillAggregates(&rep)
@@ -142,7 +147,7 @@ func TestFillAggregates_CountsAcrossPackagesAndStatuses(t *testing.T) {
 	if rep.FindingsBySeverity["critical"] != 1 || rep.FindingsBySeverity["warning"] != 1 {
 		t.Errorf("FindingsBySeverity wrong: %v", rep.FindingsBySeverity)
 	}
-	if rep.PackagesWithFindings != 1 || rep.PackagesClean != 1 || rep.PackagesErrored != 1 {
+	if rep.PackagesWithFindings != 1 || rep.PackagesClean != 2 || rep.PackagesErrored != 1 {
 		t.Errorf("package status counts wrong: %+v", rep)
 	}
 	if rep.TotalInputTokens != 1600 || rep.TotalOutputTokens != 250 {
@@ -337,6 +342,63 @@ func TestRun_ParallelDispatch_ReducesWallclock(t *testing.T) {
 }
 
 func fmtPkg(i int) string { return "pkg-" + strconv.Itoa(i) }
+
+// stubInvoker returns a fixed output/error, for tests that need to drive
+// a specific Review outcome (empty output, cancellation).
+type stubInvoker struct {
+	out string
+	err error
+}
+
+func (s stubInvoker) Review(_ context.Context, _, _ string) (string, agents.TokenUsage, error) {
+	return s.out, agents.TokenUsage{}, s.err
+}
+func (s stubInvoker) RunPrompt(_ context.Context, _ string) (string, agents.TokenUsage, error) {
+	return s.out, agents.TokenUsage{}, s.err
+}
+
+// TestRunOne_EmptyOutputCountsAsErrorNotClean pins MIN-4: a CLI that exits
+// 0 with empty stdout is recorded as an error, never folded into the clean
+// bucket (which would overstate audit coverage).
+func TestRunOne_EmptyOutputCountsAsErrorNotClean(t *testing.T) {
+	pr := runOne(context.Background(),
+		Chunk{Package: "p", Files: []string{"f.go"}, Body: "x"},
+		"pack", stubInvoker{out: "   \n\t"}, time.Second)
+	if pr.Clean {
+		t.Error("empty output must not be Clean")
+	}
+	if pr.Error == "" {
+		t.Error("empty output must set Error so it lands in PackagesErrored")
+	}
+	if len(pr.Findings) != 0 {
+		t.Errorf("empty output should parse no findings, got %d", len(pr.Findings))
+	}
+}
+
+// TestRun_CanceledContextStopsAndErrors pins MIN-2: a canceled audit returns
+// a non-nil error so the caller exits non-zero, instead of emitting a
+// "completed" report whose unstarted chunks were silently skipped.
+func TestRun_CanceledContextStopsAndErrors(t *testing.T) {
+	chunks := make([]Chunk, 8)
+	for i := range chunks {
+		chunks[i] = Chunk{Package: fmtPkg(i), Files: []string{"f.go"}, Body: "x", SizeBytes: 1}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // canceled before Run dispatches any chunk
+
+	_, err := Run(ctx, chunks, Options{
+		Topic:       "security",
+		LLM:         cli.LLM{Name: "fake"},
+		Invoker:     stubInvoker{out: "clean — no issues found"},
+		Parallelism: 1,
+	})
+	if err == nil {
+		t.Fatal("canceled audit must return an error, not a clean nil")
+	}
+	if !strings.Contains(err.Error(), "canceled") {
+		t.Errorf("error should mention cancellation, got: %v", err)
+	}
+}
 
 // TestClampParallelism pins the v0.15.1 self-review fix for the
 // unbounded-worker concern. A user passing --parallel 1000 must not

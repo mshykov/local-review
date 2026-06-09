@@ -142,6 +142,15 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
+				// Stop pulling queued chunks once the run is canceled
+				// (Ctrl+C / SIGTERM). Without this, every remaining chunk
+				// is dispatched against an already-canceled ctx, fails
+				// instantly, and is recorded as "errored" — a "completed"
+				// report that silently dropped the tail. Mirrors the
+				// review runner, which short-circuits on ctx.Err().
+				if ctx.Err() != nil {
+					return
+				}
 				if opts.Progress != nil {
 					progMu.Lock()
 					// Stderr-shaped progress write: explicitly
@@ -162,6 +171,20 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 
 	rep.Packages = results
 	fillAggregates(&rep)
+	// Surface cancellation as an error so the caller exits non-zero rather
+	// than emitting a "completed" report whose not-yet-started chunks were
+	// silently skipped (CLAUDE.md rule 4: "completed" is wrong if anything
+	// was skipped). The partial report is still returned for callers that
+	// want to show what did finish.
+	if err := ctx.Err(); err != nil {
+		done := 0
+		for _, pr := range results {
+			if pr.Package != "" {
+				done++
+			}
+		}
+		return rep, fmt.Errorf("audit canceled after %d/%d chunks: %w", done, len(chunks), err)
+	}
 	return rep, nil
 }
 
@@ -218,6 +241,15 @@ func runOne(ctx context.Context, c Chunk, pack string, invoker cli.Invoker, time
 	}
 	if err != nil {
 		pr.Error = err.Error()
+		return pr
+	}
+	if strings.TrimSpace(out) == "" {
+		// CLI exited 0 with empty stdout (rate-limited / capacity-
+		// exhausted reply, empty --output-last-message, a parser that
+		// stripped everything). Not a clean result — record it as an
+		// error so it lands in PackagesErrored, never silently inflating
+		// PackagesClean. The review path catches the same pathology.
+		pr.Error = "LLM exited 0 but returned empty output"
 		return pr
 	}
 	pr.Raw = out
