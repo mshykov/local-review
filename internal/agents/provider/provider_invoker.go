@@ -72,11 +72,12 @@ func New(name, baseURL, apiKey, apiKeyEnv, model string, timeoutSec int) *Invoke
 }
 
 // Review wraps a system prompt + diff into a chat-completions call.
-// The returned string is whatever the system prompt asked the model
-// for — markdown in multi-LLM mode (buildReviewPrompt appends a
-// "respond in markdown, NOT JSON" override), JSON in the single-LLM
-// JSON path (Resolve appends the findings schema when RequireJSON
-// is set). This invoker is format-agnostic; it just shuttles bytes.
+// The production review path asks for markdown (buildReviewPrompt
+// appends a "respond in markdown, NOT JSON" override); a structured-JSON
+// mode is reserved for the future (Resolve appends the findings schema
+// only when ResolveOptions.RequireJSON is set, which no production
+// caller does today). This invoker is format-agnostic; it just shuttles
+// bytes.
 func (p *Invoker) Review(ctx context.Context, systemPrompt, diff string) (string, agents.TokenUsage, error) {
 	msgs := []llm.Message{
 		{Role: "system", Content: systemPrompt},

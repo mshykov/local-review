@@ -113,7 +113,7 @@ var providerPresets = []providerPreset{
 		presetName:  "provider",
 		baseURL:     "",
 		defaultMdl:  "",
-		apiKeyEnv:   "LOCAL_REVIEW_API_KEY",
+		apiKeyEnv:   "YOUR_PROVIDER_API_KEY",
 		requiresKey: true,
 		note:        "Any /v1/chat/completions endpoint works (Groq, Together, OpenRouter, vLLM, etc.). Edit the agent name (`provider:`) under `llms:` in the file to whatever reads best for your team.",
 	},

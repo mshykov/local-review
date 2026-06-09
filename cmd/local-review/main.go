@@ -177,8 +177,8 @@ See README and https://mshykov.github.io/local-review/ for details.`,
 	}
 
 	// review-tuning (apply to all review-shape commands)
-	root.PersistentFlags().StringVar(&sf.minSeverity, "min-severity", "", "filter findings: nit|info|warning|major|critical (audit + bench only; ignored on review)")
-	root.PersistentFlags().IntVar(&sf.maxFindings, "max-findings", 0, "cap total findings shown (audit + bench only; ignored on review)")
+	root.PersistentFlags().StringVar(&sf.minSeverity, "min-severity", "", "filter findings: nit|info|warning|major|critical (audit only; ignored on review)")
+	root.PersistentFlags().IntVar(&sf.maxFindings, "max-findings", 0, "cap total findings shown (audit only; ignored on review)")
 	root.PersistentFlags().BoolVar(&sf.jsonOut, "json", false, "emit JSON instead of markdown (audit + bench only; ignored on review)")
 
 	// multi-LLM flags

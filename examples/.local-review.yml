@@ -27,7 +27,7 @@ llms:
     # Optional: env var name for the API key. Local Ollama / LAN /
     # Tailscale endpoints are auth-free by default (see isLocalURL).
     # Public-internet endpoints (OpenAI, Anthropic, …) need this set.
-    # api_key_env: LOCAL_REVIEW_API_KEY
+    # api_key_env: YOUR_PROVIDER_API_KEY
 
     # Optional per-call timeout; default 60.
     # timeout_seconds: 60
@@ -38,7 +38,7 @@ llms:
   # cloud-openai:
   #   base_url: https://api.openai.com/v1
   #   model: gpt-4o-mini
-  #   api_key_env: LOCAL_REVIEW_API_KEY
+  #   api_key_env: OPENAI_API_KEY
 
   # CLI agents are auto-detected — listing them is optional, but if you
   # do, the same shape works (no base_url needed; the runtime locates

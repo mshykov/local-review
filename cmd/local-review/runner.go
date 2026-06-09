@@ -486,6 +486,15 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	}
 	fmt.Println()
 
+	// If the user interrupted during the fan-out — the long phase where
+	// Ctrl+C is most likely — surface cancellation directly. Otherwise every
+	// invoker returns a context error and the downstream gate reports "all N
+	// LLM reviews failed", which misdiagnoses a user interrupt as an agent
+	// failure. Mirrors the post-probe handler above.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Sort results back to roster order before any downstream use.
 	// Display lines above already printed in completion order (the
 	// streaming UX); everything from here on (BuildMergeInput,
@@ -826,10 +835,10 @@ func warnIgnoredFlags(sf *sharedFlags) {
 		fmt.Fprintln(os.Stderr, "Warning: --json is ignored on the review path (the merged report is markdown); it still applies to audit and bench.")
 	}
 	if sf.minSeverity != "" {
-		fmt.Fprintln(os.Stderr, "Warning: --min-severity is ignored on the review path (filtering happens inside the merge prompt); it still applies to audit and bench.")
+		fmt.Fprintln(os.Stderr, "Warning: --min-severity is ignored on the review path (filtering happens inside the merge prompt); it applies to audit.")
 	}
 	if sf.maxFindings != 0 {
-		fmt.Fprintln(os.Stderr, "Warning: --max-findings is ignored on the review path (trimming happens inside the merge prompt); it still applies to audit and bench.")
+		fmt.Fprintln(os.Stderr, "Warning: --max-findings is ignored on the review path (trimming happens inside the merge prompt); it applies to audit.")
 	}
 }
 

@@ -345,3 +345,31 @@ func TestDecideGate_Empty(t *testing.T) {
 		t.Error("HasMergeable() = true on empty set, want false")
 	}
 }
+
+// TestRunParallel_ModeReflectsBackendKind pins that a provider agent
+// (BaseURL set) records mode:"provider" and a CLI agent records "cli" —
+// metadata.json was previously hardcoded to "cli" for every agent.
+func TestRunParallel_ModeReflectsBackendKind(t *testing.T) {
+	llms := []cli.LLM{
+		{Name: "claude"}, // BaseURL == "" → CLI agent
+		{Name: "local", BaseURL: "http://192.0.2.10/v1"}, // provider agent
+	}
+	storage := NewStorage(t.TempDir())
+	orch := NewOrchestrator(llms, storage)
+	orch.invokerFactory = func(cli.LLM) cli.Invoker { return &fakeInvoker{output: "## Major\n- x\n"} }
+
+	ch, err := orch.RunParallel(context.Background(), "", "diff", "abc", "main")
+	if err != nil {
+		t.Fatalf("RunParallel: %v", err)
+	}
+	modes := map[string]string{}
+	for r := range ch {
+		modes[r.LLM] = r.Mode
+	}
+	if modes["claude"] != "cli" {
+		t.Errorf("CLI agent mode = %q, want \"cli\"", modes["claude"])
+	}
+	if modes["local"] != "provider" {
+		t.Errorf("provider agent mode = %q, want \"provider\"", modes["local"])
+	}
+}

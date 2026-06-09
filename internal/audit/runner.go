@@ -142,6 +142,15 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
+				// Stop pulling queued chunks once the run is canceled
+				// (Ctrl+C / SIGTERM). Without this, every remaining chunk
+				// is dispatched against an already-canceled ctx, fails
+				// instantly, and is recorded as "errored" — a "completed"
+				// report that silently dropped the tail. Mirrors the
+				// review runner, which short-circuits on ctx.Err().
+				if ctx.Err() != nil {
+					return
+				}
 				if opts.Progress != nil {
 					progMu.Lock()
 					// Stderr-shaped progress write: explicitly
@@ -162,6 +171,20 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 
 	rep.Packages = results
 	fillAggregates(&rep)
+	// Surface cancellation as an error so the caller exits non-zero rather
+	// than emitting a "completed" report whose not-yet-started chunks were
+	// silently skipped (CLAUDE.md rule 4: "completed" is wrong if anything
+	// was skipped). The partial report is still returned for callers that
+	// want to show what did finish.
+	if err := ctx.Err(); err != nil {
+		done := 0
+		for _, pr := range results {
+			if pr.Package != "" {
+				done++
+			}
+		}
+		return rep, fmt.Errorf("audit canceled after %d/%d chunks: %w", done, len(chunks), err)
+	}
 	return rep, nil
 }
 
@@ -218,6 +241,15 @@ func runOne(ctx context.Context, c Chunk, pack string, invoker cli.Invoker, time
 	}
 	if err != nil {
 		pr.Error = err.Error()
+		return pr
+	}
+	if strings.TrimSpace(out) == "" {
+		// CLI exited 0 with empty stdout (rate-limited / capacity-
+		// exhausted reply, empty --output-last-message, a parser that
+		// stripped everything). Not a clean result — record it as an
+		// error so it lands in PackagesErrored, never silently inflating
+		// PackagesClean. The review path catches the same pathology.
+		pr.Error = "LLM exited 0 but returned empty output"
 		return pr
 	}
 	pr.Raw = out
@@ -325,6 +357,70 @@ func parseFindings(out string) []Finding {
 	}
 	flush()
 	return findings
+}
+
+// auditSeverityRank orders the audit severity tiers (audit has no nit —
+// see the audit packs). Higher = more severe. An unrecognized label ranks
+// 0, so it survives only when no --min-severity floor is set.
+func auditSeverityRank(sev string) int {
+	switch strings.ToLower(strings.TrimSpace(sev)) {
+	case "critical":
+		return 4
+	case "major":
+		return 3
+	case "warning":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Filtered returns a copy of the report keeping only findings at or above
+// minSeverity (when non-empty) and capping the total number of findings at
+// maxFindings (when > 0, across packages in report order). Aggregates are
+// recomputed on the filtered set. The second return is the number of
+// findings hidden, so the caller can disclose the truncation rather than
+// dropping it silently (CLAUDE.md rule 4). With no floor and no cap the
+// report is returned unchanged and hidden is 0.
+func (r Report) Filtered(minSeverity string, maxFindings int) (Report, int) {
+	minRank := auditSeverityRank(minSeverity)
+	hasFloor := strings.TrimSpace(minSeverity) != ""
+	if !hasFloor && maxFindings <= 0 {
+		return r, 0
+	}
+
+	out := r
+	out.FindingsBySeverity = map[string]int{}
+	out.TotalFindings = 0
+	out.PackagesWithFindings = 0
+	out.PackagesClean = 0
+	out.PackagesErrored = 0
+	out.TotalInputTokens = 0
+	out.TotalOutputTokens = 0
+	out.Packages = make([]PackageReport, len(r.Packages))
+
+	hidden, kept := 0, 0
+	for i, pr := range r.Packages {
+		np := pr
+		np.Findings = nil
+		for _, f := range pr.Findings {
+			if hasFloor && auditSeverityRank(f.Severity) < minRank {
+				hidden++
+				continue
+			}
+			if maxFindings > 0 && kept >= maxFindings {
+				hidden++
+				continue
+			}
+			np.Findings = append(np.Findings, f)
+			kept++
+		}
+		out.Packages[i] = np
+	}
+	fillAggregates(&out)
+	return out, hidden
 }
 
 // fillAggregates sums TotalFindings, FindingsBySeverity, the

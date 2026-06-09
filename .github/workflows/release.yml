@@ -328,6 +328,32 @@ jobs:
           curl -fsSL "${base_url}/local-review_linux_amd64.tar.gz"  -o linux_amd64.tar.gz
           curl -fsSL "${base_url}/local-review_linux_arm64.tar.gz"  -o linux_arm64.tar.gz
 
+          # Cross-verify the downloaded tarballs against the release's OWN
+          # checksums manifest before recording their hashes in the formula.
+          # Without this, the formula records the hash of whatever bytes the
+          # release URL served at homebrew-update time, rather than attesting
+          # against the manifest the build produced — so a swapped/corrupted
+          # asset in the publish->homebrew window would be silently blessed.
+          # install.sh already does this cross-check; this makes the manifest
+          # the single integrity root for BOTH install channels.
+          checksums="local-review_${VERSION_TAG}_checksums.txt"
+          curl -fsSL "${base_url}/${checksums}" -o "$checksums"
+          verify() { # <local-file> <canonical-asset-name>
+            local computed expected
+            computed=$(shasum -a 256 "$1" | awk '{print $1}')
+            expected=$(awk -v a="$2" '$NF == a {print $1}' "$checksums")
+            if [ -z "$expected" ]; then
+              echo "ERROR: $2 not listed in $checksums (manifest malformed?)"; exit 1
+            fi
+            if [ "$computed" != "$expected" ]; then
+              echo "ERROR: checksum mismatch for $2: downloaded $computed, manifest $expected"; exit 1
+            fi
+          }
+          verify darwin_amd64.tar.gz "local-review_darwin_amd64.tar.gz"
+          verify darwin_arm64.tar.gz "local-review_darwin_arm64.tar.gz"
+          verify linux_amd64.tar.gz  "local-review_linux_amd64.tar.gz"
+          verify linux_arm64.tar.gz  "local-review_linux_arm64.tar.gz"
+
           sha_darwin_amd64=$(shasum -a 256 darwin_amd64.tar.gz | awk '{print $1}')
           sha_darwin_arm64=$(shasum -a 256 darwin_arm64.tar.gz | awk '{print $1}')
           sha_linux_amd64=$(shasum -a 256 linux_amd64.tar.gz | awk '{print $1}')

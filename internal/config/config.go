@@ -142,8 +142,14 @@ func boolPtr(b bool) *bool {
 func Defaults() Config {
 	return Config{
 		Review: Review{
-			MinSeverity:  "warning",
-			MaxFindings:  20,
+			// No severity floor / findings cap by default: audit applies
+			// these only when the user explicitly sets --min-severity /
+			// --max-findings (or the matching review.* config keys). A
+			// non-empty default would silently filter audit output, which
+			// nothing did pre-v0.16. (No production code read these before
+			// v0.16, so the prior "warning"/20 defaults were inert.)
+			MinSeverity:  "",
+			MaxFindings:  0,
 			ExcludeGlobs: []string{"**/*.lock", "**/*.snap", "**/dist/**", "**/build/**"},
 		},
 
