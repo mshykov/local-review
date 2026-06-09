@@ -835,10 +835,10 @@ func warnIgnoredFlags(sf *sharedFlags) {
 		fmt.Fprintln(os.Stderr, "Warning: --json is ignored on the review path (the merged report is markdown); it still applies to audit and bench.")
 	}
 	if sf.minSeverity != "" {
-		fmt.Fprintln(os.Stderr, "Warning: --min-severity is ignored on the review path (filtering happens inside the merge prompt); it still applies to audit and bench.")
+		fmt.Fprintln(os.Stderr, "Warning: --min-severity is ignored on the review path (filtering happens inside the merge prompt); it applies to audit.")
 	}
 	if sf.maxFindings != 0 {
-		fmt.Fprintln(os.Stderr, "Warning: --max-findings is ignored on the review path (trimming happens inside the merge prompt); it still applies to audit and bench.")
+		fmt.Fprintln(os.Stderr, "Warning: --max-findings is ignored on the review path (trimming happens inside the merge prompt); it applies to audit.")
 	}
 }
 

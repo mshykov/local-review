@@ -13,6 +13,7 @@ import (
 
 	"github.com/mshykov/local-review/internal/audit"
 	"github.com/mshykov/local-review/internal/cli"
+	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/prompts"
 )
 
@@ -21,6 +22,15 @@ type auditFlags struct {
 	// topic is the audit-pack id (security / tech-debt / …).
 	// Required — no default, because the choice IS the audit.
 	topic string
+
+	// minSeveritySet / maxFindingsSet record whether the user passed
+	// --min-severity / --max-findings on the command line (captured via
+	// cobra's Flags().Changed in RunE). Needed so an explicit flag value
+	// — including the disabling values "" / 0 — overrides config, instead
+	// of a zero-value being mistaken for "unset" and falling back to the
+	// configured value.
+	minSeveritySet bool
+	maxFindingsSet bool
 
 	// include / exclude are path-prefix filters passed through to
 	// the walker. Comma-separated. Empty include = walk every
@@ -114,6 +124,11 @@ Audit runs against the whole committed source tree (git ls-files),
 so a working-tree-only change won't appear in findings until it's
 committed.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Capture explicit-flag presence so runAudit can let a CLI
+			// --min-severity/--max-findings (even the disabling "" / 0)
+			// override config, rather than treating a zero value as unset.
+			af.minSeveritySet = cmd.Flags().Changed("min-severity")
+			af.maxFindingsSet = cmd.Flags().Changed("max-findings")
 			return runAudit(cmd.Context(), sf, af)
 		},
 	}
@@ -188,6 +203,22 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 		return writeAuditPlan(os.Stdout, af.topic, chunks)
 	}
 
+	// Resolve the --min-severity / --max-findings filters up front, BEFORE
+	// the expensive Run, so a config-parse error or an invalid severity
+	// fails fast instead of after paying for the whole audit. Precedence:
+	// an explicitly-passed flag wins — INCLUDING the disabling values
+	// "" / 0 (e.g. `--max-findings 0` to uncap a configured limit) — else
+	// the matching review.* config key. These filters were advertised on
+	// `audit` but inert before v0.16.
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	minSev, maxF, err := resolveAuditFilters(af, sf, cfg)
+	if err != nil {
+		return err
+	}
+
 	llm, err := pickAuditLLM(sf, af)
 	if err != nil {
 		return err
@@ -203,28 +234,6 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 		return err
 	}
 
-	// Apply the --min-severity / --max-findings filters (flag wins, else
-	// the matching review.* config key). These were advertised on `audit`
-	// but inert before v0.16.
-	cfg, cfgErr := loadConfig()
-	if cfgErr != nil {
-		return cfgErr
-	}
-	minSev := sf.minSeverity
-	if minSev == "" {
-		minSev = cfg.Review.MinSeverity
-	}
-	if minSev != "" {
-		switch strings.ToLower(minSev) {
-		case "nit", "info", "warning", "major", "critical":
-		default:
-			return fmt.Errorf("--min-severity %q is invalid (use nit|info|warning|major|critical)", minSev)
-		}
-	}
-	maxF := sf.maxFindings
-	if maxF == 0 {
-		maxF = cfg.Review.MaxFindings
-	}
 	rep, hidden := rep.Filtered(minSev, maxF)
 	if hidden > 0 {
 		word := "findings"
@@ -236,6 +245,31 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 
 	rep.Root = "." // stamp the conceptual working-tree root onto the report
 	return emitAuditReport(sf, af, rep)
+}
+
+// resolveAuditFilters computes the effective min-severity floor and
+// max-findings cap for an audit run. An explicitly-passed flag wins over
+// config — INCLUDING the disabling values "" / 0, so `--max-findings 0`
+// uncaps a configured review.max_findings and an unset flag inherits config.
+// Returns an error for an invalid --min-severity value. Pure (no I/O) so
+// the precedence contract is unit-testable.
+func resolveAuditFilters(af auditFlags, sf *sharedFlags, cfg config.Config) (minSev string, maxF int, err error) {
+	minSev = cfg.Review.MinSeverity
+	if af.minSeveritySet {
+		minSev = sf.minSeverity
+	}
+	if minSev != "" {
+		switch strings.ToLower(minSev) {
+		case "nit", "info", "warning", "major", "critical":
+		default:
+			return "", 0, fmt.Errorf("--min-severity %q is invalid (use nit|info|warning|major|critical)", minSev)
+		}
+	}
+	maxF = cfg.Review.MaxFindings
+	if af.maxFindingsSet {
+		maxF = sf.maxFindings
+	}
+	return minSev, maxF, nil
 }
 
 // pickAuditLLM picks ONE authenticated LLM for the audit run.

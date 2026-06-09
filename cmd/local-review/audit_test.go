@@ -5,7 +5,51 @@ import (
 	"testing"
 
 	"github.com/mshykov/local-review/internal/cli"
+	"github.com/mshykov/local-review/internal/config"
 )
+
+// TestResolveAuditFilters pins the flag-vs-config precedence for the audit
+// --min-severity / --max-findings filters, including the key case the final
+// review flagged: an explicit flag must override config even when its value
+// is the disabling "" / 0 (e.g. `--max-findings 0` to uncap a configured
+// review.max_findings).
+func TestResolveAuditFilters(t *testing.T) {
+	cfg := config.Config{Review: config.Review{MinSeverity: "warning", MaxFindings: 20}}
+
+	t.Run("unset flags inherit config", func(t *testing.T) {
+		minSev, maxF, err := resolveAuditFilters(auditFlags{}, &sharedFlags{}, cfg)
+		if err != nil || minSev != "warning" || maxF != 20 {
+			t.Fatalf("got (%q, %d, %v), want (warning, 20, nil)", minSev, maxF, err)
+		}
+	})
+
+	t.Run("explicit --max-findings 0 overrides config to uncap", func(t *testing.T) {
+		af := auditFlags{maxFindingsSet: true}
+		minSev, maxF, err := resolveAuditFilters(af, &sharedFlags{maxFindings: 0}, cfg)
+		if err != nil || maxF != 0 {
+			t.Fatalf("got maxF=%d err=%v, want 0/nil (flag must override configured 20)", maxF, err)
+		}
+		if minSev != "warning" {
+			t.Errorf("min-severity should still inherit config, got %q", minSev)
+		}
+	})
+
+	t.Run("explicit flags win over config", func(t *testing.T) {
+		af := auditFlags{minSeveritySet: true, maxFindingsSet: true}
+		minSev, maxF, err := resolveAuditFilters(af, &sharedFlags{minSeverity: "critical", maxFindings: 5}, cfg)
+		if err != nil || minSev != "critical" || maxF != 5 {
+			t.Fatalf("got (%q, %d, %v), want (critical, 5, nil)", minSev, maxF, err)
+		}
+	})
+
+	t.Run("invalid --min-severity is rejected", func(t *testing.T) {
+		af := auditFlags{minSeveritySet: true}
+		_, _, err := resolveAuditFilters(af, &sharedFlags{minSeverity: "bogus"}, cfg)
+		if err == nil {
+			t.Fatal("expected error for invalid severity, got nil")
+		}
+	})
+}
 
 // selectAuditLLM is the only audit-internal seam users can change
 // behaviour through (the rest is delegated to pickAgents +
