@@ -1,3 +1,5 @@
+> Baseline: `MSH/docs/code-review.md` (org common rules). Below: local-review-specific rules.
+
 # Code Review Guidelines
 
 Best-in-class code review standards for `local-review`, synthesized from Google's Engineering Practices, *Software Engineering at Google*, Microsoft's Engineering Playbook, OWASP Top 10:2025, DORA / Cisco / SmartBear empirical research, and the canon of software-engineering literature.

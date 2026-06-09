@@ -5,6 +5,21 @@ These OVERRIDE default behavior — read them before acting.
 
 ---
 
+## Docs
+
+Project docs live in `docs/`. Each is a **delta** over the org-level baseline at
+`~/Projects/MSH/docs/` (the org files hold the common rules; the project files
+add only what's local-review-specific).
+
+- [docs/code-review.md](docs/code-review.md) — review standards (drives prompt packs + contributor process).
+- [docs/release.md](docs/release.md) — how releases ship.
+- [docs/developer.md](docs/developer.md) — toolchain, hard architecture constraints, danger zone, pre-push self-review.
+- [docs/testing.md](docs/testing.md) — test commands and known gaps.
+- [docs/security.md](docs/security.md) — secret scanning, untrusted repo config, symlink-escape, supply chain.
+- [docs/prompt-packs.md](docs/prompt-packs.md) — how prompt packs work.
+
+---
+
 ## Operating rules
 
 These apply to every task in this repo. They exist because each one has cost us a review round, an incident, or a rewrite.
