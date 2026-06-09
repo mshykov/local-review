@@ -202,6 +202,38 @@ func runAudit(ctx context.Context, sf *sharedFlags, af auditFlags) error {
 	if err != nil {
 		return err
 	}
+
+	// Apply the --min-severity / --max-findings filters (flag wins, else
+	// the matching review.* config key). These were advertised on `audit`
+	// but inert before v0.16.
+	cfg, cfgErr := loadConfig()
+	if cfgErr != nil {
+		return cfgErr
+	}
+	minSev := sf.minSeverity
+	if minSev == "" {
+		minSev = cfg.Review.MinSeverity
+	}
+	if minSev != "" {
+		switch strings.ToLower(minSev) {
+		case "nit", "info", "warning", "major", "critical":
+		default:
+			return fmt.Errorf("--min-severity %q is invalid (use nit|info|warning|major|critical)", minSev)
+		}
+	}
+	maxF := sf.maxFindings
+	if maxF == 0 {
+		maxF = cfg.Review.MaxFindings
+	}
+	rep, hidden := rep.Filtered(minSev, maxF)
+	if hidden > 0 {
+		word := "findings"
+		if hidden == 1 {
+			word = "finding"
+		}
+		fmt.Fprintf(os.Stderr, "Note: %d %s hidden by --min-severity/--max-findings (lower the floor or raise the cap to see them).\n", hidden, word)
+	}
+
 	rep.Root = "." // stamp the conceptual working-tree root onto the report
 	return emitAuditReport(sf, af, rep)
 }

@@ -97,8 +97,33 @@ if curl -fsSL "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
       exit 1
     fi
   else
-    echo "⚠️  no sha256sum / shasum binary found — skipping integrity check" >&2
-    echo "   install one of: coreutils (sha256sum) or perl (shasum) for tamper resistance" >&2
+    # Manifest IS present but no verifier binary exists. Pre-fix we warned
+    # and installed anyway — the exact silent-unverified-install posture
+    # the manifest-missing branch below was hardened (v0.10.3) to prevent.
+    # Apply the same three-way fail-closed resolution so a minimal
+    # container / CI image (no coreutils, no perl) can't silently skip the
+    # integrity check. cwd is already "$tmp" (set above), so the proceed
+    # arms just fall through to the extract.
+    if [ "${INSTALL_REVIEW_SKIP_VERIFICATION:-}" = "1" ]; then
+      echo "⚠️  no sha256sum / shasum binary found — skipping integrity check" >&2
+      echo "   (INSTALL_REVIEW_SKIP_VERIFICATION=1; install coreutils or perl for tamper resistance)" >&2
+    elif : </dev/tty >/dev/tty 2>/dev/null; then
+      echo "⚠️  no sha256sum / shasum binary found — checksum verification can't run" >&2
+      echo "   install coreutils (sha256sum) or perl (shasum) for tamper resistance." >&2
+      printf "Continue without integrity verification? [y/N] " >/dev/tty
+      if ! read -r answer </dev/tty; then
+        echo "Aborted (could not read response from /dev/tty)." >&2
+        exit 1
+      fi
+      case "$answer" in
+        y|Y|yes|YES|Yes) ;;
+        *) echo "Aborted." >&2; exit 1 ;;
+      esac
+    else
+      echo "❌ no sha256sum / shasum binary found — refusing to install without integrity verification" >&2
+      echo "   install coreutils (sha256sum) or perl (shasum), or re-run with INSTALL_REVIEW_SKIP_VERIFICATION=1 to bypass" >&2
+      exit 1
+    fi
   fi
 else
   # Manifest fetch failed. Pre-fix we always fell through to install-

@@ -486,6 +486,15 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	}
 	fmt.Println()
 
+	// If the user interrupted during the fan-out — the long phase where
+	// Ctrl+C is most likely — surface cancellation directly. Otherwise every
+	// invoker returns a context error and the downstream gate reports "all N
+	// LLM reviews failed", which misdiagnoses a user interrupt as an agent
+	// failure. Mirrors the post-probe handler above.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Sort results back to roster order before any downstream use.
 	// Display lines above already printed in completion order (the
 	// streaming UX); everything from here on (BuildMergeInput,

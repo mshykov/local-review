@@ -375,6 +375,60 @@ func TestRunOne_EmptyOutputCountsAsErrorNotClean(t *testing.T) {
 	}
 }
 
+// TestReportFiltered pins MIN-10: --min-severity drops sub-threshold
+// findings, --max-findings caps the total across packages in order, both
+// recompute aggregates, and the hidden count is reported (never silently
+// dropped). The source report is left untouched.
+func TestReportFiltered(t *testing.T) {
+	newBase := func() Report {
+		r := Report{
+			FindingsBySeverity: map[string]int{},
+			Packages: []PackageReport{
+				{Package: "a", Findings: []Finding{{Severity: "critical"}, {Severity: "warning"}, {Severity: "info"}}},
+				{Package: "b", Findings: []Finding{{Severity: "major"}, {Severity: "info"}}},
+			},
+		}
+		fillAggregates(&r)
+		return r
+	}
+
+	// No floor, no cap → unchanged.
+	if got, hidden := newBase().Filtered("", 0); hidden != 0 || got.TotalFindings != 5 {
+		t.Errorf("no-op: total=%d hidden=%d, want 5/0", got.TotalFindings, hidden)
+	}
+
+	// Floor = major → keep critical + major; drop warning + 2 info.
+	maj, hidden := newBase().Filtered("major", 0)
+	if maj.TotalFindings != 2 || hidden != 3 {
+		t.Errorf("min-severity major: total=%d hidden=%d, want 2/3", maj.TotalFindings, hidden)
+	}
+	if maj.FindingsBySeverity["critical"] != 1 || maj.FindingsBySeverity["major"] != 1 || maj.FindingsBySeverity["info"] != 0 {
+		t.Errorf("severity breakdown after floor wrong: %v", maj.FindingsBySeverity)
+	}
+
+	// Cap = 2 → keep the first 2 findings across packages in order.
+	capped, hidden := newBase().Filtered("", 2)
+	if capped.TotalFindings != 2 || hidden != 3 {
+		t.Errorf("max-findings 2: total=%d hidden=%d, want 2/3", capped.TotalFindings, hidden)
+	}
+
+	// nit floor keeps everything (audit emits no nit, rank 0).
+	if got, hidden := newBase().Filtered("nit", 0); got.TotalFindings != 5 || hidden != 0 {
+		t.Errorf("nit floor: total=%d hidden=%d, want 5/0", got.TotalFindings, hidden)
+	}
+
+	// Source report must be untouched by Filtered.
+	base := newBase()
+	_, _ = base.Filtered("critical", 1)
+	total := 0
+	for _, p := range base.Packages {
+		total += len(p.Findings)
+	}
+	if total != 5 {
+		t.Errorf("Filtered mutated the source report: base now has %d findings, want 5", total)
+	}
+}
+
 // TestRun_CanceledContextStopsAndErrors pins MIN-2: a canceled audit returns
 // a non-nil error so the caller exits non-zero, instead of emitting a
 // "completed" report whose unstarted chunks were silently skipped.

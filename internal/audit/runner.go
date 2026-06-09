@@ -359,6 +359,70 @@ func parseFindings(out string) []Finding {
 	return findings
 }
 
+// auditSeverityRank orders the audit severity tiers (audit has no nit —
+// see the audit packs). Higher = more severe. An unrecognized label ranks
+// 0, so it survives only when no --min-severity floor is set.
+func auditSeverityRank(sev string) int {
+	switch strings.ToLower(strings.TrimSpace(sev)) {
+	case "critical":
+		return 4
+	case "major":
+		return 3
+	case "warning":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Filtered returns a copy of the report keeping only findings at or above
+// minSeverity (when non-empty) and capping the total number of findings at
+// maxFindings (when > 0, across packages in report order). Aggregates are
+// recomputed on the filtered set. The second return is the number of
+// findings hidden, so the caller can disclose the truncation rather than
+// dropping it silently (CLAUDE.md rule 4). With no floor and no cap the
+// report is returned unchanged and hidden is 0.
+func (r Report) Filtered(minSeverity string, maxFindings int) (Report, int) {
+	minRank := auditSeverityRank(minSeverity)
+	hasFloor := strings.TrimSpace(minSeverity) != ""
+	if !hasFloor && maxFindings <= 0 {
+		return r, 0
+	}
+
+	out := r
+	out.FindingsBySeverity = map[string]int{}
+	out.TotalFindings = 0
+	out.PackagesWithFindings = 0
+	out.PackagesClean = 0
+	out.PackagesErrored = 0
+	out.TotalInputTokens = 0
+	out.TotalOutputTokens = 0
+	out.Packages = make([]PackageReport, len(r.Packages))
+
+	hidden, kept := 0, 0
+	for i, pr := range r.Packages {
+		np := pr
+		np.Findings = nil
+		for _, f := range pr.Findings {
+			if hasFloor && auditSeverityRank(f.Severity) < minRank {
+				hidden++
+				continue
+			}
+			if maxFindings > 0 && kept >= maxFindings {
+				hidden++
+				continue
+			}
+			np.Findings = append(np.Findings, f)
+			kept++
+		}
+		out.Packages[i] = np
+	}
+	fillAggregates(&out)
+	return out, hidden
+}
+
 // fillAggregates sums TotalFindings, FindingsBySeverity, the
 // per-package status counts, and total tokens across rep.Packages.
 // Called once at the end of Run; not exported.
