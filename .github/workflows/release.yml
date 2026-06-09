@@ -174,7 +174,7 @@ jobs:
 
           labels=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' || echo "")
 
-          # Bump labels follow strict semver — see docs/RELEASE_PROCESS.md
+          # Bump labels follow strict semver — see docs/release.md
           # "Label cheat sheet" for when each is appropriate. Quick reminder:
           #   major  = breaking changes (CLI flags removed, config schema rewrite)
           #   minor  = new user-visible feature (new pack, new command, new flag)
