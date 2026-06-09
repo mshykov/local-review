@@ -1,5 +1,3 @@
-> Baseline: `MSH/docs/deployment.md` (org common rules). Below: local-review release specifics.
-
 # Release process
 
 How `local-review` ships releases. Read this before merging anything you want tagged.

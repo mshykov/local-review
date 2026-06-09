@@ -1,9 +1,34 @@
-> Baseline: `MSH/docs/developer.md` (org common rules). Below: local-review-specific rules.
-
 # Developer
 
-local-review-specific engineering rules. The org baseline covers the general
-conventions; this file holds what's particular to this Go CLI.
+Engineering conventions for contributing to `local-review` — a single-binary Go
+CLI. Read this top to bottom before your first change.
+
+## General engineering principles
+
+These apply to every change, and they're what the project's own reviewer (and human
+reviewers) hold contributions to:
+
+- **Surgical changes only.** Touch only what the task requires — no drive-by
+  formatting, comment polish, or "while I'm here" refactors. Spotted something else
+  worth fixing? Surface it separately.
+- **Read before you write.** Before changing a shared helper, contract, or
+  user-visible string, grep **all** callers in the same pass — sibling code, doc
+  comments, README/CHANGELOG, prompt templates, tests. Cross-file drift is the most
+  common review finding here.
+- **Keep comments and doc strings current.** A comment describing behavior you just
+  changed is a bug — update it in the same edit. Comment the *why* (intent,
+  constraints, trade-offs), never restate the *what*. One-line doc comments on
+  exported symbols only.
+- **Fail loud, fail closed.** Refuse invalid input rather than silently passing it
+  through; check error / exit codes explicitly; `TrimSpace` before emptiness checks.
+  "Completed" is wrong if anything was skipped silently.
+- **Match the codebase's conventions even if you disagree.** Conformance > taste. If
+  a convention seems harmful, raise it in the PR — don't fork silently.
+- **Surface conflicts; don't average them.** When two patterns contradict, pick the
+  more recent / more tested one, explain why, and flag the other for cleanup.
+- **Writing a v2 next to a v1?** Enumerate v1's invariants explicitly and re-exercise
+  each in v2 — filters, caps, output formats, glob / edge behavior don't carry over
+  for free.
 
 ## Toolchain & basics
 
@@ -46,3 +71,12 @@ Address every `major` / `critical` finding before pushing. We eat our own dog
 food — if the tool produces noise on this codebase, that's a bug to file or fix.
 
 Skip the self-review **only** for pure docs / website / trivial-config changes.
+
+## Definition of done
+
+- Builds clean (`go build ./...`), `gofmt -s` + `go vet` clean, `go test -race ./...`
+  passes.
+- No secrets or personal data committed (see [security.md](security.md)).
+- Docs and comments updated in the same change as the behavior they describe.
+- If you skipped a test, deferred a check, or made an assumption — **say so** in the
+  PR description. "Done except X" beats "done" with a silent gap.
