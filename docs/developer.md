@@ -8,7 +8,7 @@ CLI. Read this top to bottom before your first change.
 These apply to every change, and they're what the project's own reviewer (and human
 reviewers) hold contributions to:
 
-- **Surgical changes only.** Touch only what the task requires — no drive-by
+- **Surgical changes only.** Touch what the task requires — no drive-by
   formatting, comment polish, or "while I'm here" refactors. Spotted something else
   worth fixing? Surface it separately.
 - **Read before you write.** Before changing a shared helper, contract, or

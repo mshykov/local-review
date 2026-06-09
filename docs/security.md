@@ -62,4 +62,5 @@ instructions:
 
 No vendor SDKs — raw HTTP only in `internal/llm/`, keeping the dependency surface (and
 thus supply-chain risk) minimal. See [developer.md](developer.md). Dependencies are
-kept current: Dependabot opens update PRs and `gitleaks` runs in CI on every push.
+kept current: Dependabot opens update PRs and `gitleaks` runs in CI on pull requests
+and pushes to `main`.
