@@ -30,12 +30,13 @@ import "context"
 // downstream knows or cares which backend produced the output.
 type Invoker interface {
 	// Review takes a system prompt (the resolved pack) and a diff,
-	// returns the model's review text plus token usage. The returned
-	// string is the format the system prompt asked for — markdown in
-	// multi-LLM mode (buildReviewPrompt appends a "markdown not JSON"
-	// override), JSON in the single-LLM JSON path (Resolve appends the
-	// findings schema when RequireJSON is set). The invoker doesn't
-	// know or care which; it just shuttles bytes.
+	// returns the model's review text plus token usage. The production
+	// review path asks for markdown (buildReviewPrompt appends a
+	// "markdown not JSON" override); a structured-JSON mode is reserved
+	// for the future (Resolve appends the findings schema only when
+	// ResolveOptions.RequireJSON is set, which no production caller does
+	// today). The invoker doesn't know or care which; it just shuttles
+	// bytes.
 	Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error)
 
 	// RunPrompt sends a raw prompt without wrapping it in a review

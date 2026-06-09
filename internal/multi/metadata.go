@@ -17,14 +17,13 @@ type Metadata struct {
 
 // ReviewMeta holds details about a single LLM's review.
 type ReviewMeta struct {
-	LLM           string `json:"llm"`
-	Version       string `json:"version"`
-	Mode          string `json:"mode"`   // "cli" or "api"
-	Status        string `json:"status"` // "success" or "failed"
-	DurationMs    int64  `json:"duration_ms"`
-	FindingsCount int    `json:"findings_count,omitempty"`
-	OutputFile    string `json:"output_file,omitempty"`
-	Error         string `json:"error,omitempty"`
+	LLM        string `json:"llm"`
+	Version    string `json:"version"`
+	Mode       string `json:"mode"`   // "cli" or "provider"
+	Status     string `json:"status"` // "success" or "failed"
+	DurationMs int64  `json:"duration_ms"`
+	OutputFile string `json:"output_file,omitempty"`
+	Error      string `json:"error,omitempty"`
 	// InputTokens / OutputTokens are prompt and response *size* in
 	// tokens — not billing numbers. Sourced from each CLI's
 	// structured output (claude / gemini JSON, codex stdout
@@ -55,12 +54,10 @@ type ReviewMeta struct {
 
 // MergeMeta holds details about the merge operation.
 type MergeMeta struct {
-	LLM                  string `json:"llm"`
-	Status               string `json:"status"`
-	FinalFindingsCount   int    `json:"final_findings_count,omitempty"`
-	DeduplicationRemoved int    `json:"deduplication_removed,omitempty"`
-	DurationMs           int64  `json:"duration_ms,omitempty"`
-	Error                string `json:"error,omitempty"`
+	LLM        string `json:"llm"`
+	Status     string `json:"status"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	Error      string `json:"error,omitempty"`
 	// InputTokens / OutputTokens for the merge step's own LLM call,
 	// same shape and semantics as ReviewMeta — prompt/response
 	// *size*, not billed amount. Aggregating across ReviewMeta +

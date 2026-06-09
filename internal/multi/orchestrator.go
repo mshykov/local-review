@@ -100,10 +100,18 @@ func (o *Orchestrator) RunParallel(ctx context.Context, systemPrompt, diff, comm
 // the point that the channel-send pattern was hard to see.
 func (o *Orchestrator) runOne(ctx context.Context, l cli.LLM, systemPrompt, diff, commit, branch string) ReviewResult {
 	start := time.Now()
+	// Mode reflects the backend kind, discriminated by BaseURL the same
+	// way NewInvoker dispatches: a provider agent (Ollama / vLLM / any
+	// OpenAI-compat HTTP endpoint) never spawns a CLI subprocess, so
+	// recording it as "cli" was simply wrong.
+	mode := "cli"
+	if l.BaseURL != "" {
+		mode = "provider"
+	}
 	result := ReviewResult{
 		LLM:     l.Name,
 		Version: l.Version,
-		Mode:    "cli", // TODO: pass mode from invoker once API fallback is implemented
+		Mode:    mode,
 	}
 
 	invoker := o.invokerFactory(l)
@@ -144,17 +152,6 @@ func (o *Orchestrator) runOne(ctx context.Context, l cli.LLM, systemPrompt, diff
 
 	result.FilePath = path
 	return result
-}
-
-// CountSuccessful returns the number of successful reviews (Error == nil); for framing decisions prefer CountWithOutput.
-func CountSuccessful(results []ReviewResult) int {
-	count := 0
-	for _, r := range results {
-		if r.Error == nil {
-			count++
-		}
-	}
-	return count
 }
 
 // CountWithOutput returns the number of reviews with non-blank Output (matches BuildMergeInput's filter).
@@ -276,15 +273,4 @@ func (g GateDecision) ClassifyZero() ZeroMergeableReason {
 	default:
 		return ZeroMergeableMixed
 	}
-}
-
-// GetSuccessful returns only successful review results.
-func GetSuccessful(results []ReviewResult) []ReviewResult {
-	var successful []ReviewResult
-	for _, r := range results {
-		if r.Error == nil {
-			successful = append(successful, r)
-		}
-	}
-	return successful
 }
