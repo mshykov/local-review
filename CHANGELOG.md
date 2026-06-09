@@ -7,18 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
+## [0.16.0] - 2026-06-09
 
-- **The repo-level `.local-review.yml` is now an untrusted config layer.** Because a `.local-review.yml` ships inside code you may be reviewing for the first time (a CI runner checking out a hostile commit, a fresh clone), the security-sensitive LLM fields it could carry are no longer honored from the repo layer by default: `cli_path` (the runner feeds it to `exec.LookPath` + `exec.CommandContext` → arbitrary binary execution), `base_url` (registers a provider agent that POSTs your diff — or, under `audit`, the whole tracked source tree — to that endpoint → silent exfiltration), and `api_key` (a credential committed into a repo). Each is stripped from the repo layer with a stderr warning naming what was dropped; non-sensitive fields (`prompts`, `review`, model/timeout/enabled) still apply. The user-home `~/.local-review.yml` is unaffected (it isn't writable by the code under review). A team that genuinely trusts a checked-in config (e.g. a standardised LAN Ollama `base_url`) opts back in with `LOCAL_REVIEW_TRUST_REPO_CONFIG=1`. This is the same trust boundary already drawn for `prompts.pack_dir`, extended to the execution / network / secret fields. (`config.sanitizeUntrustedLayer`; closes the two `major` findings from the v0.15.1 senior-engineer audit.)
+**Theme: close the senior-engineer audit's backlog.** A focused sweep of the confirmed findings from the v0.15.1 L6 audit: the untrusted-config security boundary, `audit`-path robustness brought to parity with the `review` path, the `--min-severity` / `--max-findings` flags finally doing what they advertise, plus v0.15 cleanup debt and supply-chain hardening.
+
+### Added
+
+- **`--min-severity` / `--max-findings` now actually filter the `audit` report.** Both flags were advertised on `audit` but inert (the single-LLM path that consumed them was removed in v0.15). `audit` now applies a severity floor (drops findings below the threshold) and/or a total cap (across packages in report order), resolved flag-first then `review.*` config. Hidden findings are disclosed on stderr — never silently dropped (CLAUDE.md rule 4) — and an invalid `--min-severity` is rejected up front. Implemented as a tested, pure `audit.Report.Filtered`. Help text corrected to "audit only" (bench never honored them). (MIN-10)
+
+### Changed
+
+- **`audit` honors Ctrl+C / SIGTERM.** Previously the worker pool kept dispatching every remaining chunk against an already-canceled context, recording each as "errored" and exiting 0 — a "completed" report that silently dropped the tail. The loop now short-circuits on cancellation and the run exits non-zero with an "audit canceled after N/M chunks" message, matching the review path. (MIN-2)
+- **`audit` no longer counts an empty LLM response as "clean."** A CLI that exits 0 with empty stdout (rate-limited / capacity-exhausted reply, empty `--output-last-message`) is now recorded as an error rather than folded into `PackagesClean`, which had overstated coverage. (MIN-4)
+- **Provider reviews record `mode: "provider"` in `metadata.json`** (was hardcoded `"cli"` for every agent, including HTTP/Ollama/vLLM providers that never spawn a subprocess). (MIN-5)
+- **Default `review.min_severity` / `review.max_findings` are now empty / `0`** (no implicit filter). The prior `"warning"` / `20` defaults were inert — nothing read them before v0.16 — and would otherwise have started silently filtering `audit` output.
 
 ### Fixed
 
 - **Provider auth-failure error no longer names the removed `LOCAL_REVIEW_API_KEY`.** A provider configured with `llms.<name>.api_key_env: FOO` but no key exported previously errored `export LOCAL_REVIEW_API_KEY=…` — a variable removed in v0.15 that the tool never reads — because the configured env-var name was dropped before the HTTP client was built (`cli.NewInvoker` passed `apiKeyEnv=""`). The name is now threaded through (`cli.LLM.APIKeyEnv` → `ProviderSpec.APIKeyEnv` → `provider.New`), so the error names the variable you actually configured; when none is set it points at `llms.<name>.api_key_env` rather than the dead default.
 - **Setting `base_url` on a CLI agent name no longer double-runs it.** `llms.claude.base_url: …` with the claude CLI installed previously produced both a CLI `claude` and a provider `claude` in the roster — two same-named agents that both ran and collided in the name-keyed ready/merge maps. `pickAgents` now drops the CLI twin so the provider entry wins (`dropCLITwins`).
+- **Mid-review Ctrl+C now reports cancellation, not "all N LLM reviews failed."** The fan-out re-checks `ctx.Err()` after the result drain, so a user interrupt during the long review phase surfaces as cancellation instead of a fabricated "all agents failed" diagnosis. (MIN-3)
+- **`init` wizard and `examples/.local-review.yml` stop defaulting `api_key_env` to the removed `LOCAL_REVIEW_API_KEY`** — generated configs now use a neutral `YOUR_PROVIDER_API_KEY` / `OPENAI_API_KEY` placeholder. (NIT-4)
+
+### Security
+
+- **The repo-level `.local-review.yml` is now an untrusted config layer.** Because a `.local-review.yml` ships inside code you may be reviewing for the first time (a CI runner checking out a hostile commit, a fresh clone), the security-sensitive LLM fields it could carry are no longer honored from the repo layer by default: `cli_path` (the runner feeds it to `exec.LookPath` + `exec.CommandContext` → arbitrary binary execution), `base_url` (registers a provider agent that POSTs your diff — or, under `audit`, the whole tracked source tree — to that endpoint → silent exfiltration), `api_key` (a credential committed into a repo), and `api_key_env` (redirects which env var is read as a credential). Each is stripped from the repo layer with a stderr warning naming what was dropped; non-sensitive fields (`prompts`, `review`, model/timeout/enabled) still apply. The user-home `~/.local-review.yml` is unaffected (it isn't writable by the code under review). A team that genuinely trusts a checked-in config (e.g. a standardised LAN Ollama `base_url`) opts back in with `LOCAL_REVIEW_TRUST_REPO_CONFIG=1`. This is the same trust boundary already drawn for `prompts.pack_dir`, extended to the execution / network / secret fields. (`config.sanitizeUntrustedLayer`; closes the two `major` findings from the v0.15.1 senior-engineer audit.)
+- **Homebrew formula SHAs are cross-verified against the release checksums manifest.** The `update-homebrew` job now downloads the release's own `checksums.txt` and verifies each tarball against it before recording the hash in the formula — making the build-time manifest the single integrity root for both the `install.sh` and Homebrew channels (previously the formula recorded the hash of whatever bytes the URL served at homebrew-update time). (MIN-12)
+- **`install.sh` fails closed when no `sha256sum` / `shasum` verifier is present.** Previously it warned and installed anyway; now it requires an explicit `INSTALL_REVIEW_SKIP_VERIFICATION=1` or an interactive acknowledgement, matching the already-hardened manifest-missing branch. Closes the silent-unverified-install gap on minimal container / CI images. (MIN-13)
 
 ### Internal
 
 - **Review exit-gate decision extracted into a pure, tested helper (`decideExitGate`).** The security-critical ordering — the per-LLM blocking scan must run even when the merged report is empty, so a merger timeout/rate-limit can't collapse an exit-2 (blocked) into an exit-1 (which pre-commit hooks let through) — was previously only testable through the full git/probe/orchestrator path. New `TestDecideExitGate` table-tests all four cases directly.
+- **Removed dead code and never-written schema fields.** Deleted the unused exported `CountSuccessful` / `GetSuccessful` (Error==nil remnants of the `CountWithOutput` migration) and the three `metadata.json` findings-count fields (`findings_count`, `final_findings_count`, `deduplication_removed`) that the markdown-only review path never populated. (MIN-6, MIN-7)
+- **Stale `Invoker.Review` docs** no longer describe the removed single-LLM JSON path as a live mode (`internal/agents`). (NIT-1)
+- **Config merge-coverage test** now seeds `dst` with the same key so it exercises `merge()`'s per-field overlay branch — the path where a dropped field silently no-ops in production — instead of only the wholesale-copy branch. (MIN-8)
+- **Audit-path test coverage:** new tests for cancellation, empty-output handling, parser-miss-as-clean, the severity/cap filter, and provider-vs-cli mode.
 
 ## [0.15.1] - 2026-05-29
 
