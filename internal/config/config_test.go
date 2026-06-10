@@ -781,7 +781,15 @@ func TestValidate_StrayModeFieldIsIgnored(t *testing.T) {
 // drift is caught the moment a new field lands.
 func TestMergeCoversAllExportedFields(t *testing.T) {
 	src := nonZeroConfig()
-	var dst Config
+	// Seed dst with a pre-existing entry under the SAME key ("claude") so
+	// merge() takes the per-field OVERLAY branch — the normal cascade
+	// (defaults populate every CLI LLM, then user YAML overlays an existing
+	// key), not the wholesale "new LLM, copy the struct" branch. The overlay
+	// branch is where a dropped field silently no-ops in production (the
+	// documented LLMConfig.Mode-drifted-inert footgun), so coverage must
+	// walk THAT branch. The entry starts zero-valued so every field has to
+	// be copied in by an explicit overlay line.
+	dst := Config{LLMs: map[string]LLMConfig{"claude": {}}}
 	merge(&dst, src)
 
 	missing := findZeroFields(reflect.ValueOf(dst), "")
