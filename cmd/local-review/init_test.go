@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,6 +15,21 @@ import (
 // unmarshalYAML wraps yaml.Unmarshal so the round-trip test reads
 // naturally without an extra import everywhere.
 func unmarshalYAML(b []byte, v any) error { return yaml.Unmarshal(b, v) }
+
+// presetMenuChoice returns the 1-based menu number for the preset with
+// the given presetName, derived from providerPresets so tests don't break
+// when the menu is reordered or new providers are inserted (CLAUDE.md rule
+// 9: encode the invariant — "pick the Ollama preset" — not a magic number).
+func presetMenuChoice(t *testing.T, name string) string {
+	t.Helper()
+	for i, p := range providerPresets {
+		if p.presetName == name {
+			return strconv.Itoa(i + 1)
+		}
+	}
+	t.Fatalf("no provider preset named %q", name)
+	return ""
+}
 
 // runInitTo runs the wizard with the given keystrokes, writing to a
 // temp-dir target file. Returns stdout, the file content (empty if no
@@ -74,9 +90,8 @@ func TestInit_AnthropicPreset(t *testing.T) {
 }
 
 func TestInit_OllamaSkipsAPIKeyEnv(t *testing.T) {
-	// Choice 5 = Ollama (preset list: OpenAI, Anthropic, Mistral, DeepSeek, Ollama, Other).
-	// Then accept defaults, confirm write.
-	input := "5\n\n\n\ny\n"
+	// Pick the Ollama preset (no API key), accept defaults, confirm write.
+	input := presetMenuChoice(t, "ollama") + "\n\n\n\ny\n"
 	stdout, content, _, err := runInitTo(t, input, false)
 	if err != nil {
 		t.Fatalf("init failed: %v\nstdout:\n%s", err, stdout)
@@ -93,9 +108,10 @@ func TestInit_OllamaSkipsAPIKeyEnv(t *testing.T) {
 }
 
 func TestInit_CustomProviderRePromptsForBaseURL(t *testing.T) {
-	// Choice 6 = Other; first base URL blank (re-prompt), then valid URL.
-	// Then accept default model, env var, severity, max-findings, confirm.
-	input := "6\n\nhttps://my-llm.example.com/v1\n\n\n\n\ny\n"
+	// Pick the "Other" (custom) preset; first base URL blank (re-prompt),
+	// then valid URL. Then accept default model, env var, severity,
+	// max-findings, confirm.
+	input := presetMenuChoice(t, "provider") + "\n\nhttps://my-llm.example.com/v1\n\n\n\n\ny\n"
 	stdout, content, _, err := runInitTo(t, input, false)
 	if err != nil {
 		t.Fatalf("expected re-prompt to recover, got: %v\nstdout:\n%s", err, stdout)
@@ -109,8 +125,9 @@ func TestInit_CustomProviderRePromptsForBaseURL(t *testing.T) {
 }
 
 func TestInit_CustomProviderGivesUpOnRepeatedBlankBaseURL(t *testing.T) {
-	// Choice 6 = Other. Five blank answers in a row should give up gracefully.
-	input := "6\n" + strings.Repeat("\n", 6)
+	// Pick the "Other" (custom) preset. Five blank answers in a row should
+	// give up gracefully.
+	input := presetMenuChoice(t, "provider") + "\n" + strings.Repeat("\n", 6)
 	_, _, _, err := runInitTo(t, input, false)
 	if err == nil || !strings.Contains(err.Error(), "too many empty answers") {
 		t.Errorf("expected give-up error after max empty answers, got: %v", err)
