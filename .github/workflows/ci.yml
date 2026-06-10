@@ -46,3 +46,10 @@ jobs:
         run: go test -race -count=1 ./...
       - name: Build
         run: go build -o /tmp/local-review ./cmd/local-review
+      - name: E2E
+        # End-to-end: builds the real binary and drives it (staged / version /
+        # doctor) against an in-process fake OpenAI-compatible LLM — no real
+        # LLM, no network, fully deterministic. Behind the `e2e` build tag so
+        # the `go test -race ./...` step above stays fast and hermetic. Runs
+        # on every push/PR, so it also gates the release PR.
+        run: go test -tags e2e -count=1 ./e2e/...
