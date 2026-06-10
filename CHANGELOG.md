@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-06-10
+
+**Theme: more providers, and proof the binary works.** Popular OpenAI-compatible providers are now one wizard-pick away, and a new end-to-end suite drives the real binary against a fake LLM on every push — so each release ships with an automated CLI smoke.
+
+### Added
+
+- **Provider presets for Kimi (Moonshot), Groq, OpenRouter, and Qwen (Alibaba DashScope)** in `local-review init`. The provider-agent model already accepted any OpenAI-compatible endpoint via `llms.<name>.base_url`, but these popular targets weren't discoverable in the wizard. Each preset ships an accurate `base_url` + `api_key_env` + a note flagging region / model-id caveats. (`local-review init` now offers OpenAI / Anthropic / Mistral / DeepSeek / Kimi / Groq / OpenRouter / Qwen / Ollama / Other.) Note: "Claude Opus" is not a separate provider — it's a model of the existing claude CLI (`--claude-model` / `llms.claude.model`). README provider lists updated to mention Kimi / Qwen.
+- **End-to-end test harness (`e2e/`, behind the `e2e` build tag).** Builds the real binary and drives it (`staged` / `version` / `doctor`) as a subprocess against an in-process fake OpenAI-compatible LLM, asserting CLI output + exit code — no real LLM, no network, fully deterministic. Possible because the provider-agent model treats any OpenAI-compatible endpoint as a real agent, so the whole pipeline (config → detect → probe → review → merge → exit gate) runs for real. Hermetic by construction: an empty `$HOME` + minimal env neutralizes every real CLI agent, and `--only fake` pins the active set. Wired into `ci.yml` (every push/PR, so it also gates the release PR) and documented in [docs/testing.md](docs/testing.md). Covers blocking-review → exit 2, clean-review → exit 0, `version`, and `doctor`. Run locally: `go test -tags e2e ./e2e/...`.
+
+### Fixed
+
+- **Landed the MIN-8 merge-overlay test that missed the v0.16.0 commit.** v0.16.0's CHANGELOG claimed `TestMergeCoversAllExportedFields` exercised `merge()`'s per-field overlay branch, but the test change was left unstaged in that release — `main` still seeded an empty `dst` and only walked the wholesale-copy branch. The intended change (seed `dst` with a same-key entry) is now in.
+
+### Internal
+
+- **`init` tests pick presets by name (`presetMenuChoice`) instead of hardcoded menu numbers**, so adding or reordering providers can't silently break them (CLAUDE.md rule 9).
+- **Sonar copy-paste detection excluded for `cmd/local-review/init.go`** — it's a declarative provider-preset table where near-identical struct literals are the intended shape, not duplication debt.
+
 ## [0.16.0] - 2026-06-09
 
 **Theme: close the senior-engineer audit's backlog.** A focused sweep of the confirmed findings from the v0.15.1 L6 audit: the untrusted-config security boundary, `audit`-path robustness brought to parity with the `review` path, the `--min-severity` / `--max-findings` flags finally doing what they advertise, plus v0.15 cleanup debt and supply-chain hardening.
