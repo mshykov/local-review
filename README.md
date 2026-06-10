@@ -89,7 +89,7 @@ claude login
 
 Or use Codex (ChatGPT Plus / OpenAI API), Copilot (GitHub Copilot subscription), or Gemini (free key — *sunset 2026-06-18; v0.15+ auto-disables in the fan-out on/after the cutoff*). Any combination works — every authenticated CLI joins the review automatically. `local-review doctor` shows the state.
 
-**Want a local-only or hybrid setup?** Add a provider entry under `llms.<name>:` with a `base_url:` pointing at any OpenAI-compatible endpoint (Ollama / vLLM / OpenAI / Anthropic / Mistral / DeepSeek / Together / Groq / OpenRouter). It runs alongside the CLI agents in the same fan-out — no separate config path:
+**Want a local-only or hybrid setup?** Add a provider entry under `llms.<name>:` with a `base_url:` pointing at any OpenAI-compatible endpoint (Ollama / vLLM / OpenAI / Anthropic / Mistral / DeepSeek / Kimi / Qwen / Together / Groq / OpenRouter). It runs alongside the CLI agents in the same fan-out — no separate config path:
 
 ```yaml
 # Append to ~/.local-review.yml — Ollama as one more agent
@@ -363,7 +363,7 @@ review:
   max_findings: 20
 ```
 
-Any entry under `llms:` with a `base_url:` becomes a **provider agent** — an OpenAI-compatible HTTP endpoint (Ollama, vLLM, OpenAI, Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter). Provider agents run side-by-side with the CLI agents (`claude`, `codex`, `gemini`, `copilot`) in the same `local-review review` fan-out — no separate single-LLM-fallback path.
+Any entry under `llms:` with a `base_url:` becomes a **provider agent** — an OpenAI-compatible HTTP endpoint (Ollama, vLLM, OpenAI, Anthropic, Mistral, DeepSeek, Kimi, Qwen, Together, Groq, OpenRouter). Provider agents run side-by-side with the CLI agents (`claude`, `codex`, `gemini`, `copilot`) in the same `local-review review` fan-out — no separate single-LLM-fallback path.
 
 > **Removed in v0.15:** the top-level `provider:` block (the v0 single-LLM-fallback mode). Loading a YAML file that still carries a `provider:` key now surfaces a migration error pointing at this shape. The migration is a verbatim field-rename — `provider.base_url` → `llms.<your-name>.base_url`, same for `model` / `api_key_env`. (Deprecated in v0.14, removed in v0.15; the CHANGELOG carries the full migration snippet.)
 
