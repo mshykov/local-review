@@ -290,64 +290,6 @@ func TestResolve_AcceptsValidLanguageIDs(t *testing.T) {
 	}
 }
 
-func TestPathInsideDir(t *testing.T) {
-	// Build OS-native paths via filepath.Join + a temp-dir base so
-	// the test passes on Windows too — codex flagged the prior
-	// hardcoded `/a` paths as Unix-only. The temp-dir base is
-	// real (so filepath.Clean has something canonical to work
-	// with) but doesn't need to contain real files; pathInsideDir
-	// is a pure lexical check.
-	base := t.TempDir()
-	cases := []struct {
-		dir, path string
-		want      bool
-	}{
-		{base, filepath.Join(base, "b.md"), true},
-		{base, filepath.Join(base, "sub", "b.md"), true},
-		{base, base, true},
-		{base, filepath.Join(base, "..", "b.md"), false},         // walks out via ..
-		{base, filepath.Join(filepath.Dir(base), "b.md"), false}, // sibling-of-base, outside
-	}
-	for _, tc := range cases {
-		if got := pathInsideDir(tc.path, tc.dir); got != tc.want {
-			t.Errorf("pathInsideDir(%q, %q) = %v, want %v", tc.path, tc.dir, got, tc.want)
-		}
-	}
-}
-
-// TestPathInsideDir_RejectsSymlinkEscape pins the security fix: a path that
-// is lexically inside the pack dir but resolves (via symlink) OUTSIDE it
-// must be rejected. A lexical-only check admitted `pack_dir/go.md ->
-// /etc/passwd`, which os.ReadFile then leaked into the LLM prompt.
-func TestPathInsideDir_RejectsSymlinkEscape(t *testing.T) {
-	base := t.TempDir()
-	outside := t.TempDir()
-	secret := filepath.Join(outside, "secret.md")
-	if err := os.WriteFile(secret, []byte("TOP SECRET"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	escape := filepath.Join(base, "go.md")
-	if err := os.Symlink(secret, escape); err != nil {
-		t.Skipf("symlinks unavailable on this platform: %v", err)
-	}
-	if pathInsideDir(escape, base) {
-		t.Error("pathInsideDir admitted a symlink escaping the pack dir — arbitrary-file-disclosure vector")
-	}
-
-	// A symlink that stays inside the dir is legitimate and must pass.
-	target := filepath.Join(base, "real.md")
-	if err := os.WriteFile(target, []byte("ok"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	inner := filepath.Join(base, "py.md")
-	if err := os.Symlink(target, inner); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	if !pathInsideDir(inner, base) {
-		t.Error("pathInsideDir wrongly rejected a symlink that stays inside the pack dir")
-	}
-}
-
 // TestResolve_SymlinkOverrideDoesNotLeak is the end-to-end proof: an
 // override file that is a symlink to an out-of-tree file is NOT read into
 // the prompt; Resolve falls through to the embedded pack.

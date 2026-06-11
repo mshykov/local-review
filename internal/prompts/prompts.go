@@ -22,6 +22,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/mshykov/local-review/internal/pathsafe"
 )
 
 //go:embed packs/*.md audit/*.md
@@ -274,7 +276,7 @@ func readOverride(packDir, language string) (string, string, bool) {
 	// under packDir. Catches any future caller that constructs a
 	// path outside the validation gate, and any edge case the
 	// regex misses (e.g., a future encoding shift on Windows).
-	if !pathInsideDir(path, packDir) {
+	if !pathsafe.InsideDir(path, packDir) {
 		return "", "", false
 	}
 
@@ -292,82 +294,6 @@ func readOverride(packDir, language string) (string, string, bool) {
 		abs = path
 	}
 	return string(b), abs, true
-}
-
-// pathInsideDir returns true when filePath sits inside dir, AFTER
-// resolving symlinks. Second line of defence against path traversal
-// (validateLanguageID is the primary gate); this is the
-// "what if the gate ever leaks?" check.
-//
-// SECURITY: this MUST resolve symlinks. pack_dir is a "non-sensitive"
-// field that merges from an UNTRUSTED repo `.local-review.yml`, and
-// readOverride opens `pack_dir/<lang>.md` with os.ReadFile (which
-// follows symlinks). A lexical-only check admitted a symlink escape:
-// an attacker committing `pack_dir/go.md -> /etc/passwd` passed the
-// `rel == "go.md"` test, then os.ReadFile leaked the target into the
-// LLM prompt. We mirror internal/config.pathInsideDir's v0.10.5
-// hardening: lexical check first (fast `..` reject), then EvalSymlinks
-// on both sides with a deepest-existing-ancestor walk-up, fail-closed
-// on resolve errors. (Re-implemented rather than imported to keep this
-// package free of a dependency on internal/config.)
-//
-// Future hardening: on Go 1.24+, replace the check-then-open pattern
-// with os.Root / os.OpenInRoot, which closes the residual TOCTOU race
-// any check-then-open approach inherently has.
-func pathInsideDir(filePath, dir string) bool {
-	cleanedDir := filepath.Clean(dir)
-	cleanedPath := filepath.Clean(filePath)
-
-	// Lexical containment first — cheap, fails fast on `..` escapes.
-	rel, err := filepath.Rel(cleanedDir, cleanedPath)
-	if err != nil {
-		return false
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-
-	// Symlink resolution second — catches the lexically-inside-but-
-	// symlinks-out case (pack_dir/go.md -> /etc/passwd, or a symlinked
-	// pack_dir component). Resolve baseDir; fail closed if it can't be
-	// resolved (don't admit on the weaker lexical pass alone).
-	resolvedDir, derr := filepath.EvalSymlinks(cleanedDir)
-	if derr != nil {
-		return false
-	}
-	resolvedAncestor := deepestExistingAncestor(cleanedPath)
-	if resolvedAncestor == "" {
-		return false
-	}
-	relReal, err := filepath.Rel(resolvedDir, resolvedAncestor)
-	if err != nil {
-		return false
-	}
-	if relReal == ".." || strings.HasPrefix(relReal, ".."+string(filepath.Separator)) {
-		return false
-	}
-	return true
-}
-
-// deepestExistingAncestor returns the EvalSymlinks-resolved real path
-// of the deepest existing prefix of path, walking up via filepath.Dir
-// until EvalSymlinks succeeds. This closes the missing-leaf bypass
-// (a non-existent leaf hiding a parent that already resolves outside
-// the base). Returns "" only when even the root fails to resolve —
-// the caller treats that as fail-closed.
-func deepestExistingAncestor(path string) string {
-	cur := path
-	for {
-		resolved, err := filepath.EvalSymlinks(cur)
-		if err == nil {
-			return resolved
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return ""
-		}
-		cur = parent
-	}
 }
 
 // Available returns the language ids that have dedicated packs.
