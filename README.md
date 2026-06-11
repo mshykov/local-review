@@ -14,6 +14,7 @@
   <a href="https://github.com/mshykov/local-review/releases"><img src="https://img.shields.io/github/v/release/mshykov/local-review?style=flat-square" alt="Release"></a>
   <a href="https://github.com/mshykov/local-review/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
   <a href="https://github.com/mshykov/local-review/stargazers"><img src="https://img.shields.io/github/stars/mshykov/local-review?style=flat-square" alt="Stars"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=mshykov_local-review"><img src="https://sonarcloud.io/api/project_badges/measure?project=mshykov_local-review&metric=alert_status" alt="Quality Gate Status"></a>
 </p>
 
 <p align="center">
