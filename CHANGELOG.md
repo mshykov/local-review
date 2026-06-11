@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-06-11
+
+**Security patch.** Closes a `major` finding surfaced by the tool's own `audit --topic security`, plus a v0.16.0 regression that mislabeled the user's home config as untrusted.
+
+### Security
+
+- **Fixed arbitrary-file disclosure via a symlinked prompt-pack override (`major`).** `internal/prompts` had its *own* `pathInsideDir` that was lexical-only — the symlink-escape hardening that landed in `internal/config` (v0.10.5) was never mirrored here. Since `prompts.pack_dir` is a "non-sensitive" field that merges from an **untrusted** repo `.local-review.yml`, an attacker could commit `pack_dir/<lang>.md` as a symlink to e.g. `/etc/passwd`; the lexical check passed (`rel == "go.md"`) and `os.ReadFile` followed the symlink, leaking arbitrary user-readable files into the LLM prompt. `prompts.pathInsideDir` now resolves symlinks (`EvalSymlinks` + deepest-existing-ancestor walk-up, fail-closed), with an end-to-end regression test proving an escaping symlink override is not read.
+- **Defense-in-depth base_url scheme validation.** `provider.Probe` and `llm.Client.Complete` now reject a non-`http(s)` `base_url` (`file://`, `gopher://`, …) before issuing any request — `Complete` is the actual sink the diff is POSTed to, and `--no-preflight` skips the probe.
+
+### Fixed
+
+- **The home config is no longer mislabeled as an untrusted repo layer.** When the project lives under `$HOME` with no project-local config, `FindRepoConfig` walks up and returns the same file as `~/.local-review.yml`; v0.16.0 then re-ran that trusted file through the untrusted pass, printing an alarming "ignoring security-sensitive field(s) … untrusted by default" warning about the user's own `base_url`/`api_key_env`. (The values still worked — the trusted pass set them first — but the warning was wrong and confusing.) `Load` now skips the untrusted pass when the repo-config path is the same file as the home config (`os.SameFile`).
+
 ## [0.17.0] - 2026-06-10
 
 **Theme: more providers, and proof the binary works.** Popular OpenAI-compatible providers are now one wizard-pick away, and a new end-to-end suite drives the real binary against a fake LLM on every push — so each release ships with an automated CLI smoke.
