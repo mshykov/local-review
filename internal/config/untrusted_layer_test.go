@@ -1,10 +1,93 @@
 package config
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// captureStderr redirects os.Stderr for the duration of fn and returns
+// what was written. Config tests aren't parallel, so the global swap is safe.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	fn()
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
+func TestSameFile(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.yml")
+	b := filepath.Join(dir, "b.yml")
+	for _, p := range []string{a, b} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !sameFile(a, a) {
+		t.Error("identical path must be the same file")
+	}
+	if sameFile(a, b) {
+		t.Error("distinct files must not be the same")
+	}
+	if sameFile(a, filepath.Join(dir, "missing.yml")) {
+		t.Error("a missing file is not the same")
+	}
+	if sameFile("", a) || sameFile(a, "") {
+		t.Error("empty path is never the same")
+	}
+	// A different path (symlink) to the same file IS the same file.
+	link := filepath.Join(dir, "link.yml")
+	if err := os.Symlink(a, link); err == nil {
+		if !sameFile(a, link) {
+			t.Error("a symlink to the same file must be detected as same")
+		}
+	}
+}
+
+// TestLoad_HomeConfigNotReprocessedAsUntrusted pins the v0.16.0 regression
+// fix: when the project lives under $HOME with no project-local config,
+// FindRepoConfig returns the same file as ~/.local-review.yml. That file is
+// the trusted home config and must NOT be re-run through the untrusted repo
+// layer (which would strip base_url/api_key_env and warn about the user's
+// own file).
+func TestLoad_HomeConfigNotReprocessedAsUntrusted(t *testing.T) {
+	home := isolateHome(t)
+	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "")
+	homeCfg := filepath.Join(home, ".local-review.yml")
+	if err := os.WriteFile(homeCfg, []byte(`
+llms:
+  ollama:
+    base_url: http://192.0.2.10:11434/v1
+    model: qwen
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate project-under-$HOME: repoConfigPath == the home config path.
+	stderr := captureStderr(t, func() {
+		cfg, err := Load(homeCfg)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := cfg.LLMs["ollama"].BaseURL; got != "http://192.0.2.10:11434/v1" {
+			t.Errorf("home base_url must survive untouched, got %q", got)
+		}
+	})
+	if strings.Contains(stderr, "ignoring security-sensitive") {
+		t.Errorf("the user's own home config was wrongly treated as an untrusted repo layer:\n%s", stderr)
+	}
+}
 
 // The repo-level .local-review.yml is attacker-controllable when you
 // review code you didn't write. These tests pin the trust boundary:

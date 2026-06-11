@@ -228,8 +228,10 @@ func Load(repoConfigPath string) (Config, error) {
 
 	// User config (~/.local-review.yml) — trusted: it lives in the
 	// invoking user's home, not in a repo someone else can write to.
+	var homeConfigPath string
 	if home, err := os.UserHomeDir(); err == nil {
-		if err := mergeFrom(&cfg, filepath.Join(home, ".local-review.yml"), true); err != nil {
+		homeConfigPath = filepath.Join(home, ".local-review.yml")
+		if err := mergeFrom(&cfg, homeConfigPath, true); err != nil {
 			return cfg, fmt.Errorf("load user config: %w", err)
 		}
 	}
@@ -244,7 +246,15 @@ func Load(repoConfigPath string) (Config, error) {
 	// same defence resolveRelativePaths already gives prompts.pack_dir.
 	// A team that genuinely wants to check in a trusted config (e.g. a LAN
 	// Ollama base_url) opts back in with LOCAL_REVIEW_TRUST_REPO_CONFIG=1.
-	if repoConfigPath != "" {
+	//
+	// BUT: when the project lives under $HOME and has no project-local
+	// config, FindRepoConfig walks up and returns the SAME file as the home
+	// config loaded above. Re-processing the user's own ~/.local-review.yml
+	// as the untrusted repo layer would spuriously strip its base_url /
+	// api_key_env and print an alarming "untrusted config" warning about the
+	// user's own trusted file (a v0.16.0 regression). A file that IS the
+	// home config is trusted — skip the redundant untrusted pass.
+	if repoConfigPath != "" && !sameFile(repoConfigPath, homeConfigPath) {
 		trusted := os.Getenv(envTrustRepoConfig) == "1"
 		if err := mergeFrom(&cfg, repoConfigPath, trusted); err != nil {
 			return cfg, fmt.Errorf("load repo config (%s): %w", repoConfigPath, err)
@@ -313,6 +323,26 @@ func FindRepoConfig(start string) string {
 // (cli_path / base_url / api_key) that are otherwise stripped from the
 // untrusted repo layer. See Load and sanitizeUntrustedLayer.
 const envTrustRepoConfig = "LOCAL_REVIEW_TRUST_REPO_CONFIG"
+
+// sameFile reports whether two paths refer to the same file on disk,
+// robust to relative-vs-absolute and symlink differences (os.SameFile
+// compares device+inode). Returns false if either path is empty or
+// doesn't exist — callers treat "not the same" as the safe default
+// (the repo layer is then processed as untrusted).
+func sameFile(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(fa, fb)
+}
 
 // mergeFrom reads YAML from path (if it exists) and shallow-merges
 // non-zero fields into dst. Missing files are not an error. When
