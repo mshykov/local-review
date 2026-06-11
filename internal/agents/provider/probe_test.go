@@ -25,6 +25,16 @@ func TestProbe_OK(t *testing.T) {
 	}
 }
 
+// Defense-in-depth: a non-http(s) base_url must be rejected before any
+// request is built — never hand file:// / gopher:// to the HTTP client.
+func TestProbe_RejectsNonHTTPScheme(t *testing.T) {
+	for _, bad := range []string{"file:///etc/passwd", "gopher://host/1", "ftp://host", "/etc/passwd", "host:1234/v1"} {
+		if err := Probe(context.Background(), bad, "", time.Second); err == nil {
+			t.Errorf("Probe(%q) = nil, want scheme-validation error", bad)
+		}
+	}
+}
+
 // With an API key configured, the probe must send Authorization.
 // Local Ollama doesn't care, but cloud providers reject without it.
 func TestProbe_SendsAuthorizationWhenKeyProvided(t *testing.T) {

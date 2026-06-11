@@ -315,6 +315,65 @@ func TestPathInsideDir(t *testing.T) {
 	}
 }
 
+// TestPathInsideDir_RejectsSymlinkEscape pins the security fix: a path that
+// is lexically inside the pack dir but resolves (via symlink) OUTSIDE it
+// must be rejected. A lexical-only check admitted `pack_dir/go.md ->
+// /etc/passwd`, which os.ReadFile then leaked into the LLM prompt.
+func TestPathInsideDir_RejectsSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.md")
+	if err := os.WriteFile(secret, []byte("TOP SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escape := filepath.Join(base, "go.md")
+	if err := os.Symlink(secret, escape); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	if pathInsideDir(escape, base) {
+		t.Error("pathInsideDir admitted a symlink escaping the pack dir — arbitrary-file-disclosure vector")
+	}
+
+	// A symlink that stays inside the dir is legitimate and must pass.
+	target := filepath.Join(base, "real.md")
+	if err := os.WriteFile(target, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inner := filepath.Join(base, "py.md")
+	if err := os.Symlink(target, inner); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if !pathInsideDir(inner, base) {
+		t.Error("pathInsideDir wrongly rejected a symlink that stays inside the pack dir")
+	}
+}
+
+// TestResolve_SymlinkOverrideDoesNotLeak is the end-to-end proof: an
+// override file that is a symlink to an out-of-tree file is NOT read into
+// the prompt; Resolve falls through to the embedded pack.
+func TestResolve_SymlinkOverrideDoesNotLeak(t *testing.T) {
+	base := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "passwd")
+	const sentinel = "SENTINEL-SECRET-MUST-NOT-LEAK"
+	if err := os.WriteFile(secret, []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(base, "go.md")); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	got, err := Resolve("go", ResolveOptions{PackDir: base})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if strings.Contains(got.Content, sentinel) {
+		t.Fatal("symlink override leaked an out-of-tree file into the prompt")
+	}
+	if got.Source != "embedded" {
+		t.Errorf("escaping symlink override must fall through to embedded; Source = %q", got.Source)
+	}
+}
+
 func TestResolve_PackDirRejectsNonExistent(t *testing.T) {
 	// Resolve does NOT error on a missing PackDir — that's
 	// surfaced by `local-review doctor` instead. The resolver's

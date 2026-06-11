@@ -200,6 +200,13 @@ type response struct {
 // providers respect this; for those that don't, the system prompt
 // should still steer the model to JSON.
 func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (string, Usage, error) {
+	// Scheme guard at the actual exfil sink: Complete POSTs the diff (or,
+	// under audit, the source) to BaseURL. The pre-flight probe checks
+	// this too, but --no-preflight skips the probe, so validate here as
+	// well — a non-http(s) base_url must never reach the HTTP client.
+	if !strings.HasPrefix(c.BaseURL, "http://") && !strings.HasPrefix(c.BaseURL, "https://") {
+		return "", Usage{}, fmt.Errorf("invalid base_url %q: must start with http:// or https://", c.BaseURL)
+	}
 	if c.APIKey == "" && !isLocalURL(c.BaseURL) {
 		// Local-review init's "Ollama" preset writes a config with no
 		// api_key_env line because Ollama doesn't authenticate. A blank

@@ -30,6 +30,15 @@ func Probe(ctx context.Context, baseURL, apiKey string, timeout time.Duration) e
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+	// Defense-in-depth scheme check. Config loading sanitizes an
+	// untrusted base_url (strips it from the repo layer), but validate
+	// here too so a misconfigured or trusted-but-typo'd endpoint
+	// (file://, gopher://, …) fails with a clear error instead of being
+	// handed to the HTTP client — the provider client POSTs the diff to
+	// this endpoint, so the scheme is security-relevant.
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		return fmt.Errorf("invalid base_url %q: must start with http:// or https://", baseURL)
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
