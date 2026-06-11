@@ -290,28 +290,29 @@ func TestResolve_AcceptsValidLanguageIDs(t *testing.T) {
 	}
 }
 
-func TestPathInsideDir(t *testing.T) {
-	// Build OS-native paths via filepath.Join + a temp-dir base so
-	// the test passes on Windows too — codex flagged the prior
-	// hardcoded `/a` paths as Unix-only. The temp-dir base is
-	// real (so filepath.Clean has something canonical to work
-	// with) but doesn't need to contain real files; pathInsideDir
-	// is a pure lexical check.
+// TestResolve_SymlinkOverrideDoesNotLeak is the end-to-end proof: an
+// override file that is a symlink to an out-of-tree file is NOT read into
+// the prompt; Resolve falls through to the embedded pack.
+func TestResolve_SymlinkOverrideDoesNotLeak(t *testing.T) {
 	base := t.TempDir()
-	cases := []struct {
-		dir, path string
-		want      bool
-	}{
-		{base, filepath.Join(base, "b.md"), true},
-		{base, filepath.Join(base, "sub", "b.md"), true},
-		{base, base, true},
-		{base, filepath.Join(base, "..", "b.md"), false},         // walks out via ..
-		{base, filepath.Join(filepath.Dir(base), "b.md"), false}, // sibling-of-base, outside
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "passwd")
+	const sentinel = "SENTINEL-SECRET-MUST-NOT-LEAK"
+	if err := os.WriteFile(secret, []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		if got := pathInsideDir(tc.path, tc.dir); got != tc.want {
-			t.Errorf("pathInsideDir(%q, %q) = %v, want %v", tc.path, tc.dir, got, tc.want)
-		}
+	if err := os.Symlink(secret, filepath.Join(base, "go.md")); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+	got, err := Resolve("go", ResolveOptions{PackDir: base})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if strings.Contains(got.Content, sentinel) {
+		t.Fatal("symlink override leaked an out-of-tree file into the prompt")
+	}
+	if got.Source != "embedded" {
+		t.Errorf("escaping symlink override must fall through to embedded; Source = %q", got.Source)
 	}
 }
 

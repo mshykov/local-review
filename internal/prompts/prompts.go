@@ -22,6 +22,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/mshykov/local-review/internal/pathsafe"
 )
 
 //go:embed packs/*.md audit/*.md
@@ -274,7 +276,7 @@ func readOverride(packDir, language string) (string, string, bool) {
 	// under packDir. Catches any future caller that constructs a
 	// path outside the validation gate, and any edge case the
 	// regex misses (e.g., a future encoding shift on Windows).
-	if !pathInsideDir(path, packDir) {
+	if !pathsafe.InsideDir(path, packDir) {
 		return "", "", false
 	}
 
@@ -292,32 +294,6 @@ func readOverride(packDir, language string) (string, string, bool) {
 		abs = path
 	}
 	return string(b), abs, true
-}
-
-// pathInsideDir returns true when filePath, after cleaning, sits
-// inside dir. Used as the second line of defence against path
-// traversal: validateLanguageID is the primary gate, this is the
-// "what if the gate ever leaks?" check. Both paths are cleaned
-// (Lexically resolved); we deliberately don't follow symlinks
-// here — symlinks inside a controlled pack_dir are typically
-// legitimate (e.g., shared org-wide override repo mounted in).
-//
-// Future hardening: when the project moves to Go 1.24+, replace
-// the lexical Rel-based check with `os.Root` / `os.OpenInRoot`
-// (added in Go 1.24, hardened against TOCTOU and symlink-escape
-// races that any check-then-open approach inherently has). The
-// current go.mod targets 1.23 so the 1.24 API isn't available
-// yet; the regex gate + Rel check is sufficient for the threat
-// model in the meantime. Tracked for the next Go-version bump.
-func pathInsideDir(filePath, dir string) bool {
-	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(filePath))
-	if err != nil {
-		return false
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	return true
 }
 
 // Available returns the language ids that have dedicated packs.
