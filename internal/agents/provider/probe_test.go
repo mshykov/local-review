@@ -35,6 +35,21 @@ func TestProbe_RejectsNonHTTPScheme(t *testing.T) {
 	}
 }
 
+// isHTTPScheme is case-insensitive (RFC 3986): HTTPS:// must be accepted,
+// non-http(s) schemes rejected.
+func TestIsHTTPScheme(t *testing.T) {
+	for _, ok := range []string{"http://x/v1", "https://x/v1", "HTTP://x", "HTTPS://x", "Http://localhost:11434/v1"} {
+		if !isHTTPScheme(ok) {
+			t.Errorf("isHTTPScheme(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"file:///etc/passwd", "gopher://x", "ftp://x", "/etc/passwd", "host:1234/v1", ""} {
+		if isHTTPScheme(bad) {
+			t.Errorf("isHTTPScheme(%q) = true, want false", bad)
+		}
+	}
+}
+
 // With an API key configured, the probe must send Authorization.
 // Local Ollama doesn't care, but cloud providers reject without it.
 func TestProbe_SendsAuthorizationWhenKeyProvided(t *testing.T) {

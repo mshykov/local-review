@@ -204,8 +204,8 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 	// under audit, the source) to BaseURL. The pre-flight probe checks
 	// this too, but --no-preflight skips the probe, so validate here as
 	// well — a non-http(s) base_url must never reach the HTTP client.
-	if !strings.HasPrefix(c.BaseURL, "http://") && !strings.HasPrefix(c.BaseURL, "https://") {
-		return "", Usage{}, fmt.Errorf("invalid base_url %q: must start with http:// or https://", c.BaseURL)
+	if u, err := url.Parse(c.BaseURL); err != nil || (strings.ToLower(u.Scheme) != "http" && strings.ToLower(u.Scheme) != "https") {
+		return "", Usage{}, fmt.Errorf("invalid base_url %q: must be an http:// or https:// URL", c.BaseURL)
 	}
 	if c.APIKey == "" && !isLocalURL(c.BaseURL) {
 		// Local-review init's "Ollama" preset writes a config with no

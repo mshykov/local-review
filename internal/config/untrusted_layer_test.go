@@ -19,6 +19,7 @@ func captureStderr(t *testing.T, fn func()) string {
 	}
 	os.Stderr = w
 	defer func() { os.Stderr = old }()
+	defer func() { _ = r.Close() }()
 	fn()
 	_ = w.Close()
 	out, _ := io.ReadAll(r)

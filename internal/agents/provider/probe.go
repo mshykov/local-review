@@ -5,9 +5,25 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
+
+// isHTTPScheme reports whether s parses as an http:// or https:// URL.
+// Scheme comparison is case-insensitive per RFC 3986, so HTTPS:// is fine.
+func isHTTPScheme(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		return true
+	default:
+		return false
+	}
+}
 
 // Probe is the "is this endpoint a usable OpenAI-compat provider?"
 // check — issued by doctor for readiness rows and by the runner's
@@ -36,8 +52,8 @@ func Probe(ctx context.Context, baseURL, apiKey string, timeout time.Duration) e
 	// (file://, gopher://, …) fails with a clear error instead of being
 	// handed to the HTTP client — the provider client POSTs the diff to
 	// this endpoint, so the scheme is security-relevant.
-	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
-		return fmt.Errorf("invalid base_url %q: must start with http:// or https://", baseURL)
+	if !isHTTPScheme(baseURL) {
+		return fmt.Errorf("invalid base_url %q: must be an http:// or https:// URL", baseURL)
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
