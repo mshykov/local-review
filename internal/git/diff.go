@@ -41,36 +41,75 @@ type Hunk struct {
 	NewFrom int    // first line number in new file
 }
 
+// gitDiffTimeout bounds a single diff extraction so a wedged git (a lock,
+// a slow clean/smudge filter, a pathological repo) can't hang the tool
+// forever even without a user Ctrl+C. Generous — local diffs are fast; this
+// is a backstop, not a tuning knob. The caller's ctx (which carries the
+// signal-handler cancellation) still interrupts sooner on Ctrl+C.
+const gitDiffTimeout = 2 * time.Minute
+
+// maxDiffBytes caps the diff we buffer and parse. Past this, the review is
+// almost certainly noise (vendored-blob churn, a generated-file rewrite) and
+// parsing risks a multi-hundred-MB memory peak. var (not const) so tests can
+// shrink it. Fail-closed: over the cap returns an actionable error rather
+// than OOMing or silently truncating.
+var maxDiffBytes int64 = 64 << 20 // 64 MiB
+
 // Extract runs git and returns one Diff per changed file.
 //
 // args:
 //
+//	ctx:  cancellation / deadline (the runner threads its signal-trapped ctx)
 //	mode: which slice of history
 //	ref:  for ModeCommit, the revspec; for ModeBranch, the *base* ref to diff against
-func Extract(mode Mode, ref string) ([]Diff, error) {
+func Extract(ctx context.Context, mode Mode, ref string) ([]Diff, error) {
 	args, err := argsFor(mode, ref)
 	if err != nil {
 		return nil, err
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd := exec.Command("git", args...)
-	cmd.Stdout = &stdout
+	ctx, cancel := context.WithTimeout(ctx, gitDiffTimeout)
+	defer cancel()
+
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, stderr.String())
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("git stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
 
-	// Stream-parse stdout via bytes.NewReader → bufio.Scanner so we
-	// don't double-buffer the diff (string copy + strings.Split slice).
-	// Large monorepo branch diffs hit 10s of MB; the legacy version
-	// held 3-4 copies of that in flight.
+	// Bound the buffered diff. LimitReader stops at maxDiffBytes+1 so we can
+	// tell "exactly at cap" from "over". On overflow, cancel() first to
+	// unblock git (now blocked writing to a full pipe) so Wait doesn't hang.
+	var stdout bytes.Buffer
+	n, copyErr := io.Copy(&stdout, io.LimitReader(pipe, maxDiffBytes+1))
+	if n > maxDiffBytes {
+		cancel()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("diff exceeds the %d MiB cap — narrow it with include/exclude globs or review a smaller commit range", maxDiffBytes>>20)
+	}
+	if err := cmd.Wait(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), ctxErr)
+		}
+		return nil, fmt.Errorf("git %s: %w (%s)", strings.Join(args, " "), err, stderr.String())
+	}
+	// Fail closed on a read error: a partial diff + nil err would let the
+	// gate exit 0 on a materially incomplete review.
+	if copyErr != nil {
+		return nil, fmt.Errorf("read diff: %w", copyErr)
+	}
+
+	// Stream-parse stdout via bytes.NewReader → bufio.Scanner so we don't
+	// double-buffer the diff (string copy + strings.Split slice).
 	diffs, err := parseUnifiedDiff(bytes.NewReader(stdout.Bytes()))
 	if err != nil {
-		// Fail closed: a scanner error means we have only the prefix
-		// of the diff, and the unscanned tail might contain blocking
-		// changes. Returning a partial slice + nil err would let the
-		// gate exit 0 on a materially incomplete review.
+		// Same fail-closed reasoning: a scanner error means we have only the
+		// prefix, and the unscanned tail might carry blocking changes.
 		return nil, fmt.Errorf("parse diff: %w", err)
 	}
 	return diffs, nil
