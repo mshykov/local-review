@@ -437,8 +437,10 @@ func renderConfig(presetName, baseURL, model, apiKeyEnv, minSeverity string, max
 	fmt.Fprintf(&b, "  max_findings: %d\n", maxFindings)
 	// Config slices are replaced wholesale by the cascade merge (see
 	// internal/config/config.go), so the wizard must reproduce the
-	// built-in defaults *plus* any additions. Built-in defaults today
-	// are: **/*.lock, **/*.snap, **/dist/**, **/build/**.
+	// built-in defaults *plus* any additions. Built-in defaults today are
+	// **/*.lock, **/*.snap, **/dist/**, **/build/**; the wizard also adds
+	// **/node_modules/** as a convenience. TestRenderConfig_ReproducesAll-
+	// DefaultExcludeGlobs guards that every default stays reproduced here.
 	fmt.Fprintln(&b, "  exclude:")
 	fmt.Fprintln(&b, `    - "**/*.lock"`)
 	fmt.Fprintln(&b, `    - "**/*.snap"`)
