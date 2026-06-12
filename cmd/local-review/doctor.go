@@ -25,6 +25,10 @@ import (
 // reflecting an explicit logout that wipes recent activity.
 const claudeSessionFreshness = 30 * 24 * time.Hour
 
+// envVarSetSuffix is the doctor "authenticated" detail shown when an agent's
+// API-key env var is present (e.g. "OPENAI_API_KEY env var set").
+const envVarSetSuffix = " env var set"
+
 func doctorCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
@@ -608,7 +612,7 @@ func checkClaudeAuth(customEnvVar string) authStatus {
 	if os.Getenv(envVar) != "" {
 		return authStatus{
 			authenticated: true,
-			detail:        envVar + " env var set",
+			detail:        envVar + envVarSetSuffix,
 		}
 	}
 	// Claude Code stores tokens in macOS Keychain (or equivalent on
@@ -658,7 +662,7 @@ func checkGeminiAuth(customEnvVar string) authStatus {
 	if os.Getenv(envVar) != "" {
 		return authStatus{
 			authenticated: true,
-			detail:        envVar + " env var set",
+			detail:        envVar + envVarSetSuffix,
 		}
 	}
 	// Gemini CLI stores OAuth state in ~/.gemini/google_accounts.json
@@ -688,7 +692,7 @@ func checkCodexAuth(customEnvVar string) authStatus {
 	if os.Getenv(envVar) != "" {
 		return authStatus{
 			authenticated: true,
-			detail:        envVar + " env var set",
+			detail:        envVar + envVarSetSuffix,
 		}
 	}
 	// Codex stores an explicit auth_mode field in ~/.codex/auth.json.
@@ -784,7 +788,7 @@ func checkCopilotAuth(customEnvVar string) authStatus {
 	if strings.TrimSpace(os.Getenv(envVar)) != "" {
 		return authStatus{
 			authenticated: true,
-			detail:        envVar + " env var set",
+			detail:        envVar + envVarSetSuffix,
 		}
 	}
 	// Stored `copilot login` session. A NON-EMPTY config dir is the
