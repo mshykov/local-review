@@ -511,101 +511,113 @@ func resolveRelativePaths(layer *Config, baseDir string) error {
 //
 // TestMergeCoversAllExportedFields (config_test.go) uses reflection to
 // fail at test time when a new exported field is added without an
-// overlay branch here. Don't bypass the test — extend merge() instead.
+// overlay branch. Don't bypass the test — add the field to the relevant
+// mergeXxx helper below.
+//
+// Split into per-section helpers (was one 50+-branch function): merge() now
+// just sequences them, and each helper stays small and independently
+// readable. Behavior is identical — the reflection test guards every field.
 func merge(dst *Config, src Config) {
-	// Review settings
-	if src.Review.MinSeverity != "" {
-		dst.Review.MinSeverity = src.Review.MinSeverity
-	}
-	if src.Review.MaxFindings != 0 {
-		dst.Review.MaxFindings = src.Review.MaxFindings
-	}
-	if len(src.Review.IncludeGlobs) > 0 {
-		dst.Review.IncludeGlobs = src.Review.IncludeGlobs
-	}
-	if len(src.Review.ExcludeGlobs) > 0 {
-		dst.Review.ExcludeGlobs = src.Review.ExcludeGlobs
-	}
-	if src.Review.PromptPack != "" {
-		dst.Review.PromptPack = src.Review.PromptPack
-	}
-
-	// Org settings
+	mergeReview(&dst.Review, src.Review)
 	if src.Org.ConfigURL != "" {
 		dst.Org.ConfigURL = src.Org.ConfigURL
 	}
-
-	// v0.1: LLMs settings (per-LLM merge)
-	if len(src.LLMs) > 0 {
-		if dst.LLMs == nil {
-			dst.LLMs = make(map[string]LLMConfig)
-		}
-		for name, llmCfg := range src.LLMs {
-			// If LLM exists in dst, merge fields
-			if existing, ok := dst.LLMs[name]; ok {
-				if llmCfg.CLIPath != "" {
-					existing.CLIPath = llmCfg.CLIPath
-				}
-				if llmCfg.BaseURL != "" {
-					existing.BaseURL = llmCfg.BaseURL
-				}
-				if llmCfg.Model != "" {
-					existing.Model = llmCfg.Model
-				}
-				if llmCfg.APIKeyEnv != "" {
-					existing.APIKeyEnv = llmCfg.APIKeyEnv
-				}
-				if llmCfg.APIKey != "" {
-					existing.APIKey = llmCfg.APIKey
-				}
-				if llmCfg.TimeoutSec != 0 {
-					existing.TimeoutSec = llmCfg.TimeoutSec
-				}
-				// Enabled is a *bool, only override if explicitly set in src
-				if llmCfg.Enabled != nil {
-					existing.Enabled = llmCfg.Enabled
-				}
-				// ForceAfterSunset (v0.15) — *bool, same merge shape
-				// as Enabled. Distinguishes "field absent" (nil, use
-				// dst value) from "set to false" (non-nil, override).
-				if llmCfg.ForceAfterSunset != nil {
-					existing.ForceAfterSunset = llmCfg.ForceAfterSunset
-				}
-
-				dst.LLMs[name] = existing
-			} else {
-				// New LLM, add it
-				dst.LLMs[name] = llmCfg
-			}
-		}
-	}
-
-	// v0.1: Merge settings
-	if src.Merge.PreferredLLM != "" {
-		dst.Merge.PreferredLLM = src.Merge.PreferredLLM
-	}
-	// Deduplicate is a *bool, only override if explicitly set in src
-	if src.Merge.Deduplicate != nil {
-		dst.Merge.Deduplicate = src.Merge.Deduplicate
-	}
-	if src.Merge.ConsensusThreshold != 0 {
-		dst.Merge.ConsensusThreshold = src.Merge.ConsensusThreshold
-	}
-
-	// v0.1: Storage settings
+	mergeLLMs(dst, src.LLMs)
+	mergeMergeConfig(&dst.Merge, src.Merge)
 	if src.Storage.BasePath != "" {
 		dst.Storage.BasePath = src.Storage.BasePath
 	}
+	mergePrompts(&dst.Prompts, src.Prompts)
+}
 
-	// v0.8: Prompts customization (issue #55).
-	if src.Prompts.PackDir != "" {
-		dst.Prompts.PackDir = src.Prompts.PackDir
+func mergeReview(dst *Review, src Review) {
+	if src.MinSeverity != "" {
+		dst.MinSeverity = src.MinSeverity
 	}
-	if src.Prompts.Prepend != "" {
-		dst.Prompts.Prepend = src.Prompts.Prepend
+	if src.MaxFindings != 0 {
+		dst.MaxFindings = src.MaxFindings
 	}
-	if src.Prompts.Append != "" {
-		dst.Prompts.Append = src.Prompts.Append
+	if len(src.IncludeGlobs) > 0 {
+		dst.IncludeGlobs = src.IncludeGlobs
+	}
+	if len(src.ExcludeGlobs) > 0 {
+		dst.ExcludeGlobs = src.ExcludeGlobs
+	}
+	if src.PromptPack != "" {
+		dst.PromptPack = src.PromptPack
+	}
+}
+
+// mergeLLMs overlays src's LLM entries onto dst: an existing name is merged
+// field-by-field (mergeLLMConfig); a new name is added wholesale.
+func mergeLLMs(dst *Config, src map[string]LLMConfig) {
+	if len(src) == 0 {
+		return
+	}
+	if dst.LLMs == nil {
+		dst.LLMs = make(map[string]LLMConfig)
+	}
+	for name, llmCfg := range src {
+		if existing, ok := dst.LLMs[name]; ok {
+			dst.LLMs[name] = mergeLLMConfig(existing, llmCfg)
+		} else {
+			dst.LLMs[name] = llmCfg
+		}
+	}
+}
+
+// mergeLLMConfig overlays non-zero src fields onto existing. The two *bool
+// fields (Enabled, ForceAfterSunset) override only when non-nil so "absent in
+// YAML" stays distinguishable from "explicitly false".
+func mergeLLMConfig(existing, src LLMConfig) LLMConfig {
+	if src.CLIPath != "" {
+		existing.CLIPath = src.CLIPath
+	}
+	if src.BaseURL != "" {
+		existing.BaseURL = src.BaseURL
+	}
+	if src.Model != "" {
+		existing.Model = src.Model
+	}
+	if src.APIKeyEnv != "" {
+		existing.APIKeyEnv = src.APIKeyEnv
+	}
+	if src.APIKey != "" {
+		existing.APIKey = src.APIKey
+	}
+	if src.TimeoutSec != 0 {
+		existing.TimeoutSec = src.TimeoutSec
+	}
+	if src.Enabled != nil {
+		existing.Enabled = src.Enabled
+	}
+	if src.ForceAfterSunset != nil {
+		existing.ForceAfterSunset = src.ForceAfterSunset
+	}
+	return existing
+}
+
+func mergeMergeConfig(dst *MergeConfig, src MergeConfig) {
+	if src.PreferredLLM != "" {
+		dst.PreferredLLM = src.PreferredLLM
+	}
+	if src.Deduplicate != nil {
+		dst.Deduplicate = src.Deduplicate
+	}
+	if src.ConsensusThreshold != 0 {
+		dst.ConsensusThreshold = src.ConsensusThreshold
+	}
+}
+
+func mergePrompts(dst *PromptsConfig, src PromptsConfig) {
+	if src.PackDir != "" {
+		dst.PackDir = src.PackDir
+	}
+	if src.Prepend != "" {
+		dst.Prepend = src.Prepend
+	}
+	if src.Append != "" {
+		dst.Append = src.Append
 	}
 }
 
