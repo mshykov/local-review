@@ -221,6 +221,8 @@ case ":$PATH:" in
         fi
         ;;
       */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
+      *) ;; # unknown / unset shell — leave shell_rc empty; the block below
+             # prints a generic PATH hint instead of an rc-specific one.
     esac
 
     echo "⚠️  ${INSTALL_DIR} is not on your PATH — local-review won't be found until you fix that."

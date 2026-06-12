@@ -184,11 +184,11 @@ func Resolve(language string, opts ResolveOptions) (Pack, error) {
 
 	content := body
 	tags := []string{}
-	if s := strings.TrimSpace(opts.Prepend); s != "" {
+	if strings.TrimSpace(opts.Prepend) != "" {
 		content = opts.Prepend + "\n\n" + content
 		tags = append(tags, "prepend")
 	}
-	if s := strings.TrimSpace(opts.Append); s != "" {
+	if strings.TrimSpace(opts.Append) != "" {
 		content = content + "\n\n" + opts.Append
 		tags = append(tags, "append")
 	}

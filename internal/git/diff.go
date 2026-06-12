@@ -315,11 +315,14 @@ func parseNewFrom(header string) int {
 
 // CurrentCommit returns the current HEAD commit hash (short form).
 // Returns "HEAD" if git command fails or times out.
+// gitRevParse is the git subcommand used by the short-lived ref helpers below.
+const gitRevParse = "rev-parse"
+
 func CurrentCommit() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", "HEAD")
+	cmd := exec.CommandContext(ctx, "git", gitRevParse, "--short", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		return "HEAD"
@@ -333,7 +336,7 @@ func CurrentBranch() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd := exec.CommandContext(ctx, "git", gitRevParse, "--abbrev-ref", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		return "unknown"
@@ -389,7 +392,7 @@ func ResolveRef(ref string) string {
 
 	// `--` after the flags ensures the ref is treated as a positional
 	// argument even if a future caller bypasses ValidateRef.
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--short", "--", ref)
+	cmd := exec.CommandContext(ctx, "git", gitRevParse, "--short", "--", ref)
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
