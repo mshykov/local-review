@@ -29,6 +29,10 @@ type Invoker = agents.Invoker
 // agents need to emit markdown so the merger can consolidate prose
 // across reviewers. We append this AFTER the pack so the LLM's most
 // recent instruction wins.
+// diffSectionHeader separates the system prompt from the diff body in the
+// prompt every CLI invoker builds.
+const diffSectionHeader = "\n\n# Diff\n\n"
+
 const multiLLMOutputOverride = `
 
 ---
@@ -142,7 +146,7 @@ type CodexInvoker struct {
 }
 
 func (c *CodexInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
-	prompt := buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff
+	prompt := buildReviewPrompt(systemPrompt) + diffSectionHeader + diff
 	return c.runExec(ctx, prompt, "codex review")
 }
 
@@ -237,7 +241,7 @@ type GeminiInvoker struct {
 }
 
 func (g *GeminiInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
-	return g.run(ctx, buildReviewPrompt(systemPrompt)+"\n\n# Diff\n\n"+diff)
+	return g.run(ctx, buildReviewPrompt(systemPrompt)+diffSectionHeader+diff)
 }
 
 func (g *GeminiInvoker) RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error) {
@@ -312,7 +316,7 @@ type ClaudeInvoker struct {
 }
 
 func (c *ClaudeInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
-	prompt := buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff
+	prompt := buildReviewPrompt(systemPrompt) + diffSectionHeader + diff
 	return c.run(ctx, prompt)
 }
 
@@ -436,7 +440,7 @@ type AntigravityInvoker struct {
 }
 
 func (a *AntigravityInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
-	prompt := buildReviewPrompt(systemPrompt) + "\n\n# Diff\n\n" + diff
+	prompt := buildReviewPrompt(systemPrompt) + diffSectionHeader + diff
 	return a.run(ctx, prompt)
 }
 
@@ -537,7 +541,7 @@ type CopilotInvoker struct {
 }
 
 func (c *CopilotInvoker) Review(ctx context.Context, systemPrompt, diff string) (string, TokenUsage, error) {
-	return c.run(ctx, buildReviewPrompt(systemPrompt)+"\n\n# Diff\n\n"+diff)
+	return c.run(ctx, buildReviewPrompt(systemPrompt)+diffSectionHeader+diff)
 }
 
 func (c *CopilotInvoker) RunPrompt(ctx context.Context, prompt string) (string, TokenUsage, error) {

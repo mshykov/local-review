@@ -3,6 +3,7 @@ package multi
 import (
 	"bytes"
 	"context"
+	// embed powers the //go:embed of the merge-prompt template below.
 	_ "embed"
 	"fmt"
 	"regexp"

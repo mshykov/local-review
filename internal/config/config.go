@@ -3,7 +3,8 @@
 // Cascade (lowest precedence first):
 //
 //  1. Built-in defaults (compiled in)
-//  2. Org config (optional URL, fetched + cached)  -- v1: stub, see TODO
+//  2. Org config (optional URL, fetched + cached)  -- not yet wired; the
+//     Org.ConfigURL field is parsed but unused. Planned for v0.18.0 (see ROADMAP).
 //  3. ~/.local-review.yml                                 (per-user)
 //  4. .local-review.yml (project root)                    (per-repo)
 //  5. CLI flags                                     (per-invocation)

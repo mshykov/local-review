@@ -11,6 +11,10 @@ import (
 	"github.com/mshykov/local-review/internal/git"
 )
 
+// errCreateReviewDir is the wrap message used by every Save* method when the
+// per-branch review directory can't be created.
+const errCreateReviewDir = "create review directory: %w"
+
 // ReviewStorage handles saving review outputs to disk.
 type ReviewStorage struct {
 	basePath string
@@ -88,7 +92,7 @@ func (s *ReviewStorage) SaveReview(branch, commit, llmName, llmVersion, content 
 	// Note: MkdirAll is idempotent and called in each Save* method for robustness
 	dir := filepath.Join(s.basePath, sanitizedBranch)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", fmt.Errorf("create review directory: %w", err)
+		return "", fmt.Errorf(errCreateReviewDir, err)
 	}
 
 	// File name: <commit>_<llm>_<version>.md
@@ -111,7 +115,7 @@ func (s *ReviewStorage) SaveMerged(branch, commit, content string) (string, erro
 
 	dir := filepath.Join(s.basePath, sanitizedBranch)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", fmt.Errorf("create review directory: %w", err)
+		return "", fmt.Errorf(errCreateReviewDir, err)
 	}
 
 	filename := fmt.Sprintf("%s_merged.md", sanitizedCommit)
@@ -132,7 +136,7 @@ func (s *ReviewStorage) SaveMetadata(branch, commit string, meta *Metadata) (str
 
 	dir := filepath.Join(s.basePath, sanitizedBranch)
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", fmt.Errorf("create review directory: %w", err)
+		return "", fmt.Errorf(errCreateReviewDir, err)
 	}
 
 	filename := fmt.Sprintf("%s_metadata.json", sanitizedCommit)
