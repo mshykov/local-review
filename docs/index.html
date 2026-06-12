@@ -165,7 +165,7 @@
 
     .btn-primary {
       background: white;
-      color: #667eea;
+      color: #4f46e5; /* deepened from #667eea (3.67:1) → 6.3:1 on white for WCAG AA */
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
 
@@ -457,7 +457,7 @@
       display: inline-block;
       font-size: 0.72em;
       font-weight: 700;
-      background: #667eea;
+      background: #4f46e5; /* deepened from #667eea → white text hits 6.3:1 (WCAG AA for small bold) */
       color: white;
       padding: 2px 8px;
       border-radius: 4px;
@@ -1372,18 +1372,18 @@
       </p>
     </div>
   </footer>
-  <div id="copy-live" role="status" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap"></div>
+  <output id="copy-live" aria-live="polite" aria-atomic="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap"></output>
   <script>
     const copyTimers = new WeakMap();
     const copyLive = document.getElementById('copy-live');
 
     function showCopied(btn) {
       if (copyTimers.has(btn)) clearTimeout(copyTimers.get(btn));
-      btn.setAttribute('data-copied', '');
+      btn.dataset.copied = '';
       btn.setAttribute('aria-label', 'Copied!');
       copyLive.textContent = 'Copied to clipboard';
       copyTimers.set(btn, setTimeout(() => {
-        btn.removeAttribute('data-copied');
+        delete btn.dataset.copied;
         btn.setAttribute('aria-label', 'Copy to clipboard');
         copyLive.textContent = '';
         copyTimers.delete(btn);
@@ -1397,7 +1397,7 @@
       document.body.appendChild(ta);
       ta.select();
       const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
+      ta.remove();
       if (ok) showCopied(btn);
     }
 
@@ -1406,7 +1406,7 @@
       if (!btn) return;
       const code = btn.closest('.code-wrapper').querySelector('code');
       const text = code.textContent.trim();
-      if (navigator.clipboard && window.isSecureContext) {
+      if (navigator.clipboard && globalThis.isSecureContext) {
         navigator.clipboard.writeText(text)
           .then(() => showCopied(btn))
           .catch(() => fallbackCopy(text, btn));
