@@ -261,10 +261,17 @@ func runOne(ctx context.Context, c Chunk, pack string, invoker cli.Invoker, time
 	return pr
 }
 
-// resolveTimeout mirrors the bench package's helper — caller-
-// supplied wins, then LLM-configured, then a hardcoded fallback.
-// Audit's fallback is intentionally longer than review's (300s vs
-// 120s) because audit chunks are larger than review diffs.
+// defaultAuditTimeoutSec is the per-chunk fallback used only when neither
+// --timeout nor the agent's configured timeout applies.
+const defaultAuditTimeoutSec = 300
+
+// resolveTimeout picks the per-chunk timeout: caller-supplied (--timeout)
+// wins, then the agent's configured timeout, then defaultAuditTimeoutSec.
+// For reference, the other paths' fallbacks differ: review defaults to
+// cli.DefaultTimeoutSec (600s) and bench to 120s — audit's 300s sits
+// between them. (The earlier comment here claimed "longer than review's
+// 300s vs 120s", conflating bench's 120s with review's actual 600s; in
+// practice the agent's configured timeout usually applies anyway.)
 func resolveTimeout(provided time.Duration, llm cli.LLM) time.Duration {
 	if provided > 0 {
 		return provided
@@ -272,7 +279,7 @@ func resolveTimeout(provided time.Duration, llm cli.LLM) time.Duration {
 	if llm.TimeoutSec > 0 {
 		return time.Duration(llm.TimeoutSec) * time.Second
 	}
-	return 300 * time.Second
+	return defaultAuditTimeoutSec * time.Second
 }
 
 // cleanSentinelRE matches the audit-pack-mandated "[clean] no

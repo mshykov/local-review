@@ -27,8 +27,8 @@ chained="$hooks_dir/pre-commit.local"
 
 mkdir -p "$hooks_dir"
 
-if [ -e "$hook" ] && ! grep -q "local-review secret/PII pre-commit" "$hook" 2>/dev/null; then
-  if [ -e "$chained" ]; then
+if [[ -e "$hook" ]] && ! grep -q "local-review secret/PII pre-commit" "$hook" 2>/dev/null; then
+  if [[ -e "$chained" ]]; then
     # Ambiguous: a foreign pre-commit AND a pre-commit.local both exist.
     # We can't chain a second one without clobbering the first, so
     # fail-closed and let the human resolve it — never silently disable
@@ -104,7 +104,7 @@ chmod +x "$hook"
 echo "✓ Installed pre-commit hook → $hook"
 
 # Seed the personal denylist from the template on first install.
-if [ ! -f "$repo_root/.git-personal-denylist" ] && [ -f "$repo_root/.git-personal-denylist.example" ]; then
+if [[ ! -f "$repo_root/.git-personal-denylist" && -f "$repo_root/.git-personal-denylist.example" ]]; then
   cp "$repo_root/.git-personal-denylist.example" "$repo_root/.git-personal-denylist"
   echo "✓ Created .git-personal-denylist (gitignored) — add your own IPs / emails / names to it."
 fi

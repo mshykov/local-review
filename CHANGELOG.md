@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-06-12
+
+**Cleanup patch.** Robustness, accessibility, and tidy-ups from the audit "Later" tier and the SonarCloud board — no new features (those land in v0.18.0).
+
+### Fixed
+
+- **`git.Extract` is now bounded and interruptible (INF-1).** It previously used a plain `exec.Command` — no context (a Ctrl+C couldn't interrupt a wedged git), no deadline, and an unbounded stdout buffer. Now: the runner's signal-trapped context flows through (`exec.CommandContext`) with a generous 2-minute backstop timeout, and a 64 MiB fail-closed size cap rejects a pathological diff with an actionable message instead of ballooning memory or silently truncating.
+- **Landing-page contrast (WCAG AA).** `.btn-primary` text and the rule-severity badge were `#667eea` (3.67:1); deepened to `#4f46e5` (6.3:1).
+
+### Internal
+
+- **Accessibility / JS tidy-ups on the landing page:** copy-status live region uses `<output>` over `role="status"`; `dataset` over `setAttribute`/`removeAttribute`; `ta.remove()` over `removeChild`; `globalThis` over `window`.
+- **Stale comment fixed (MIN-9):** `audit.resolveTimeout`'s comment conflated bench's 120s with review's actual 600s default; corrected, and the bare `300` literal is now `defaultAuditTimeoutSec`.
+- **Drift guard (NIT-3):** new test asserts the `init` wizard reproduces every `config.Defaults()` exclude glob (the cascade merge replaces the list wholesale, so a missed default would silently vanish).
+- **Lint cleanups:** deduped the 4× `" env var set"` literal in `doctor.go`; `[[ ]]` over `[ ]` in `scripts/install-hooks.sh`.
+
 ## [0.17.1] - 2026-06-11
 
 **Security patch.** Closes a `major` finding surfaced by the tool's own `audit --topic security`, plus a v0.16.0 regression that mislabeled the user's home config as untrusted.

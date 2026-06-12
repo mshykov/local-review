@@ -9,8 +9,36 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mshykov/local-review/internal/config"
 	"gopkg.in/yaml.v3"
 )
+
+// TestRenderConfig_ReproducesAllDefaultExcludeGlobs pins the sync between the
+// wizard's emitted exclude list and config.Defaults(). The cascade merge
+// replaces ExcludeGlobs WHOLESALE, so a wizard-generated config must reproduce
+// every built-in default (it may add more, e.g. node_modules). If a new
+// default lands in config.Defaults() but not in renderConfig, the wizard would
+// silently drop it — this test catches that drift.
+func TestRenderConfig_ReproducesAllDefaultExcludeGlobs(t *testing.T) {
+	yml := renderConfig("provider", "https://x/v1", "m", "ENV", "warning", 20)
+	var parsed struct {
+		Review struct {
+			Exclude []string `yaml:"exclude"`
+		} `yaml:"review"`
+	}
+	if err := unmarshalYAML([]byte(yml), &parsed); err != nil {
+		t.Fatalf("generated config is not valid YAML: %v", err)
+	}
+	got := make(map[string]bool, len(parsed.Review.Exclude))
+	for _, g := range parsed.Review.Exclude {
+		got[g] = true
+	}
+	for _, want := range config.Defaults().Review.ExcludeGlobs {
+		if !got[want] {
+			t.Errorf("wizard config omits built-in default exclude %q — merge replaces wholesale so it would be lost; add it to renderConfig", want)
+		}
+	}
+}
 
 // unmarshalYAML wraps yaml.Unmarshal so the round-trip test reads
 // naturally without an extra import everywhere.

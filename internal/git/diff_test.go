@@ -1,10 +1,75 @@
 package git
 
 import (
+	"context"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestExtract_StagedDiffAndSizeCap exercises the real git path: a staged
+// change is extracted, and a shrunk maxDiffBytes trips the fail-closed cap
+// (which also proves the overflow path doesn't hang on the full pipe).
+func TestExtract_StagedDiffAndSizeCap(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init", "-q")
+	runGit("config", "user.email", "t@example.com")
+	runGit("config", "user.name", "T")
+	runGit("config", "commit.gpgsign", "false")
+	f := filepath.Join(repo, "f.txt")
+	if err := os.WriteFile(f, []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "f.txt")
+	runGit("commit", "-q", "-m", "init")
+	if err := os.WriteFile(f, []byte("a\nb\nc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "f.txt")
+
+	// Extract shells out to git in CWD; chdir into the repo (Go 1.23 has
+	// no t.Chdir, so restore manually). NOTE: this mutates process-global
+	// CWD, so tests in this package must NOT use t.Parallel() (none do).
+	// Restored via defer below.
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(orig) }()
+
+	diffs, err := Extract(context.Background(), ModeStaged, "")
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(diffs) == 0 {
+		t.Fatal("expected at least one staged diff")
+	}
+
+	// Shrink the cap so any real diff overflows; must fail closed, not hang.
+	old := maxDiffBytes
+	maxDiffBytes = 1
+	defer func() { maxDiffBytes = old }()
+	if _, err := Extract(context.Background(), ModeStaged, ""); err == nil {
+		t.Error("expected a size-cap error with maxDiffBytes=1, got nil")
+	} else if !strings.Contains(err.Error(), "cap") {
+		t.Errorf("expected a cap error, got: %v", err)
+	}
+}
 
 // errReader returns r.pre on the first read, then r.err on every
 // subsequent read. Used to simulate a real I/O failure mid-stream so

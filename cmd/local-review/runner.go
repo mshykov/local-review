@@ -355,7 +355,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	}
 	printAgentRoster(active, configDisabled, sunsetDropped, cfg, branch, commit)
 
-	diffs, err := git.Extract(mode, ref)
+	diffs, err := git.Extract(ctx, mode, ref)
 	if err != nil {
 		return fmt.Errorf("extract diff: %w", err)
 	}
