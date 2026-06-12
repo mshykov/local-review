@@ -40,7 +40,9 @@ func TestExtract_StagedDiffAndSizeCap(t *testing.T) {
 	runGit("add", "f.txt")
 
 	// Extract shells out to git in CWD; chdir into the repo (Go 1.23 has
-	// no t.Chdir, so restore manually).
+	// no t.Chdir, so restore manually). NOTE: this mutates process-global
+	// CWD, so tests in this package must NOT use t.Parallel() (none do).
+	// Restored via defer below.
 	orig, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
