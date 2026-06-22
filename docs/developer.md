@@ -32,7 +32,7 @@ reviewers) hold contributions to:
 
 ## Toolchain & basics
 
-- **Go 1.23+**, `git` in PATH.
+- **Go 1.26+**, `git` in PATH.
 - `gofmt -s` and `go vet` must be clean before pushing.
 - New logic needs a unit test — see [testing.md](testing.md).
 

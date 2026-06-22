@@ -160,7 +160,7 @@ go build -o local-review ./cmd/local-review
 ./local-review doctor            # check LLM installs
 ```
 
-Required: Go 1.23+, git in PATH. For real end-to-end testing: Node 20+ plus at least one of `@anthropic-ai/claude-code`, `@google/gemini-cli`, `@openai/codex`, `@github/copilot`. For provider-agent testing: a reachable OpenAI-compat endpoint (local `ollama serve` is easiest) configured under `llms.<name>.base_url` in `~/.local-review.yml` or `./.local-review.yml`. The v0 `LOCAL_REVIEW_API_KEY` single-LLM-fallback env var was removed in v0.15 along with the `provider:` block; API keys now live under `llms.<name>.api_key_env: NAME_OF_YOUR_ENV_VAR`.
+Required: Go 1.26+, git in PATH. For real end-to-end testing: Node 20+ plus at least one of `@anthropic-ai/claude-code`, `@google/gemini-cli`, `@openai/codex`, `@github/copilot`. For provider-agent testing: a reachable OpenAI-compat endpoint (local `ollama serve` is easiest) configured under `llms.<name>.base_url` in `~/.local-review.yml` or `./.local-review.yml`. The v0 `LOCAL_REVIEW_API_KEY` single-LLM-fallback env var was removed in v0.15 along with the `provider:` block; API keys now live under `llms.<name>.api_key_env: NAME_OF_YOUR_ENV_VAR`.
 
 CI (`.github/workflows/ci.yml`) runs `go vet` + `go test -race` + build on every push. Tagging `vX.Y.Z` on main triggers cross-compiled releases (darwin/linux/windows × amd64/arm64).
 

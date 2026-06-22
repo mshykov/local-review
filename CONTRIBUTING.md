@@ -52,7 +52,7 @@ go build -o local-review ./cmd/local-review
 ```
 
 Required:
-- Go 1.23+
+- Go 1.26+
 - Node.js 20+ and npm — only if you want to test the multi-LLM mode locally
 
 ### Multi-LLM development setup
