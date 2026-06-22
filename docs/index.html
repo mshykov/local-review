@@ -373,7 +373,8 @@
     /* Subtle slate pill for inline code on the scope cards so it
        reads as "code" without the legibility issue. Scoped narrowly
        so the dark Quick Start section's inline-styled <code> tags
-       (color: #a0aec0 on #2d3748) keep their look. */
+       (color: #b3bdcc on #2d3748, dimmed to ~0.85 by the parent <p>)
+       keep their look while clearing WCAG AA 4.5:1. */
     .scope-col code {
       background: #f1f5f9;
       padding: 1px 5px;
@@ -594,12 +595,12 @@
     .lang-footnote {
       text-align: center;
       margin-top: 24px;
-      color: #718096;
+      color: #5a6878;
       font-size: 0.95em;
     }
 
     .lang-footnote a {
-      color: #667eea;
+      color: #4f46e5;
       text-decoration: none;
       font-weight: 600;
     }
@@ -889,7 +890,7 @@
     }
 
     .checklist-preview .ellipsis {
-      color: #a0aec0;
+      color: #64748b;
       font-size: 0.85em;
       padding-left: 22px;
     }
@@ -1004,6 +1005,7 @@
     </div>
   </header>
 
+  <main>
   <section class="scope">
     <div class="container">
       <h2>What it is, what it isn't</h2>
@@ -1129,7 +1131,7 @@
         <div class="qs-step">
           <div class="qs-step-num">2</div>
           <div class="qs-step-body">
-            <p>Set up — picks a provider, writes <code style="color:#a0aec0;font-size:0.92em;">.local-review.yml</code></p>
+            <p>Set up — picks a provider, writes <code style="color:#b3bdcc;font-size:0.92em;">.local-review.yml</code></p>
             <div class="code-wrapper">
               <button type="button" class="copy-btn" aria-label="Copy to clipboard">
                 <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -1142,7 +1144,7 @@
         <div class="qs-step">
           <div class="qs-step-num">3</div>
           <div class="qs-step-body">
-            <p>Review staged changes (<code style="color:#a0aec0;font-size:0.92em;">init</code> tells you which env var to export first)</p>
+            <p>Review staged changes (<code style="color:#b3bdcc;font-size:0.92em;">init</code> tells you which env var to export first)</p>
             <div class="code-wrapper">
               <button type="button" class="copy-btn" aria-label="Copy to clipboard">
                 <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -1155,7 +1157,7 @@
         <div class="qs-step">
           <div class="qs-step-num">4</div>
           <div class="qs-step-body">
-            <p>Or audit the whole codebase for accumulated issues (<code style="color:#a0aec0;font-size:0.92em;">--dry-run</code> previews cost first)</p>
+            <p>Or audit the whole codebase for accumulated issues (<code style="color:#b3bdcc;font-size:0.92em;">--dry-run</code> previews cost first)</p>
             <div class="code-wrapper">
               <button type="button" class="copy-btn" aria-label="Copy to clipboard">
                 <svg class="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -1180,23 +1182,23 @@
           <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Default enabled</p>
         </div>
         <div class="llm-card free">
-          <h3>Antigravity <span style="font-size: 0.6em; color: #b7791f; font-weight: 600;">(experimental)</span></h3>
+          <h3>Antigravity <span style="font-size: 0.6em; color: #8a5a00; font-weight: 600;">(experimental)</span></h3>
           <p>Gemini CLI's successor (<code>agy</code>)</p>
           <span class="badge badge-free">✓ FREE</span>
-          <p style="margin-top: 10px; font-size: 0.8em; color: #b7791f;">Detected by <code>doctor</code>; not yet in the review fan-out</p>
+          <p style="margin-top: 10px; font-size: 0.8em; color: #8a5a00;">Detected by <code>doctor</code>; not yet in the review fan-out</p>
         </div>
         <div class="llm-card free">
-          <h3>Gemini <span style="font-size: 0.6em; color: #b7791f; font-weight: 600;">(sunset)</span></h3>
+          <h3>Gemini <span style="font-size: 0.6em; color: #8a5a00; font-weight: 600;">(sunset)</span></h3>
           <p>Free API key from Google</p>
           <span class="badge badge-free">✓ FREE</span>
-          <p style="margin-top: 10px; font-size: 0.8em; color: #b7791f;">Stops serving 2026-06-18 — migrate to Antigravity. v0.15+ auto-disables in the fan-out after the cutoff; set <code>llms.gemini.force_after_sunset: true</code> to opt back in.</p>
+          <p style="margin-top: 10px; font-size: 0.8em; color: #8a5a00;">Stops serving 2026-06-18 — migrate to Antigravity. v0.15+ auto-disables in the fan-out after the cutoff; set <code>llms.gemini.force_after_sunset: true</code> to opt back in.</p>
         </div>
         <div class="llm-card paid">
           <h3>Codex</h3>
           <p>ChatGPT Plus or OpenAI API key</p>
           <span class="badge badge-paid">$ OpenAI</span>
           <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Enabled when authenticated</p>
-          <p style="margin-top: 8px; font-size: 0.75em; color: #888; font-style: italic;">
+          <p style="margin-top: 8px; font-size: 0.75em; color: #6b6b6b; font-style: italic;">
             You pay OpenAI. <strong>local-review</strong> is 100% free.
           </p>
         </div>
@@ -1205,7 +1207,7 @@
           <p>GitHub Copilot subscription</p>
           <span class="badge badge-paid">$ GitHub</span>
           <p style="margin-top: 10px; font-size: 0.9em; color: #666;">Enabled when authenticated</p>
-          <p style="margin-top: 8px; font-size: 0.75em; color: #888; font-style: italic;">
+          <p style="margin-top: 8px; font-size: 0.75em; color: #6b6b6b; font-style: italic;">
             One Premium request per run. <strong>local-review</strong> is 100% free.
           </p>
         </div>
@@ -1357,6 +1359,7 @@
       </div>
     </div>
   </section>
+  </main>
 
   <footer>
     <div class="container">
@@ -1366,7 +1369,7 @@
         <a href="https://github.com/mshykov/local-review/issues">Issues</a> •
         <a href="https://github.com/mshykov/local-review/blob/main/LICENSE">MIT License</a>
       </p>
-      <p style="margin-top: 8px; opacity: 0.5; font-size: 0.82em;">
+      <p style="margin-top: 8px; opacity: 0.65; font-size: 0.82em;">
         <a href="https://github.com/mshykov/local-review/releases/latest" style="color: inherit;">Latest release</a>
         &middot; <a href="https://github.com/mshykov/local-review/blob/main/CHANGELOG.md" style="color: inherit;">Changelog</a>
       </p>
