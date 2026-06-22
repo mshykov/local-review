@@ -168,7 +168,7 @@ Anthropic, Mistral, DeepSeek, Together, Groq, OpenRouter, Ollama,
 vLLM, etc. (The v0 top-level 'provider:' fallback block was removed
 in v0.15 — every endpoint now lives under 'llms'.)
 
-See README and https://mshykov.github.io/local-review/ for details.`,
+See README and https://local-review.shykov.dev/ for details.`,
 		SilenceUsage: true,
 		// We print errors ourselves in main() so the blocking-findings
 		// sentinel can exit 2 without cobra adding a noisy "Error: ..."
