@@ -23,7 +23,7 @@
   <a href="#get-started">Get started</a> •
   <a href="CHECKLIST.md">Checklist</a> •
   <a href="#customise-for-your-team">Customise</a> •
-  <a href="https://mshykov.github.io/local-review">Website</a>
+  <a href="https://local-review.shykov.dev">Website</a>
 </p>
 
 ---

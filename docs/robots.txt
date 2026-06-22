@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://mshykov.github.io/local-review/sitemap.xml
+Sitemap: https://local-review.shykov.dev/sitemap.xml
