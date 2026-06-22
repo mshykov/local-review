@@ -9,7 +9,7 @@ import (
 )
 
 // blockingMD / cleanMD are minimal merged-report fixtures that exercise
-// isBlockingMarkdown the same way the runner does at runtime.
+// review.IsBlockingMarkdown the same way the runner does at runtime.
 const (
 	blockingMD = "## Critical Issues\n\n- **runner.go:42** — buffer overflow when input is very large\n  Fix: bounds-check before write.\n"
 	cleanMD    = "## Critical Issues\n*(None)*\n\n## Major Issues\n*(None)*\n"
