@@ -63,13 +63,16 @@ Install LLM CLIs for testing multi-LLM features:
 # Install Node.js via Homebrew (macOS)
 brew install node
 
-# Install LLM CLIs
-npm install -g @google/gemini-cli
-npm install -g @openai/codex
+# Install LLM CLIs (any subset works)
 npm install -g @anthropic-ai/claude-code
+npm install -g @openai/codex
+npm install -g @github/copilot
 ```
 
-Note: You don't need all 3 LLMs installed to develop. The code gracefully handles missing CLIs.
+Note: You don't need all of them installed to develop — the code gracefully
+handles missing CLIs. Gemini's CLI (`@google/gemini-cli`) was sunset on
+2026-06-18 and v0.15+ auto-disables it after the cutoff, so there's no point
+installing it for dev work.
 
 ## Adding a prompt pack
 
@@ -95,7 +98,7 @@ The test suite verifies every pack file loads. Add a case to `internal/lang/dete
 ## Tests
 
 - Pure logic gets a unit test. We won't merge new behaviour without one.
-- `internal/llm/` is intentionally not mocked in tests yet — that's a gap, contributions welcome.
+- `internal/llm/`'s happy-path round-trip is exercised by the e2e suite against a fake OpenAI-compatible server; unit tests for its failure modes (non-2xx bodies, malformed JSON, truncation) are still welcome. See `docs/testing.md` → "Known gap".
 
 ## Secrets & personal data — install the pre-commit hook
 
