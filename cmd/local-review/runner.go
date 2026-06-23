@@ -131,127 +131,23 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return err
 	}
 
-	// Preflight: drop agents whose context window can't fit the
-	// (prompt + diff) payload. Pre-v0.7 every agent saw the diff
-	// regardless of size; oversized prompts surfaced as model-
-	// specific failures (claude SIGKILL, codex 4xx, gemini quietly
-	// surviving via its larger window) — confusing and expensive.
-	// Catching this here means: predictable up-front skip with an
-	// actionable "use a smaller scope" hint, no tokens spent on a
-	// call that would 4xx.
-	active, skipped, promptDiffTokens := cli.PreflightFilter(active, systemPrompt, diffStr)
-	if len(skipped) > 0 {
-		fmt.Fprint(os.Stderr, cli.SkipSummary(skipped))
-		fmt.Fprintln(os.Stderr)
-	}
-	if len(active) == 0 {
-		// Every agent's context was too small. Bailing here saves
-		// the user a 2-minute fan-out where each agent fails
-		// individually with a vague stderr.
-		return fmt.Errorf("prompt+diff is too large for every active agent: ~%d tokens estimated; try a smaller scope (`local-review commit HEAD` or `local-review staged`)", promptDiffTokens)
-	}
-
-	// Pre-flight readiness probe (v0.10.1). Issues a tiny "reply OK"
-	// call to each remaining active LLM with a ~10s per-LLM timeout,
-	// renders a ✓/✗ block immediately, then drops the ✗ agents from
-	// the active set before the real fan-out.
-	//
-	// Why this exists: v0.10.0's first-customer dogfood surfaced
-	// gemini's "exhausted capacity on this model" error AFTER
-	// ~4 minutes — the real-review timeout window is large enough
-	// to hide a doomed LLM for that long. The probe collapses that
-	// signal to seconds and lets the run proceed with the surviving
-	// agents instead of waiting on the doomed one. PreflightFilter
-	// above does a *static* context-window check (cheap, no LLM
-	// call); this is the *dynamic* auth+capacity probe (one tiny
-	// call per LLM).
-	//
-	// --no-preflight bypasses this entirely for callers who don't
-	// want the extra ~10s + ~1k tokens per LLM. Reserved escape
-	// hatch — not the recommended path.
-	if !sf.noPreflight {
-		// Resolve the per-LLM probe timeout: explicit --preflight-
-		// timeout wins; 0/unset falls back to cli.DefaultProbeTimeout
-		// (10s). The runner — not Probe — owns this resolution so
-		// the readiness-block render can show the actual configured
-		// value, not the package default.
-		probeTimeout := sf.preflightTimeout
-		if probeTimeout <= 0 {
-			probeTimeout = cli.DefaultProbeTimeout
-		}
-		active = runPreflightProbe(ctx, active, probeTimeout, sf.strictProbe)
-		// Short-circuit on user interrupt / parent context cancel.
-		// Pre-fix the runner's only check was len(active) == 0,
-		// which would surface "every active LLM failed pre-flight"
-		// after a Ctrl+C — accurate only in the narrow technical
-		// sense; misleading about the actual cause. Propagate
-		// ctx.Err() directly so the user sees the right reason
-		// (and main()'s signal-handler exit path gets the right
-		// exit code).
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if len(active) == 0 {
-			// Every authenticated LLM failed the probe. The
-			// readiness block above already showed the per-LLM
-			// reason; this final message points the user at
-			// `doctor` for a structured diagnostic instead of
-			// asking them to re-grep the rendered block.
-			return fmt.Errorf("every active LLM failed the pre-flight readiness probe (run `local-review doctor` for status, or `--no-preflight` to skip the probe)")
-		}
+	// Narrow the active set to agents that can actually run: a static
+	// context-window check then a dynamic auth+capacity probe. Reports
+	// skipped/probe-failed agents to stderr; errors only when nothing
+	// survives (or the user cancels mid-probe). See filterReadyAgents.
+	active, err = filterReadyAgents(ctx, sf, active, systemPrompt, diffStr)
+	if err != nil {
+		return err
 	}
 
 	startTime := time.Now()
 	storage := multi.NewStorage(cfg.Storage.BasePath)
 	orch := multi.NewOrchestrator(active, storage)
 
-	resultsCh, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
+	results, anyFailed, err := fanOutAndCollect(ctx, orch, active, systemPrompt, diffStr, commit, branch)
 	if err != nil {
-		return fmt.Errorf("run reviews: %w", err)
-	}
-
-	// Stream per-agent completion lines as each agent finishes. The
-	// channel closes after all agents report, so the loop also serves
-	// as the synchronisation point before merge. Emission order =
-	// completion order; we dropped the [N/M] numeric prefix so the
-	// non-roster order doesn't read as a bug. Lines look like:
-	//   claude ✓ (51.5s) · 12.3k in / 4.5k out
-	//   codex ✗ timeout — try `local-review commit HEAD` for ...
-	results := make([]multi.ReviewResult, 0, len(active))
-	anyFailed := false
-	for r := range resultsCh {
-		results = append(results, r)
-		if r.Error != nil {
-			anyFailed = true
-			// r.Error is the invoker's ClassifyExit output — already
-			// has the actionable hint inline. No "review failed:"
-			// prefix or "(output: )" wrapping.
-			fmt.Printf("%s ✗ %s%s\n", r.LLM, r.Error, formatTokenSuffix(r.Tokens))
-		} else {
-			fmt.Printf("%s ✓ (%.1fs)%s\n", r.LLM, r.Duration.Seconds(), formatTokenSuffix(r.Tokens))
-		}
-	}
-	fmt.Println()
-
-	// If the user interrupted during the fan-out — the long phase where
-	// Ctrl+C is most likely — surface cancellation directly. Otherwise every
-	// invoker returns a context error and the downstream gate reports "all N
-	// LLM reviews failed", which misdiagnoses a user interrupt as an agent
-	// failure. Mirrors the post-probe handler above.
-	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	// Sort results back to roster order before any downstream use.
-	// Display lines above already printed in completion order (the
-	// streaming UX); everything from here on (BuildMergeInput,
-	// buildMetadata, selectMergeLLM) is order-sensitive and must be
-	// deterministic across runs on identical input. Pre-fix, two
-	// identical `local-review review` runs could produce different
-	// merge prompts (reviewer #1 was "claude" in one run, "codex" in
-	// the next, depending on which finished first) — a regression
-	// from v0.6.6 that erodes trust without surfacing as an error.
-	results = sortByRoster(results, active)
 
 	// Surface the on-disk path so users know where to find raw
 	// per-LLM output — especially when one agent failed and they
@@ -302,28 +198,7 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 	// owned by the GateDecision type, not duplicated inline here —
 	// see internal/multi/orchestrator.go ZeroMergeableReason.
 	if !gate.HasMergeable() {
-		metadata.Merge.Status = "skipped"
-		if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
-			// Best-effort: per-LLM markdown saves either succeeded or
-			// would already have surfaced their own errors via the
-			// streaming completion lines. Surface the metadata failure
-			// to stderr so the user knows provenance is missing, but
-			// don't fail the run — they came here for the gate exit
-			// code, not for metadata.json.
-			fmt.Fprintf(os.Stderr, "Warning: failed to save metadata.json (review markdown still on disk): %v\n", err)
-		}
-		switch gate.ClassifyZero() {
-		case multi.ZeroMergeableAllFailed:
-			return fmt.Errorf("all %d LLM reviews failed", gate.Total)
-		case multi.ZeroMergeableAllEmpty:
-			return fmt.Errorf("all %d LLM reviews returned empty output (no findings to merge)", gate.Total)
-		default: // ZeroMergeableMixed
-			// Mixed: some agents crashed, others exited zero with blank
-			// output. Pre-fix this case printed "all returned empty
-			// output" which misled users into debugging the wrong
-			// problem (an empty-output bug vs a crash).
-			return fmt.Errorf("no LLM produced output: %d failed, %d returned empty (nothing to merge)", gate.Failed(), gate.Successful)
-		}
+		return reportNoMergeable(gate, metadata, storage, branch, commit)
 	}
 
 	mergedPath, mergedContent, mergeTokens := mergeAndPrint(ctx, cfg, sf, active, results, gate, storage, commit, branch, metadata)
@@ -338,72 +213,39 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		fmt.Fprintf(os.Stderr, "Warning: failed to save metadata.json (review markdown still on disk): %v\n", err)
 	}
 
-	fmt.Println()
-	// "produced output" mirrors the classifier (CountWithOutput) and
-	// the merger's actual consumption criterion. Pre-fix this line
-	// said "succeeded" using CountSuccessful (Error == nil), which
-	// drifted from the rest of the surface — a SaveReview-failed-
-	// with-output run would print "0/3 succeeded" while the merger
-	// happily consolidated all 3 outputs and the gate fired correctly.
-	//
-	// Token total aggregates per-LLM review tokens + merge-step
-	// tokens. Omitted entirely when every agent reported zero (CLI
-	// version too old to surface usage) — printing "0 tokens" would
-	// mislead users into thinking the call was free.
-	totalTokens := aggregateTokens(results, mergeTokens)
-	if totalTokens > 0 {
-		fmt.Printf("✓ %d/%d LLMs produced output · total %s · ~%s tokens\n", gate.WithOutput, gate.Total, time.Since(startTime).Round(time.Second), humanTokens(totalTokens))
-	} else {
-		fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", gate.WithOutput, gate.Total, time.Since(startTime).Round(time.Second))
-	}
-	if mergedPath != "" {
-		// Report-path label uses `rmode` (computed above from the same
-		// gate) so we don't traverse `results` again. Degraded/solo
-		// runs use distinct labels so users can tell single-source
-		// from consensus.
-		switch rmode {
-		case runModeDegraded:
-			fmt.Printf("Single-LLM report (%d of %d agents produced no output): %s\n", gate.Total-gate.WithOutput, gate.Total, mergedPath)
-		case runModeSolo:
-			fmt.Printf("Report: %s\n", mergedPath)
-		default:
-			fmt.Printf("Merged report: %s\n", mergedPath)
-		}
-	}
+	printRunSummary(startTime, gate, results, mergeTokens, mergedPath, rmode)
 
-	// Two independent signals trip the gate (any one is enough). False
-	// positives are preferred over false negatives — over-blocking is
-	// a re-run, under-blocking is a shipped bug.
-	//
-	//  1. The merged markdown — what the merger LLM concluded after
-	//     seeing the (possibly-truncated) per-LLM reviews.
-	//  2. Each per-LLM review's full Output — defends against the
-	//     8 KB merger-input truncation hiding blocking findings past
-	//     the cut, AND against merger failures (merger.Merge error,
-	//     SaveMerged error, mergeLLM unavailable, whitespace-only
-	//     output) where signal #1 is unavailable. The on-disk per-LLM
-	//     file has always had the full output; this just scans it
-	//     before we decide.
-	//
-	// Compute the per-LLM signal first so a merge-step failure with
-	// blocking per-LLM findings still trips the gate. Pre-fix the
-	// empty-merged-content guard short-circuited before this scan
-	// could run, so a merger timeout or rate-limit collapsed an
-	// exit-2 into exit 1 — and the documented pre-commit hook treats
-	// tool failures (exit 1) as "let the commit through." Returning
-	// the sentinel (rather than os.Exit) lets cobra and main()
-	// unwind defers.
-	// The decision (and its ordering invariant) lives in the pure helper
-	// decideExitGate so it can be unit-tested without git / probe /
-	// orchestrator plumbing — see TestDecideExitGate. The I/O (the
-	// per-LLM-only warning and the merge-unavailable error message) stays
-	// here.
+	return applyExitGate(mergedContent, results, cfg.Storage.BasePath)
+}
+
+// applyExitGate computes the review exit gate and performs its I/O. Two
+// independent signals trip it (either alone is enough); false positives
+// are preferred over false negatives — over-blocking is a re-run,
+// under-blocking is a shipped bug:
+//
+//  1. The merged markdown — what the merger LLM concluded after seeing the
+//     (possibly-truncated) per-LLM reviews.
+//  2. Each per-LLM review's full Output — defends against the 8 KB
+//     merger-input truncation hiding blocking findings past the cut, AND
+//     against merger failures (merger.Merge error, SaveMerged error,
+//     mergeLLM unavailable, whitespace-only output) where signal #1 is
+//     unavailable. The on-disk per-LLM file always had the full output.
+//
+// The decision + its ordering invariant (per-LLM signal computed first, so
+// a merge-step failure with blocking per-LLM findings still trips the gate
+// instead of collapsing exit-2 into the exit-1 that pre-commit hooks let
+// through) lives in the pure helper decideExitGate — unit-tested without
+// git/probe/orchestrator plumbing (see TestDecideExitGate). This wrapper
+// owns only the I/O: the per-LLM-only warning and the merge-unavailable
+// error. Returning the errBlockingFindings sentinel (rather than os.Exit)
+// lets cobra and main() unwind defers.
+func applyExitGate(mergedContent string, results []multi.ReviewResult, storageBasePath string) error {
 	gateOut := decideExitGate(mergedContent, results)
 	if gateOut.mergeUnavailable {
-		// Merge step produced nothing (mergeLLM unavailable, merger
-		// error, save failed, whitespace-only) AND no per-LLM review
-		// flagged a blocking finding. Per-LLM reviews are saved on disk.
-		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s and showed no blocking findings, but the merged report is unavailable", cfg.Storage.BasePath)
+		// Merge step produced nothing (mergeLLM unavailable, merger error,
+		// save failed, whitespace-only) AND no per-LLM review flagged a
+		// blocking finding. Per-LLM reviews are saved on disk.
+		return fmt.Errorf("merge step produced no output; per-LLM reviews are saved under %s and showed no blocking findings, but the merged report is unavailable", storageBasePath)
 	}
 	if gateOut.block {
 		if strings.TrimSpace(mergedContent) == "" {
@@ -412,6 +254,165 @@ func runMultiLLMReview(ctx context.Context, cfg config.Config, sf *sharedFlags, 
 		return errBlockingFindings
 	}
 	return nil
+}
+
+// fanOutAndCollect runs the parallel fan-out, streams a per-agent
+// completion line as each finishes (✓/✗ with duration + token suffix),
+// and returns the results in deterministic roster order plus whether any
+// agent failed.
+//
+// The result channel closes after every agent reports, so the range loop
+// doubles as the barrier before merge. Display order = completion order
+// (the streaming UX), but everything downstream — BuildMergeInput,
+// buildMetadata, selectMergeLLM — is order-sensitive and must be
+// deterministic across runs on identical input, hence the sortByRoster
+// before returning (pre-fix, two identical runs produced different merge
+// prompts depending on which agent finished first — a v0.6.6 regression
+// that erodes trust without surfacing as an error).
+//
+// A non-nil ctx error after the loop is propagated directly: a Ctrl+C
+// during the fan-out (the long phase, where interrupts are most likely)
+// otherwise leaves every invoker returning a context error and the
+// downstream gate reporting "all N LLM reviews failed", misdiagnosing a
+// user interrupt as an agent failure.
+func fanOutAndCollect(ctx context.Context, orch *multi.Orchestrator, active []cli.LLM, systemPrompt, diffStr, commit, branch string) (results []multi.ReviewResult, anyFailed bool, err error) {
+	resultsCh, err := orch.RunParallel(ctx, systemPrompt, diffStr, commit, branch)
+	if err != nil {
+		return nil, false, fmt.Errorf("run reviews: %w", err)
+	}
+	results = make([]multi.ReviewResult, 0, len(active))
+	for r := range resultsCh {
+		results = append(results, r)
+		if r.Error != nil {
+			anyFailed = true
+			// r.Error is the invoker's ClassifyExit output — already has the
+			// actionable hint inline. No "review failed:" prefix or wrapping.
+			fmt.Printf("%s ✗ %s%s\n", r.LLM, r.Error, formatTokenSuffix(r.Tokens))
+		} else {
+			fmt.Printf("%s ✓ (%.1fs)%s\n", r.LLM, r.Duration.Seconds(), formatTokenSuffix(r.Tokens))
+		}
+	}
+	fmt.Println()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return sortByRoster(results, active), anyFailed, nil
+}
+
+// filterReadyAgents narrows the active set to agents that can actually run
+// this review. Two stages:
+//
+//  1. Static context-window check (cli.PreflightFilter): drop agents whose
+//     window can't fit prompt+diff. Pre-v0.7 oversized prompts surfaced as
+//     model-specific failures (claude SIGKILL, codex 4xx); catching it here
+//     means a predictable up-front skip with a "use a smaller scope" hint
+//     and no tokens spent on a doomed call.
+//  2. Dynamic auth+capacity probe (runPreflightProbe, v0.10.1), unless
+//     --no-preflight: a tiny "reply OK" call per agent with a ~10s timeout,
+//     rendering a ✓/✗ block, then dropping ✗ agents. v0.10.0's dogfood
+//     surfaced gemini's "exhausted capacity" only AFTER ~4 minutes — the
+//     real-review timeout is large enough to hide a doomed LLM that long;
+//     the probe collapses that to seconds.
+//
+// Skipped / probe-failed agents are reported to stderr as a side effect.
+// Returns a non-nil error only when NO agent survives (caller aborts), or
+// when the context is cancelled mid-probe — ctx.Err() is propagated
+// directly so the user sees the real reason (interrupt) rather than a
+// misleading "every active LLM failed", and main()'s signal-handler exit
+// path gets the right code.
+func filterReadyAgents(ctx context.Context, sf *sharedFlags, active []cli.LLM, systemPrompt, diffStr string) ([]cli.LLM, error) {
+	active, skipped, promptDiffTokens := cli.PreflightFilter(active, systemPrompt, diffStr)
+	if len(skipped) > 0 {
+		fmt.Fprint(os.Stderr, cli.SkipSummary(skipped))
+		fmt.Fprintln(os.Stderr)
+	}
+	if len(active) == 0 {
+		return nil, fmt.Errorf("prompt+diff is too large for every active agent: ~%d tokens estimated; try a smaller scope (`local-review commit HEAD` or `local-review staged`)", promptDiffTokens)
+	}
+	if sf.noPreflight {
+		return active, nil
+	}
+	// Resolve the per-LLM probe timeout: explicit --preflight-timeout wins;
+	// 0/unset falls back to cli.DefaultProbeTimeout (10s). The runner — not
+	// Probe — owns this so the readiness-block render shows the actual
+	// configured value, not the package default.
+	probeTimeout := sf.preflightTimeout
+	if probeTimeout <= 0 {
+		probeTimeout = cli.DefaultProbeTimeout
+	}
+	active = runPreflightProbe(ctx, active, probeTimeout, sf.strictProbe)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(active) == 0 {
+		return nil, fmt.Errorf("every active LLM failed the pre-flight readiness probe (run `local-review doctor` for status, or `--no-preflight` to skip the probe)")
+	}
+	return active, nil
+}
+
+// reportNoMergeable handles the terminal "nothing for the merger to
+// consume" case (gate.HasMergeable() == false): mark the metadata merge
+// skipped, best-effort persist it, and return the error that matches WHY
+// there was nothing to merge.
+//
+// We branch on the gate's WithOutput taxonomy (what BuildMergeInput
+// actually sees), not Successful (Error == nil), because two cases slipped
+// past a Successful-only check: SaveReview-failed-with-output (Error set
+// but Output populated — the merger could still consolidate it) and
+// CLI-exited-zero-with-empty-output (Error nil but Output ""). The error
+// taxonomy is owned by the GateDecision type (see ZeroMergeableReason),
+// not duplicated inline. Metadata save failure is surfaced to stderr but
+// doesn't fail the run — the caller came for the gate exit code, not
+// metadata.json.
+func reportNoMergeable(gate multi.GateDecision, metadata *multi.Metadata, storage *multi.ReviewStorage, branch, commit string) error {
+	metadata.Merge.Status = "skipped"
+	if _, err := storage.SaveMetadata(branch, commit, metadata); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to save metadata.json (review markdown still on disk): %v\n", err)
+	}
+	switch gate.ClassifyZero() {
+	case multi.ZeroMergeableAllFailed:
+		return fmt.Errorf("all %d LLM reviews failed", gate.Total)
+	case multi.ZeroMergeableAllEmpty:
+		return fmt.Errorf("all %d LLM reviews returned empty output (no findings to merge)", gate.Total)
+	default: // ZeroMergeableMixed
+		// Mixed: some agents crashed, others exited zero with blank output.
+		// Pre-fix this printed "all returned empty output", misleading users
+		// into debugging the wrong problem (an empty-output bug vs a crash).
+		return fmt.Errorf("no LLM produced output: %d failed, %d returned empty (nothing to merge)", gate.Failed(), gate.Successful)
+	}
+}
+
+// printRunSummary prints the post-merge "✓ N/M LLMs produced output ·
+// total … · ~… tokens" line and the report-path line.
+//
+// "produced output" mirrors the gate's WithOutput count (the merger's
+// actual consumption criterion), NOT Successful (Error == nil) — pre-fix
+// this said "succeeded" and drifted from the rest of the surface (a
+// SaveReview-failed-with-output run printed "0/3 succeeded" while the
+// merger consolidated all 3). The token total aggregates per-LLM + merge
+// tokens and is omitted entirely when every agent reported zero (CLI too
+// old to surface usage) — printing "0 tokens" would imply the call was
+// free. The report-path label uses rmode (degraded / solo / merge) so
+// users can tell a single-source report from a consensus one.
+func printRunSummary(startTime time.Time, gate multi.GateDecision, results []multi.ReviewResult, mergeTokens cli.TokenUsage, mergedPath string, rmode runMode) {
+	fmt.Println()
+	totalTokens := aggregateTokens(results, mergeTokens)
+	if totalTokens > 0 {
+		fmt.Printf("✓ %d/%d LLMs produced output · total %s · ~%s tokens\n", gate.WithOutput, gate.Total, time.Since(startTime).Round(time.Second), humanTokens(totalTokens))
+	} else {
+		fmt.Printf("✓ %d/%d LLMs produced output · total %s\n", gate.WithOutput, gate.Total, time.Since(startTime).Round(time.Second))
+	}
+	if mergedPath == "" {
+		return
+	}
+	switch rmode {
+	case runModeDegraded:
+		fmt.Printf("Single-LLM report (%d of %d agents produced no output): %s\n", gate.Total-gate.WithOutput, gate.Total, mergedPath)
+	case runModeSolo:
+		fmt.Printf("Report: %s\n", mergedPath)
+	default:
+		fmt.Printf("Merged report: %s\n", mergedPath)
+	}
 }
 
 // gateOutcome is the review exit-gate decision, computed independently of
