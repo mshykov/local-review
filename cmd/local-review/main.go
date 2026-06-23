@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/mshykov/local-review/internal/agentselect"
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/git"
@@ -377,7 +378,7 @@ func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref s
 	// If --only named an experimental (non-review-capable) CLI, say so
 	// explicitly. Otherwise its absence — or an empty active set — reads
 	// like an auth failure rather than the intentional gate it is.
-	if excluded := experimentalOnlyNames(sf.only); len(excluded) > 0 {
+	if excluded := agentselect.ExperimentalOnlyNames(sf.only); len(excluded) > 0 {
 		fmt.Fprintf(os.Stderr, "Note: --only named experimental CLI(s) %v — detected but excluded from reviews (their agentic CLIs can't yet produce a clean review). See `local-review doctor`.\n\n", excluded)
 	}
 

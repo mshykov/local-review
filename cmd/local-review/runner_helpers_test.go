@@ -3,8 +3,6 @@ package main
 import (
 	"testing"
 
-	"github.com/mshykov/local-review/internal/cli"
-	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/multi"
 )
 
@@ -90,43 +88,4 @@ func TestDecideExitGate(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestDropCLITwins covers the roster dedup: a name with base_url in config
-// is a provider agent, so its CLI twin must be dropped before the provider
-// twin is appended — otherwise `llms.claude.base_url: ...` double-runs.
-func TestDropCLITwins(t *testing.T) {
-	cliClaude := cli.LLM{Name: "claude"}                                   // BaseURL == "" → CLI agent
-	cliGemini := cli.LLM{Name: "gemini"}                                   // unrelated CLI agent
-	provClaude := cli.LLM{Name: "claude", BaseURL: "http://192.0.2.10/v1"} // provider twin
-
-	t.Run("drops CLI twin when name has base_url in config", func(t *testing.T) {
-		cfg := config.Config{LLMs: map[string]config.LLMConfig{
-			"claude": {BaseURL: "http://192.0.2.10/v1"},
-		}}
-		got := dropCLITwins([]cli.LLM{cliClaude, cliGemini}, cfg)
-		if len(got) != 1 || got[0].Name != "gemini" {
-			t.Fatalf("expected only the gemini CLI agent to survive, got %+v", got)
-		}
-	})
-
-	t.Run("no base_url config leaves the roster unchanged", func(t *testing.T) {
-		cfg := config.Config{LLMs: map[string]config.LLMConfig{
-			"claude": {Model: "claude-opus"},
-		}}
-		got := dropCLITwins([]cli.LLM{cliClaude, cliGemini}, cfg)
-		if len(got) != 2 {
-			t.Fatalf("expected both CLI agents to survive, got %+v", got)
-		}
-	})
-
-	t.Run("provider twin itself is preserved (only CLI twins drop)", func(t *testing.T) {
-		cfg := config.Config{LLMs: map[string]config.LLMConfig{
-			"claude": {BaseURL: "http://192.0.2.10/v1"},
-		}}
-		got := dropCLITwins([]cli.LLM{cliClaude, provClaude}, cfg)
-		if len(got) != 1 || got[0].BaseURL == "" {
-			t.Fatalf("expected only the provider claude (with BaseURL) to survive, got %+v", got)
-		}
-	})
 }
