@@ -123,9 +123,11 @@ CI/infra change.
 
 - **SonarCloud Automatic Analysis doesn't reliably re-analyze PR pushes.** PR-level
   gate "failures" were stale analyses of an *earlier* commit; the identical code was
-  green on `main` after merge. Don't trust the PR Sonar check's timing — confirm
-  against `branch=main` after merge, or move Sonar to a `pull_request`-triggered CI
-  job (it only runs on push-to-main today) for a trustworthy per-PR signal.
+  green on `main` after merge. Fixed by switching Sonar to CI-based analysis on
+  `pull_request` (`.github/workflows/sonar.yml`) and disabling Automatic Analysis in
+  the project settings (the two are mutually exclusive) — each PR push now gets a
+  fresh gate computed from its exact commit. Note: Sonar is still not a *required*
+  check, so a red gate surfaces a finding without blocking merge.
 - **Extraction relocates coverage; it does not create it.** Moving already-tested
   logic out of `cmd` *lowers* `cmd`'s coverage % — numerator and denominator both
   leave. The real win is a smaller danger zone with the logic in a cohesive, tested
