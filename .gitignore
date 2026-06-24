@@ -29,10 +29,14 @@
 *.bak*
 .local-review/reviews/
 
-# Local scratch / working notes that must never be committed. `_do-not-commit/`
-# holds planning + business docs (and is named to say so); `local-review-doc/`
-# holds ad-hoc audit/report output. Previously only the typo'd `do-not-merge/`
-# was listed, so a stray `git add -A` could have committed either dir.
+# Local scratch / working notes that must never be committed.
+# `_do_not_commit/` is the single local junk drawer — planning + business
+# docs, secrets (e.g. sonar.token), ad-hoc audit/report output (the old
+# `local-review-doc/` now lives under it), and per-session handoff notes.
+# Never `git add` anything under it. The `_do-not-commit/` (hyphen) and
+# `local-review-doc/` spellings stay ignored too as a belt-and-suspenders
+# guard against an old path or a stray `git add -A`.
+_do_not_commit/
 _do-not-commit/
 local-review-doc/
 
