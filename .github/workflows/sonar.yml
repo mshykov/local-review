@@ -1,19 +1,24 @@
 name: SonarCloud
 
-# Runs SonarCloud analysis ONLY when a release-labeled PR merges to main.
-# Mirrors the gating logic in release.yml — Sonar is part of the release
-# quality bar, not a per-PR check that runs on every doc tweak.
+# CI-based SonarCloud analysis. Runs a fresh scan on every pull request and on
+# every push to main, so each PR push gets a quality gate that reflects THAT
+# PR's actual code.
 #
-# Why "release-labeled merges only" instead of "every push to main":
-#   - Sonar consumes a quota per scan; running on every doc / refactor /
-#     CI fiddle PR would burn it without surfacing actionable findings.
-#   - Release-labeled PRs are the ones we promote to a tag + binaries,
-#     so they're the ones we actually care about scoring against the
-#     long-term quality trend.
+# Why CI-based instead of SonarCloud's Automatic Analysis:
+#   - Automatic Analysis (the SonarCloud GitHub App) does not reliably
+#     re-analyze each PR push — it serves a stale analysis of an earlier
+#     commit, so the PR gate would go red on code that's green on main.
+#     CI-based analysis is computed from the exact checked-out commit.
+#   - Automatic Analysis MUST stay disabled in the SonarCloud project settings
+#     (Administration → Analysis Method): CI-based and Automatic analysis are
+#     mutually exclusive and the scan errors out if both are enabled.
+#   - This repo is public, so both SonarCloud analysis and GitHub Actions
+#     minutes are free — there's no per-scan quota to conserve.
 #
-# Failure posture: this workflow can fail without breaking the release
-# pipeline. release.yml is a separate workflow, so a Sonar quota outage
-# or scan glitch won't gate the binary publish.
+# Failure posture: Sonar is NOT a required status check (the branch ruleset
+# requires `test` + CodeQL only), so a red Sonar gate surfaces a finding
+# without blocking merge. Fork PRs don't run the scan (SONAR_TOKEN isn't
+# exposed to forks) — see the job-level `if:` guard.
 
 on:
   push:
@@ -24,62 +29,32 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/PULL_REQUEST_TEMPLATE.md'
       - 'examples/**'
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - 'examples/**'
 
-# Default to read-only; jobs that need more escalate explicitly.
+# Default to read-only; the scan only checks out and uploads results.
 permissions:
   contents: read
 
 jobs:
-  gate:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read  # gh pr view --json labels
-    outputs:
-      should_scan: ${{ steps.gate.outputs.should_scan }}
-    steps:
-      - name: Gate (release-labeled PR merge)
-        id: gate
-        env:
-          GH_TOKEN: ${{ github.token }}
-          COMMIT_SHA: ${{ github.sha }}
-          REPO: ${{ github.repository }}
-        run: |
-          # Lookup the PR via the GitHub API (works for squash, merge
-          # commit, and rebase merge strategies — parsing the commit
-          # subject only catches merge commits). Using `gh api`
-          # instead of `gh pr view` because this job doesn't check
-          # out the repo, so `gh pr view` would fail trying to infer
-          # the git context from cwd.
-          pr_number=$(gh api "/repos/${REPO}/commits/${COMMIT_SHA}/pulls" \
-            --jq '.[0].number' 2>/dev/null || echo "")
-          if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
-            echo "No PR found for commit ${COMMIT_SHA} — skipping Sonar"
-            echo "should_scan=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Same reason for `gh api ... --jq` over `gh pr view --repo`:
-          # explicit, no cwd dependency.
-          labels=$(gh api "/repos/${REPO}/pulls/${pr_number}" \
-            --jq '.labels[].name' 2>/dev/null || echo "")
-          if echo "$labels" | grep -qxF "release"; then
-            echo "PR #$pr_number has 'release' label — running Sonar scan"
-            echo "should_scan=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "PR #$pr_number has no 'release' label — skipping Sonar"
-            echo "should_scan=false" >> "$GITHUB_OUTPUT"
-          fi
-
   scan:
-    needs: gate
-    if: needs.gate.outputs.should_scan == 'true'
+    # Skip PRs from forks: SONAR_TOKEN isn't exposed to fork PRs, so the scan
+    # can't authenticate and would fail noisily. Same-repo PRs (head repo ==
+    # this repo) and pushes to main run normally.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: read  # checkout + read-only Sonar upload
     steps:
-      # fetch-depth: 0 gives Sonar the full history it needs for blame
-      # data ("new code" calculations against branch lifetime).
+      # fetch-depth: 0 gives Sonar the full history it needs for blame data
+      # ("new code" calculations against branch lifetime) and PR base detection.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
@@ -102,6 +77,9 @@ jobs:
           go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
       - name: SonarQube Scan
+        # The action auto-detects PR context (sonar.pullrequest.key/branch/base)
+        # from the GitHub Actions environment, so PRs and main both work with no
+        # extra config.
         uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # v8.2.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
