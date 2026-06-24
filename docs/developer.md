@@ -72,6 +72,12 @@ food — if the tool produces noise on this codebase, that's a bug to file or fi
 
 Skip the self-review **only** for pure docs / website / trivial-config changes.
 
+If the `claude` CLI itself can't run the self-review in your environment (e.g. a
+sandboxed or nested-agent context where the CLI errors out), fall back to the
+full `go test -race ./...` + `-tags e2e` suite, CI, and CodeRabbit — and **say so
+in the PR** so reviewers know the dogfood pass was skipped and why. The safety net
+for danger-zone changes is environment-dependent; don't pretend it ran.
+
 ## Definition of done
 
 - Builds clean (`go build ./...`), `gofmt -s` + `go vet` clean, `go test -race ./...`
@@ -80,3 +86,61 @@ Skip the self-review **only** for pure docs / website / trivial-config changes.
 - Docs and comments updated in the same change as the behavior they describe.
 - If you skipped a test, deferred a check, or made an assumption — **say so** in the
   PR description. "Done except X" beats "done" with a silent gap.
+
+## Lessons learned (workflow & tooling)
+
+Distilled from a multi-PR tech-debt + migration sweep. These are the practices that
+paid off and the traps that cost time — read them before a big refactor or a
+CI/infra change.
+
+### Keep doing
+
+- **One purpose per PR.** A large effort (docs fix, CI tooling, two package
+  extractions, an orchestrator decomposition) split into separate focused PRs each
+  merges clean, reviews fast, and reverts surgically. Bundling would have made every
+  one of those harder.
+- **Verify before you push, every time.** `gofmt -s` + `go vet` + `go test -race
+  ./...` + `go test -tags e2e ./e2e/...` locally. CI is the backstop, not the first
+  signal — finding a break after a 2-minute CI cycle is the slow path.
+- **Behavior-preserving refactors stay behavior-preserving.** Move the tests *with*
+  the code, carry every invariant-documenting comment across, and lean on the
+  existing suite as the safety net. A pure relocation changes call sites and file
+  layout — never logic. When a function only reads one field of a struct param
+  (`sf.only`), pass the field, not the struct — it decouples the extract-ee cleanly.
+- **Quantify refactor claims with a tool; don't assert them.** `go run
+  github.com/uudashr/gocognit/cmd/gocognit@latest -over 15 <file>` confirmed the
+  orchestrator dropped from cognitive-complexity 41 → 15. "It's simpler now" is not
+  evidence.
+- **Diagnose CI failures from the source, not by guessing.** The SonarCloud API
+  (`/api/qualitygates/project_status`, `/api/duplications/show`,
+  `/api/issues/search`) pinpoints the exact failing condition, file, and line in
+  seconds — far faster than re-reading the dashboard or re-pushing speculative fixes.
+- **Order outward-facing migrations so nothing breaks mid-flight.** For the
+  custom-domain move: add the DNS record → verify it resolves → *then* merge the
+  `CNAME` file. The reverse leaves the site unreachable while DNS propagates.
+
+### Watch out for (cost us time this round)
+
+- **SonarCloud Automatic Analysis doesn't reliably re-analyze PR pushes.** PR-level
+  gate "failures" were stale analyses of an *earlier* commit; the identical code was
+  green on `main` after merge. Don't trust the PR Sonar check's timing — confirm
+  against `branch=main` after merge, or move Sonar to a `pull_request`-triggered CI
+  job (it only runs on push-to-main today) for a trustworthy per-PR signal.
+- **Extraction relocates coverage; it does not create it.** Moving already-tested
+  logic out of `cmd` *lowers* `cmd`'s coverage % — numerator and denominator both
+  leave. The real win is a smaller danger zone with the logic in a cohesive, tested
+  package. Frame it that way; only "raise package X's coverage" by adding *new* tests
+  for *untested* code (the IO orchestrator, not the pure helpers).
+- **Table-driven Go tests trip Sonar's copy-paste detector.** Repeated
+  `{name, input, want}` case structs read as duplication on new code. `*_test.go` is
+  exempt in `sonar-project.properties` (same rationale as the `init.go` provider
+  table and the S3776 test-file exemption) — expect a new table test to need this;
+  don't contort it to satisfy CPD.
+- **Don't chase the cognitive-complexity metric across the board.** ~20 functions
+  exceed Sonar's S3776 threshold of 15; most are legitimately-complex orchestration /
+  parsing and are existing-code issues that don't fail the new-code gate. Decompose
+  the genuine worst offender for readability; leave the rest. Refactoring purely to
+  satisfy a metric adds indirection without value.
+- **Branch before you edit.** Several refactors started with edits on `main` and had
+  to be moved onto a feature branch (`git checkout -b` carries the working tree, so
+  it's recoverable) — but starting on the branch is one less thing to get wrong.
