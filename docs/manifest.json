@@ -1,7 +1,7 @@
 {
   "name": "local-review",
   "short_name": "local-review",
-  "description": "Run AI code reviews locally with Claude, Gemini, Codex, and Copilot in parallel. Privacy-first, no telemetry, no SaaS. Free options available.",
+  "description": "Run local AI code reviews across CLI and provider LLMs. Privacy-first, no telemetry, no SaaS, BYOK.",
   "start_url": "/",
   "scope": "/",
   "display": "minimal-ui",
