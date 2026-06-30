@@ -125,9 +125,11 @@ CI/infra change.
   gate "failures" were stale analyses of an *earlier* commit; the identical code was
   green on `main` after merge. Fixed by switching Sonar to CI-based analysis on
   `pull_request` (`.github/workflows/sonar.yml`) and disabling Automatic Analysis in
-  the project settings (the two are mutually exclusive) — each PR push now gets a
-  fresh gate computed from its exact commit. Note: Sonar is still not a *required*
-  check, so a red gate surfaces a finding without blocking merge.
+  the project settings (the two are mutually exclusive) — PR pushes with access to
+  `SONAR_TOKEN` now get a fresh gate computed from their exact commit. Fork and
+  Dependabot PRs skip the scan because that secret is not exposed to those PR
+  contexts. Note: Sonar is still not a *required* check, so a red gate surfaces a
+  finding without blocking merge.
 - **Extraction relocates coverage; it does not create it.** Moving already-tested
   logic out of `cmd` *lowers* `cmd`'s coverage % — numerator and denominator both
   leave. The real win is a smaller danger zone with the logic in a cohesive, tested
