@@ -17,8 +17,9 @@ name: SonarCloud
 #
 # Failure posture: Sonar is NOT a required status check (the branch ruleset
 # requires `test` + CodeQL only), so a red Sonar gate surfaces a finding
-# without blocking merge. Fork PRs don't run the scan (SONAR_TOKEN isn't
-# exposed to forks) — see the job-level `if:` guard.
+# without blocking merge. Fork and Dependabot PRs don't run the scan
+# (SONAR_TOKEN isn't exposed to those PR contexts) — see the job-level `if:`
+# guard.
 
 on:
   push:
@@ -43,12 +44,13 @@ permissions:
 
 jobs:
   scan:
-    # Skip PRs from forks: SONAR_TOKEN isn't exposed to fork PRs, so the scan
-    # can't authenticate and would fail noisily. Same-repo PRs (head repo ==
-    # this repo) and pushes to main run normally.
+    # Skip PRs where SONAR_TOKEN won't be exposed, otherwise the scan can't
+    # authenticate and fails noisily. Same-repo non-Dependabot PRs and pushes
+    # to main run normally.
     if: >-
       github.event_name == 'push' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
     permissions:
       contents: read  # checkout + read-only Sonar upload
