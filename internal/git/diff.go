@@ -196,36 +196,8 @@ func ValidateRef(ref string) error {
 // change set.
 func parseUnifiedDiff(r io.Reader) ([]Diff, error) {
 	br := bufio.NewReader(r)
+	var s diffParseState
 
-	var diffs []Diff
-	var cur *Diff
-	var hunk *Hunk
-	var hunkBody strings.Builder
-
-	flushHunk := func() {
-		if cur != nil && hunk != nil {
-			hunk.Content = hunkBody.String()
-			cur.Hunks = append(cur.Hunks, *hunk)
-		}
-		hunk = nil
-		hunkBody.Reset()
-	}
-	flushFile := func() {
-		flushHunk()
-		if cur != nil {
-			diffs = append(diffs, *cur)
-		}
-		cur = nil
-	}
-
-	// Case order matters here — once we're inside a hunk (post-@@),
-	// every line is content even if it happens to start with `--- a/`
-	// or `+++ b/`. A deleted SQL comment `-- a/users` renders as
-	// `--- a/users` in the diff (the leading `-` is the diff prefix),
-	// and the previous case order matched that as a file header,
-	// silently overwriting cur.Path AND swallowing the line from the
-	// hunk content. Putting `hunk != nil` ahead of the header cases
-	// makes header recognition pre-@@ only.
 	for {
 		raw, readErr := br.ReadString('\n')
 		// ReadString returns the partial line + io.EOF when input
@@ -236,41 +208,7 @@ func parseUnifiedDiff(r io.Reader) ([]Diff, error) {
 			// \r into paths or hunk content. (Same job the old
 			// strings.ReplaceAll did, done per-line during streaming.)
 			line := strings.TrimRight(strings.TrimSuffix(raw, "\n"), "\r")
-			switch {
-			case strings.HasPrefix(line, "diff --git"):
-				flushFile()
-				cur = &Diff{}
-			case strings.HasPrefix(line, "@@"):
-				flushHunk()
-				hunk = &Hunk{Header: line, NewFrom: parseNewFrom(line)}
-			case hunk != nil:
-				// Inside a hunk → all lines are content, regardless of
-				// what they look like. See the "Case order matters" comment
-				// above for why this can't move below the header cases.
-				hunkBody.WriteString(line)
-				hunkBody.WriteByte('\n')
-			case strings.HasPrefix(line, "--- a/"):
-				// Capture the original path as a fallback for deletions —
-				// `+++ /dev/null` is the standard `git diff` shape for a
-				// deleted file, so reading +++ alone would attribute every
-				// deletion to "/dev/null" and silently break filtering,
-				// finding attribution, and any path-based downstream logic.
-				if cur != nil {
-					cur.Path = strings.TrimPrefix(line, "--- a/")
-				}
-			case strings.HasPrefix(line, "+++ b/"):
-				if cur != nil {
-					cur.Path = strings.TrimPrefix(line, "+++ b/")
-				}
-			case strings.HasPrefix(line, "+++ ") && cur != nil && cur.Path == "":
-				// Fallback for unusual paths (e.g. patches with non-standard
-				// prefixes). Skip the "+++ /dev/null" deletion shape — we
-				// already captured the original path from --- above.
-				suffix := strings.TrimPrefix(line, "+++ ")
-				if suffix != "/dev/null" {
-					cur.Path = suffix
-				}
-			}
+			s.processLine(line)
 		}
 		if readErr != nil {
 			if readErr == io.EOF {
@@ -279,16 +217,91 @@ func parseUnifiedDiff(r io.Reader) ([]Diff, error) {
 			return nil, fmt.Errorf("scan diff: %w", readErr)
 		}
 	}
-	flushFile()
+	s.flushFile()
 
 	// Drop any malformed entries (no path means we never saw a file header)
-	out := diffs[:0]
-	for _, d := range diffs {
+	out := s.diffs[:0]
+	for _, d := range s.diffs {
 		if d.Path != "" {
 			out = append(out, d)
 		}
 	}
 	return out, nil
+}
+
+// diffParseState is parseUnifiedDiff's streaming accumulator: the diffs
+// built so far, the file/hunk currently being accumulated, and the current
+// hunk's body text.
+type diffParseState struct {
+	diffs    []Diff
+	cur      *Diff
+	hunk     *Hunk
+	hunkBody strings.Builder
+}
+
+func (s *diffParseState) flushHunk() {
+	if s.cur != nil && s.hunk != nil {
+		s.hunk.Content = s.hunkBody.String()
+		s.cur.Hunks = append(s.cur.Hunks, *s.hunk)
+	}
+	s.hunk = nil
+	s.hunkBody.Reset()
+}
+
+func (s *diffParseState) flushFile() {
+	s.flushHunk()
+	if s.cur != nil {
+		s.diffs = append(s.diffs, *s.cur)
+	}
+	s.cur = nil
+}
+
+// processLine classifies one already-newline-stripped diff line and
+// updates state accordingly.
+//
+// Case order matters here — once we're inside a hunk (post-@@), every
+// line is content even if it happens to start with `--- a/` or `+++ b/`.
+// A deleted SQL comment `-- a/users` renders as `--- a/users` in the diff
+// (the leading `-` is the diff prefix), and the previous case order
+// matched that as a file header, silently overwriting cur.Path AND
+// swallowing the line from the hunk content. Putting `hunk != nil` ahead
+// of the header cases makes header recognition pre-@@ only.
+func (s *diffParseState) processLine(line string) {
+	switch {
+	case strings.HasPrefix(line, "diff --git"):
+		s.flushFile()
+		s.cur = &Diff{}
+	case strings.HasPrefix(line, "@@"):
+		s.flushHunk()
+		s.hunk = &Hunk{Header: line, NewFrom: parseNewFrom(line)}
+	case s.hunk != nil:
+		// Inside a hunk → all lines are content, regardless of
+		// what they look like. See the "Case order matters" comment
+		// above for why this can't move below the header cases.
+		s.hunkBody.WriteString(line)
+		s.hunkBody.WriteByte('\n')
+	case strings.HasPrefix(line, "--- a/"):
+		// Capture the original path as a fallback for deletions —
+		// `+++ /dev/null` is the standard `git diff` shape for a
+		// deleted file, so reading +++ alone would attribute every
+		// deletion to "/dev/null" and silently break filtering,
+		// finding attribution, and any path-based downstream logic.
+		if s.cur != nil {
+			s.cur.Path = strings.TrimPrefix(line, "--- a/")
+		}
+	case strings.HasPrefix(line, "+++ b/"):
+		if s.cur != nil {
+			s.cur.Path = strings.TrimPrefix(line, "+++ b/")
+		}
+	case strings.HasPrefix(line, "+++ ") && s.cur != nil && s.cur.Path == "":
+		// Fallback for unusual paths (e.g. patches with non-standard
+		// prefixes). Skip the "+++ /dev/null" deletion shape — we
+		// already captured the original path from --- above.
+		suffix := strings.TrimPrefix(line, "+++ ")
+		if suffix != "/dev/null" {
+			s.cur.Path = suffix
+		}
+	}
 }
 
 // parseNewFrom extracts the "+N" line number from a hunk header
