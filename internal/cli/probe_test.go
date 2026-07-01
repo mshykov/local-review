@@ -533,19 +533,21 @@ func (h *hungInvokerWithPartial) PartialStderr() string {
 // Err-must-NOT-contain, errors.Is-unwrap) is meaningful for the
 // scenario; empty fields are skipped. Test names follow CLAUDE.md
 // rule 9 — each case encodes an invariant, not a call shape.
+type probeTimeoutCase struct {
+	name            string
+	invoker         Invoker
+	wantContains    []string // every substring must appear in Err.Error()
+	wantNotContains []string // none of these may appear in Err.Error()
+	wantUnwraps     error    // errors.Is(Err, this) must hold; nil = skip
+}
+
 func TestProbe_TimeoutClassification(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 
 	vendorMsg := "Error: You have exhausted your capacity on this model."
 
-	cases := []struct {
-		name            string
-		invoker         Invoker
-		wantContains    []string // every substring must appear in Err.Error()
-		wantNotContains []string // none of these may appear in Err.Error()
-		wantUnwraps     error    // errors.Is(Err, this) must hold; nil = skip
-	}{
+	cases := []probeTimeoutCase{
 		{
 			name: "partial_stderr_surfaces_as_reason",
 			invoker: &hungInvokerWithPartial{
@@ -590,31 +592,36 @@ func TestProbe_TimeoutClassification(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-			defer cancel()
-
-			r := Probe(ctx, tc.invoker, "test-llm")
-			if r.Status != ProbeTimeout {
-				t.Fatalf("Status = %s, want ProbeTimeout", r.Status)
-			}
-			if r.Err == nil {
-				t.Fatal("Err is nil; expected ctx-Err or partial-stderr error")
-			}
-			errStr := r.Err.Error()
-			for _, sub := range tc.wantContains {
-				if !strings.Contains(errStr, sub) {
-					t.Errorf("Err = %q, want it to contain %q", errStr, sub)
-				}
-			}
-			for _, sub := range tc.wantNotContains {
-				if strings.Contains(errStr, sub) {
-					t.Errorf("Err = %q, want it NOT to contain %q (display should stay clean)", errStr, sub)
-				}
-			}
-			if tc.wantUnwraps != nil && !errors.Is(r.Err, tc.wantUnwraps) {
-				t.Errorf("errors.Is(Err, %v) = false, want true", tc.wantUnwraps)
-			}
+			assertProbeTimeoutClassification(t, tc)
 		})
+	}
+}
+
+func assertProbeTimeoutClassification(t *testing.T, tc probeTimeoutCase) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	r := Probe(ctx, tc.invoker, "test-llm")
+	if r.Status != ProbeTimeout {
+		t.Fatalf("Status = %s, want ProbeTimeout", r.Status)
+	}
+	if r.Err == nil {
+		t.Fatal("Err is nil; expected ctx-Err or partial-stderr error")
+	}
+	errStr := r.Err.Error()
+	for _, sub := range tc.wantContains {
+		if !strings.Contains(errStr, sub) {
+			t.Errorf("Err = %q, want it to contain %q", errStr, sub)
+		}
+	}
+	for _, sub := range tc.wantNotContains {
+		if strings.Contains(errStr, sub) {
+			t.Errorf("Err = %q, want it NOT to contain %q (display should stay clean)", errStr, sub)
+		}
+	}
+	if tc.wantUnwraps != nil && !errors.Is(r.Err, tc.wantUnwraps) {
+		t.Errorf("errors.Is(Err, %v) = false, want true", tc.wantUnwraps)
 	}
 }
 

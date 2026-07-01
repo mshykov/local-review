@@ -76,6 +76,17 @@ func TestRunParallel_StreamsCompletionOrder(t *testing.T) {
 	// can't race ahead and let two agents finish "simultaneously"
 	// from the channel's perspective.
 	want := []string{"codex", "claude", "gemini"}
+	assertReleaseOrder(t, ch, gates, want)
+	assertChannelClosesAfterRelease(t, ch)
+}
+
+// assertReleaseOrder releases each gate in `want` order and asserts the
+// channel emits results in that same order — we read each result
+// immediately after releasing its gate so the next gate-close can't race
+// ahead and let two agents finish "simultaneously" from the channel's
+// perspective.
+func assertReleaseOrder(t *testing.T, ch <-chan ReviewResult, gates map[string]chan struct{}, want []string) {
+	t.Helper()
 	for i, name := range want {
 		close(gates[name])
 		select {
@@ -93,13 +104,17 @@ func TestRunParallel_StreamsCompletionOrder(t *testing.T) {
 			t.Fatalf("timed out waiting for %s emission", name)
 		}
 	}
-	// Channel should now be closed. Use a timeout-bounded select
-	// instead of a bare `<-ch`: the orchestrator's outer goroutine
-	// closes the channel only after wg.Wait() returns, which races
-	// in microseconds with the last worker's wg.Done(). Normally
-	// imperceptible, but under heavy CI load a bare receive could
-	// hang briefly and turn this assertion into a flaky timeout.
-	// 2s matches the rest of this file's "test never hangs" budget.
+}
+
+// assertChannelClosesAfterRelease asserts ch closes within 2s. Uses a
+// timeout-bounded select instead of a bare `<-ch`: the orchestrator's
+// outer goroutine closes the channel only after wg.Wait() returns, which
+// races in microseconds with the last worker's wg.Done(). Normally
+// imperceptible, but under heavy CI load a bare receive could hang
+// briefly and turn this assertion into a flaky timeout. 2s matches the
+// rest of this file's "test never hangs" budget.
+func assertChannelClosesAfterRelease(t *testing.T, ch <-chan ReviewResult) {
+	t.Helper()
 	select {
 	case _, ok := <-ch:
 		if ok {
