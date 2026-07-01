@@ -121,29 +121,43 @@ func ProviderSpecsFromConfig(cfg config.Config) []cli.ProviderSpec {
 // in printAgentRoster.
 func Select(detected []cli.LLM, ready map[string]bool, cfg config.Config, only string, now time.Time) (active []cli.LLM, configDisabled, sunsetDropped []string) {
 	if want := ParseOnlyList(only); len(want) > 0 {
-		for _, llm := range detected {
-			if !want[llm.Name] {
-				continue
-			}
-			if !cli.IsReviewCapable(llm.Name) {
-				continue
-			}
-			if !ready[llm.Name] {
-				continue
-			}
-			if isSunsetAndNotForced(llm, cfg, now) {
-				// --only is an explicit allow-list; honour the user's
-				// intent over the sunset auto-disable. Warn so they
-				// see they're past the cutoff (force_after_sunset is
-				// always implicit under --only of a sunset agent).
-				fmt.Fprintf(os.Stderr, "Warning: --only %s past manufacturer sunset (%s) — running anyway (treat any failures as expected).\n",
-					llm.Name, cli.AgentSunsetDate(llm.Name).Format("2006-01-02"))
-			}
-			active = append(active, applyConfig(llm, cfg))
-		}
-		return active, nil, nil
+		return selectOnly(detected, ready, cfg, want, now), nil, nil
 	}
+	return selectDefault(detected, ready, cfg, now)
+}
 
+// selectOnly implements Select's --only path: an explicit allow-list wins
+// absolutely (including over the sunset auto-disable, with a warning),
+// except review-incapable experimental CLIs, which stay excluded even
+// under --only.
+func selectOnly(detected []cli.LLM, ready map[string]bool, cfg config.Config, want map[string]bool, now time.Time) (active []cli.LLM) {
+	for _, llm := range detected {
+		if !want[llm.Name] {
+			continue
+		}
+		if !cli.IsReviewCapable(llm.Name) {
+			continue
+		}
+		if !ready[llm.Name] {
+			continue
+		}
+		if isSunsetAndNotForced(llm, cfg, now) {
+			// --only is an explicit allow-list; honour the user's
+			// intent over the sunset auto-disable. Warn so they
+			// see they're past the cutoff (force_after_sunset is
+			// always implicit under --only of a sunset agent).
+			fmt.Fprintf(os.Stderr, "Warning: --only %s past manufacturer sunset (%s) — running anyway (treat any failures as expected).\n",
+				llm.Name, cli.AgentSunsetDate(llm.Name).Format("2006-01-02"))
+		}
+		active = append(active, applyConfig(llm, cfg))
+	}
+	return active
+}
+
+// selectDefault implements Select's default (no --only) path: ready +
+// review-capable agents run unless explicitly disabled in config or
+// dropped for a passed manufacturer sunset.
+func selectDefault(detected []cli.LLM, ready map[string]bool, cfg config.Config, now time.Time) (active []cli.LLM, configDisabled, sunsetDropped []string) {
 	for _, llm := range detected {
 		if !cli.IsReviewCapable(llm.Name) {
 			continue

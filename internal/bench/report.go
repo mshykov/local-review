@@ -121,52 +121,60 @@ func writeUpliftBlock(w io.Writer, rep Report) error {
 		return err
 	}
 	for _, lr := range rep.LLMReports {
-		errs := countBaselineErrors(lr)
-		if !baselineHasAnyNumericData(lr.Baseline) {
-			// Either uplift wasn't run for this LLM, or every
-			// baseline pass errored. Render a single status line
-			// instead of numeric deltas — iter-3 self-review
-			// flagged that printing "0.91 (+0.91)" against a
-			// zero-baseline that nobody measured is a misleading
-			// headline. The aggregate may still be present in
-			// JSON for the "feature attempted" signal.
-			label := "(not measured)"
-			if errs > 0 {
-				label = fmt.Sprintf("(baseline failed on %d case(s))", errs)
-			}
-			if _, err := fmt.Fprintf(w, "%-10s  %s\n", lr.LLM, label); err != nil {
-				return err
-			}
-			continue
-		}
-		b := lr.Baseline
-		// Quality cells (F1 / precision / recall) gate on
-		// non-clean coverage; the noise cell gates on clean
-		// coverage. A baseline that succeeded only on clean
-		// cases has meaningful noise and meaningless F1, and
-		// vice versa. Iter-4 self-review (codex) caught the
-		// shape where both gated together let the unmeasured
-		// half show "0.00 (+X)" against a phantom value.
-		qualityMeasured := b.MeasuredNonCleanCases > 0
-		noiseMeasured := b.MeasuredCleanCases > 0
-		if _, err := fmt.Fprintf(w, "%-10s  %s  %s  %s  %s\n",
-			lr.LLM,
-			fmtUpliftCellOrDash(lr.F1, b.F1, qualityMeasured),
-			fmtUpliftCellOrDash(lr.Precision, b.Precision, qualityMeasured),
-			fmtUpliftCellOrDash(lr.Recall, b.Recall, qualityMeasured),
-			fmtUpliftCellOrDash(lr.NoiseRate, b.NoiseRate, noiseMeasured),
-		); err != nil {
+		if err := writeUpliftRow(w, lr); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// writeUpliftRow writes one LLM's uplift-over-baseline row (or, when the
+// baseline has no numeric data at all, a single status line instead of
+// numeric deltas).
+func writeUpliftRow(w io.Writer, lr LLMReport) error {
+	errs := countBaselineErrors(lr)
+	if !baselineHasAnyNumericData(lr.Baseline) {
+		// Either uplift wasn't run for this LLM, or every
+		// baseline pass errored. Render a single status line
+		// instead of numeric deltas — iter-3 self-review
+		// flagged that printing "0.91 (+0.91)" against a
+		// zero-baseline that nobody measured is a misleading
+		// headline. The aggregate may still be present in
+		// JSON for the "feature attempted" signal.
+		label := "(not measured)"
 		if errs > 0 {
-			// Even with a populated aggregate we want users to
-			// see "this comparison covers M of N cases" when the
-			// baseline partially failed — the aggregate itself
-			// micro-averages over only the survivors and would
-			// otherwise misleadingly look like full coverage.
-			if _, err := fmt.Fprintf(w, "%-10s  note: baseline failed on %d case(s); delta is over the surviving subset only\n", "", errs); err != nil {
-				return err
-			}
+			label = fmt.Sprintf("(baseline failed on %d case(s))", errs)
+		}
+		_, err := fmt.Fprintf(w, "%-10s  %s\n", lr.LLM, label)
+		return err
+	}
+	b := lr.Baseline
+	// Quality cells (F1 / precision / recall) gate on
+	// non-clean coverage; the noise cell gates on clean
+	// coverage. A baseline that succeeded only on clean
+	// cases has meaningful noise and meaningless F1, and
+	// vice versa. Iter-4 self-review (codex) caught the
+	// shape where both gated together let the unmeasured
+	// half show "0.00 (+X)" against a phantom value.
+	qualityMeasured := b.MeasuredNonCleanCases > 0
+	noiseMeasured := b.MeasuredCleanCases > 0
+	if _, err := fmt.Fprintf(w, "%-10s  %s  %s  %s  %s\n",
+		lr.LLM,
+		fmtUpliftCellOrDash(lr.F1, b.F1, qualityMeasured),
+		fmtUpliftCellOrDash(lr.Precision, b.Precision, qualityMeasured),
+		fmtUpliftCellOrDash(lr.Recall, b.Recall, qualityMeasured),
+		fmtUpliftCellOrDash(lr.NoiseRate, b.NoiseRate, noiseMeasured),
+	); err != nil {
+		return err
+	}
+	if errs > 0 {
+		// Even with a populated aggregate we want users to
+		// see "this comparison covers M of N cases" when the
+		// baseline partially failed — the aggregate itself
+		// micro-averages over only the survivors and would
+		// otherwise misleadingly look like full coverage.
+		if _, err := fmt.Fprintf(w, "%-10s  note: baseline failed on %d case(s); delta is over the surviving subset only\n", "", errs); err != nil {
+			return err
 		}
 	}
 	return nil

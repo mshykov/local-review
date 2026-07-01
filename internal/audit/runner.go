@@ -82,22 +82,9 @@ type Options struct {
 // Returns a Report with aggregate counts filled in. The caller
 // renders to text / markdown / JSON via internal/audit/report.go.
 func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
-	if opts.Topic == "" {
-		return Report{}, fmt.Errorf("audit topic is required (use --topic security or --topic tech-debt)")
-	}
-	if opts.LLM.Name == "" {
-		return Report{}, fmt.Errorf("audit requires an LLM (none authenticated; run `local-review doctor`)")
-	}
-	pack, err := prompts.GetAuditPack(opts.Topic)
+	pack, invoker, err := prepareAuditRun(opts)
 	if err != nil {
 		return Report{}, err
-	}
-	invoker := opts.Invoker
-	if invoker == nil {
-		invoker = cli.NewInvoker(opts.LLM)
-		if invoker == nil {
-			return Report{}, fmt.Errorf("no invoker for LLM %q", opts.LLM.Name)
-		}
 	}
 
 	rep := Report{
@@ -111,12 +98,58 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 
 	timeout := resolveTimeout(opts.Timeout, opts.LLM)
 	parallelism := clampParallelism(opts.Parallelism, len(chunks))
+	results := runAuditWorkerPool(ctx, chunks, pack, invoker, opts.Progress, timeout, parallelism)
 
-	// Pre-allocate by index so completion order doesn't shuffle the
-	// final report. Worker pool reads chunks in walker order; each
-	// worker writes to its assigned slot. fillAggregates traverses
-	// the slice in order, so users still see packages in the same
-	// walker order they would have under sequential dispatch.
+	rep.Packages = results
+	fillAggregates(&rep)
+	// Surface cancellation as an error so the caller exits non-zero rather
+	// than emitting a "completed" report whose not-yet-started chunks were
+	// silently skipped (CLAUDE.md rule 4: "completed" is wrong if anything
+	// was skipped). The partial report is still returned for callers that
+	// want to show what did finish.
+	if err := ctx.Err(); err != nil {
+		done := 0
+		for _, pr := range results {
+			if pr.Package != "" {
+				done++
+			}
+		}
+		return rep, fmt.Errorf("audit canceled after %d/%d chunks: %w", done, len(chunks), err)
+	}
+	return rep, nil
+}
+
+// prepareAuditRun validates opts and resolves the audit prompt pack + the
+// invoker Run will use, in one place so Run itself starts from ready-to-use
+// values.
+func prepareAuditRun(opts Options) (pack string, invoker cli.Invoker, err error) {
+	if opts.Topic == "" {
+		return "", nil, fmt.Errorf("audit topic is required (use --topic security or --topic tech-debt)")
+	}
+	if opts.LLM.Name == "" {
+		return "", nil, fmt.Errorf("audit requires an LLM (none authenticated; run `local-review doctor`)")
+	}
+	pack, err = prompts.GetAuditPack(opts.Topic)
+	if err != nil {
+		return "", nil, err
+	}
+	invoker = opts.Invoker
+	if invoker == nil {
+		invoker = cli.NewInvoker(opts.LLM)
+		if invoker == nil {
+			return "", nil, fmt.Errorf("no invoker for LLM %q", opts.LLM.Name)
+		}
+	}
+	return pack, invoker, nil
+}
+
+// runAuditWorkerPool dispatches chunks to a pool of `parallelism` workers
+// and returns per-chunk results, pre-allocated by index so completion order
+// doesn't shuffle the final report — the worker pool reads chunks in walker
+// order; each worker writes to its assigned slot, so fillAggregates (which
+// traverses the slice in order) shows packages in the same walker order
+// sequential dispatch would have produced.
+func runAuditWorkerPool(ctx context.Context, chunks []Chunk, pack string, invoker cli.Invoker, progress io.Writer, timeout time.Duration, parallelism int) []PackageReport {
 	results := make([]PackageReport, len(chunks))
 	type job struct {
 		idx int
@@ -151,7 +184,7 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 				if ctx.Err() != nil {
 					return
 				}
-				if opts.Progress != nil {
+				if progress != nil {
 					progMu.Lock()
 					// Stderr-shaped progress write: explicitly
 					// discard the error. Same policy as the
@@ -159,7 +192,7 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 					// the rationale (aborting an audit because a
 					// progress line failed to flush would be the
 					// wrong choice).
-					_, _ = fmt.Fprintf(opts.Progress, "[%d/%d] auditing %s (%d file%s, %s)...\n",
+					_, _ = fmt.Fprintf(progress, "[%d/%d] auditing %s (%d file%s, %s)...\n",
 						j.idx+1, len(chunks), j.c.Package, len(j.c.Files), pluralS(len(j.c.Files)), FormatBytes(j.c.SizeBytes))
 					progMu.Unlock()
 				}
@@ -168,24 +201,7 @@ func Run(ctx context.Context, chunks []Chunk, opts Options) (Report, error) {
 		}()
 	}
 	wg.Wait()
-
-	rep.Packages = results
-	fillAggregates(&rep)
-	// Surface cancellation as an error so the caller exits non-zero rather
-	// than emitting a "completed" report whose not-yet-started chunks were
-	// silently skipped (CLAUDE.md rule 4: "completed" is wrong if anything
-	// was skipped). The partial report is still returned for callers that
-	// want to show what did finish.
-	if err := ctx.Err(); err != nil {
-		done := 0
-		for _, pr := range results {
-			if pr.Package != "" {
-				done++
-			}
-		}
-		return rep, fmt.Errorf("audit canceled after %d/%d chunks: %w", done, len(chunks), err)
-	}
-	return rep, nil
+	return results
 }
 
 // MaxAuditParallelism is the hard ceiling on the worker pool size,
@@ -336,25 +352,9 @@ func parseFindings(out string) []Finding {
 		bodyBuf.Reset()
 	}
 	for _, line := range lines {
-		if m := findingHeaderRE.FindStringSubmatch(line); m != nil {
+		if f := parseFindingHeader(line); f != nil {
 			flush()
-			lineNum, lineEnd := 0, 0
-			if m[3] != "" {
-				if n, err := strconv.Atoi(m[3]); err == nil {
-					lineNum = n
-				}
-			}
-			if m[4] != "" {
-				if n, err := strconv.Atoi(m[4]); err == nil {
-					lineEnd = n
-				}
-			}
-			current = &Finding{
-				Severity: m[1],
-				Path:     m[2],
-				Line:     lineNum,
-				LineEnd:  lineEnd,
-			}
+			current = f
 			continue
 		}
 		if current != nil {
@@ -364,6 +364,32 @@ func parseFindings(out string) []Finding {
 	}
 	flush()
 	return findings
+}
+
+// parseFindingHeader parses one line as a finding-header match (see
+// findingHeaderRE), returning nil when the line isn't a header.
+func parseFindingHeader(line string) *Finding {
+	m := findingHeaderRE.FindStringSubmatch(line)
+	if m == nil {
+		return nil
+	}
+	lineNum, lineEnd := 0, 0
+	if m[3] != "" {
+		if n, err := strconv.Atoi(m[3]); err == nil {
+			lineNum = n
+		}
+	}
+	if m[4] != "" {
+		if n, err := strconv.Atoi(m[4]); err == nil {
+			lineEnd = n
+		}
+	}
+	return &Finding{
+		Severity: m[1],
+		Path:     m[2],
+		Line:     lineNum,
+		LineEnd:  lineEnd,
+	}
 }
 
 // auditSeverityRank orders the audit severity tiers (audit has no nit —

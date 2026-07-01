@@ -215,45 +215,68 @@ func LoadSWEBenchDataset(rootDir string) ([]SWEBenchCase, error) {
 func loadSWEBenchCase(dir string) (*SWEBenchCase, error) {
 	yamlPath := filepath.Join(dir, "case.yaml")
 	diffPath := filepath.Join(dir, "diff.patch")
-	yb, yerr := os.ReadFile(yamlPath)
-	db, derr := os.ReadFile(diffPath)
-	if yerr != nil || derr != nil {
-		// Each non-nil error is evaluated independently so a mixed
-		// pair — e.g. case.yaml missing AND diff.patch returns
-		// EACCES — still surfaces the EACCES instead of being
-		// swallowed by the NotExist on the sibling. The pre-fix
-		// shape used `errors.Is(yerr, NotExist) || errors.Is(derr,
-		// NotExist)` which short-circuited to "skip silently" on
-		// any partial-missing, hiding real corruption on the
-		// other file. Caught by CodeRabbit + Copilot on PR #70.
-		if yerr != nil && !errors.Is(yerr, os.ErrNotExist) {
-			return nil, fmt.Errorf("read case.yaml: %w", yerr)
-		}
-		if derr != nil && !errors.Is(derr, os.ErrNotExist) {
-			return nil, fmt.Errorf("read diff.patch: %w", derr)
-		}
-		// At least one file is missing AND neither sibling
-		// produced a non-NotExist error: partial entry, skip
-		// per the LoadSWEBenchDataset contract.
-		return nil, nil
+	yb, db, err := readCaseFiles(yamlPath, diffPath)
+	if err != nil || yb == nil {
+		return nil, err
 	}
+
 	var c SWEBenchCase
 	if err := yaml.Unmarshal(yb, &c); err != nil {
 		return nil, fmt.Errorf("parse case.yaml: %w", err)
 	}
-	// TrimSpace before required-field checks so a YAML value of
-	// `id: "   "` doesn't sneak past validation and produce a
-	// task whose fixture lookup, dedup, and reporting indexing
-	// all silently break in different ways. CLAUDE.md rule 4
-	// ("Fail loud, fail closed — use TrimSpace for emptiness
-	// checks").
+	if err := validateCaseFields(&c); err != nil {
+		return nil, err
+	}
+	trimmed, err := trimAndValidateKeywords(c.ExpectedKeywords)
+	if err != nil {
+		return nil, err
+	}
+	c.ExpectedKeywords = trimmed
+	c.DiffPath = diffPath
+	c.Diff = string(db)
+	return &c, nil
+}
+
+// readCaseFiles reads case.yaml + diff.patch. A nil, nil, nil return means
+// "partial entry, skip" (per the LoadSWEBenchDataset contract) — at least
+// one file is missing and neither sibling produced a non-NotExist error.
+func readCaseFiles(yamlPath, diffPath string) (yb, db []byte, err error) {
+	yb, yerr := os.ReadFile(yamlPath)
+	db, derr := os.ReadFile(diffPath)
+	if yerr == nil && derr == nil {
+		return yb, db, nil
+	}
+	// Each non-nil error is evaluated independently so a mixed
+	// pair — e.g. case.yaml missing AND diff.patch returns
+	// EACCES — still surfaces the EACCES instead of being
+	// swallowed by the NotExist on the sibling. The pre-fix
+	// shape used `errors.Is(yerr, NotExist) || errors.Is(derr,
+	// NotExist)` which short-circuited to "skip silently" on
+	// any partial-missing, hiding real corruption on the
+	// other file. Caught by CodeRabbit + Copilot on PR #70.
+	if yerr != nil && !errors.Is(yerr, os.ErrNotExist) {
+		return nil, nil, fmt.Errorf("read case.yaml: %w", yerr)
+	}
+	if derr != nil && !errors.Is(derr, os.ErrNotExist) {
+		return nil, nil, fmt.Errorf("read diff.patch: %w", derr)
+	}
+	return nil, nil, nil
+}
+
+// validateCaseFields trims + validates the required id/title fields on c,
+// in place. TrimSpace before the required-field checks so a YAML value of
+// `id: "   "` doesn't sneak past validation and produce a task whose
+// fixture lookup, dedup, and reporting indexing all silently break in
+// different ways. CLAUDE.md rule 4 ("Fail loud, fail closed — use
+// TrimSpace for emptiness checks").
+func validateCaseFields(c *SWEBenchCase) error {
 	c.ID = strings.TrimSpace(c.ID)
 	c.Title = strings.TrimSpace(c.Title)
 	if c.ID == "" {
-		return nil, fmt.Errorf("case.yaml missing required field: id")
+		return fmt.Errorf("case.yaml missing required field: id")
 	}
 	if c.Title == "" {
-		return nil, fmt.Errorf("case.yaml missing required field: title")
+		return fmt.Errorf("case.yaml missing required field: title")
 	}
 	// ID must pass the same safeIdentifierRE the replay path uses
 	// for fixture lookups (readFixture → validateIdentifier).
@@ -261,13 +284,15 @@ func loadSWEBenchCase(dir string) (*SWEBenchCase, error) {
 	// loading and explode at fixture-read time — or worse, escape
 	// the replay root before validateIdentifier catches it.
 	// Caught by Copilot on PR #70.
-	if err := validateIdentifier("swe-bench case id", c.ID); err != nil {
-		return nil, err
-	}
-	// Trim and validate keywords: empty list (or list of only-empties)
-	// would silently mark every task missed; loud failure is right.
-	trimmed := make([]string, 0, len(c.ExpectedKeywords))
-	for _, k := range c.ExpectedKeywords {
+	return validateIdentifier("swe-bench case id", c.ID)
+}
+
+// trimAndValidateKeywords trims each keyword and drops empties. An empty
+// result (or a list of only-empties) would silently mark every task
+// missed; loud failure is right.
+func trimAndValidateKeywords(keywords []string) ([]string, error) {
+	trimmed := make([]string, 0, len(keywords))
+	for _, k := range keywords {
 		k = strings.TrimSpace(k)
 		if k != "" {
 			trimmed = append(trimmed, k)
@@ -276,10 +301,7 @@ func loadSWEBenchCase(dir string) (*SWEBenchCase, error) {
 	if len(trimmed) == 0 {
 		return nil, fmt.Errorf("case.yaml requires at least one non-empty expected_keywords entry")
 	}
-	c.ExpectedKeywords = trimmed
-	c.DiffPath = diffPath
-	c.Diff = string(db)
-	return &c, nil
+	return trimmed, nil
 }
 
 // ScoreSWE returns the per-task verdict by case-insensitive

@@ -84,37 +84,57 @@ func writeMarkdownOverhead(w io.Writer, rep Report) error {
 	}
 	var coverageNotes []string
 	for _, lr := range rep.LLMReports {
-		o := lr.Overhead
-		tMean, tHave := treatmentMeanDurationMs(o)
-		bMean, bHave := baselineMeanDurationMs(o)
-		timeCell := markdownOverheadDurationCell(tMean, bMean, tHave && bHave)
-
-		tTok, tTokHave := treatmentMeanTokens(o)
-		bTok, bTokHave := baselineMeanTokens(o)
-		tokenCell := markdownOverheadTokenCell(tTok, bTok, tTokHave && bTokHave)
-
-		if _, err := fmt.Fprintf(w, "| %s | %s | %s |\n",
-			lr.LLM, timeCell, tokenCell); err != nil {
+		note, err := writeMarkdownOverheadRow(w, lr)
+		if err != nil {
 			return err
 		}
-		if note := overheadCoverageNote(o); note != "" {
-			coverageNotes = append(coverageNotes, fmt.Sprintf("_%s: %s._", lr.LLM, note))
+		if note != "" {
+			coverageNotes = append(coverageNotes, note)
 		}
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
 		return err
 	}
-	for _, n := range coverageNotes {
+	return writeMarkdownCoverageNotes(w, coverageNotes)
+}
+
+// writeMarkdownCoverageNotes writes each partial-coverage note on its own
+// line, followed by a trailing blank line — but only when there's at least
+// one note to write.
+func writeMarkdownCoverageNotes(w io.Writer, notes []string) error {
+	for _, n := range notes {
 		if _, err := fmt.Fprintln(w, n); err != nil {
 			return err
 		}
 	}
-	if len(coverageNotes) > 0 {
+	if len(notes) > 0 {
 		if _, err := fmt.Fprintln(w); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// writeMarkdownOverheadRow writes one LLM's overhead table row and returns
+// its coverage note (formatted, ready to print), or "" when the row had
+// full coverage.
+func writeMarkdownOverheadRow(w io.Writer, lr LLMReport) (note string, err error) {
+	o := lr.Overhead
+	tMean, tHave := treatmentMeanDurationMs(o)
+	bMean, bHave := baselineMeanDurationMs(o)
+	timeCell := markdownOverheadDurationCell(tMean, bMean, tHave && bHave)
+
+	tTok, tTokHave := treatmentMeanTokens(o)
+	bTok, bTokHave := baselineMeanTokens(o)
+	tokenCell := markdownOverheadTokenCell(tTok, bTok, tTokHave && bTokHave)
+
+	if _, err := fmt.Fprintf(w, "| %s | %s | %s |\n", lr.LLM, timeCell, tokenCell); err != nil {
+		return "", err
+	}
+	if n := overheadCoverageNote(o); n != "" {
+		return fmt.Sprintf("_%s: %s._", lr.LLM, n), nil
+	}
+	return "", nil
 }
 
 // markdownOverheadDurationCell renders one "treatment (Δ)" time
