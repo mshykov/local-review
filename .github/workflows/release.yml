@@ -323,10 +323,14 @@ jobs:
           version="${VERSION_TAG#v}"
           base_url="https://github.com/mshykov/local-review/releases/download/${VERSION_TAG}"
 
-          curl -fsSL "${base_url}/local-review_darwin_amd64.tar.gz" -o darwin_amd64.tar.gz
-          curl -fsSL "${base_url}/local-review_darwin_arm64.tar.gz" -o darwin_arm64.tar.gz
-          curl -fsSL "${base_url}/local-review_linux_amd64.tar.gz"  -o linux_amd64.tar.gz
-          curl -fsSL "${base_url}/local-review_linux_arm64.tar.gz"  -o linux_arm64.tar.gz
+          # --proto/--proto-redir pin every hop (including redirects, since
+          # -L follows them) to https — SonarCloud flagged the un-pinned
+          # -fsSL calls: without this, a compromised/misconfigured server on
+          # the redirect chain could downgrade to plain http mid-flight.
+          curl -fsSL --proto '=https' --proto-redir '=https' "${base_url}/local-review_darwin_amd64.tar.gz" -o darwin_amd64.tar.gz
+          curl -fsSL --proto '=https' --proto-redir '=https' "${base_url}/local-review_darwin_arm64.tar.gz" -o darwin_arm64.tar.gz
+          curl -fsSL --proto '=https' --proto-redir '=https' "${base_url}/local-review_linux_amd64.tar.gz"  -o linux_amd64.tar.gz
+          curl -fsSL --proto '=https' --proto-redir '=https' "${base_url}/local-review_linux_arm64.tar.gz"  -o linux_arm64.tar.gz
 
           # Cross-verify the downloaded tarballs against the release's OWN
           # checksums manifest before recording their hashes in the formula.
@@ -337,7 +341,7 @@ jobs:
           # install.sh already does this cross-check; this makes the manifest
           # the single integrity root for BOTH install channels.
           checksums="local-review_${VERSION_TAG}_checksums.txt"
-          curl -fsSL "${base_url}/${checksums}" -o "$checksums"
+          curl -fsSL --proto '=https' --proto-redir '=https' "${base_url}/${checksums}" -o "$checksums"
           verify() { # <local-file> <canonical-asset-name>
             local computed expected
             computed=$(shasum -a 256 "$1" | awk '{print $1}')
