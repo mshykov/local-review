@@ -645,6 +645,49 @@ func TestGeminiSunsetBanner_PostSunsetForceShowsOverride(t *testing.T) {
 	}
 }
 
+// TestRunDoctor_Smoke exercises runDoctor end-to-end — it had NO direct
+// test before the cognitive-complexity refactor split it into named
+// helpers, which is itself the point: this fills a real, pre-existing gap
+// (SonarCloud's new-code coverage gate caught it) rather than just
+// asserting against a mock. Hermetic per runConfigCmdIn's established
+// pattern in this package: fake $HOME (no repo/user config, no auth
+// files) + a real, empty cwd, so loadConfig() falls through to compiled-in
+// defaults deterministically regardless of the machine running the test.
+//
+// Doesn't assert exact ready/review-capable counts — cli.DetectAllWithOverrides
+// does real PATH lookups, so which LLM CLIs are actually installed on the
+// machine running this test is out of this test's control. Asserts only
+// what runDoctor itself guarantees: no error, and the summary line it
+// always prints.
+func TestRunDoctor_Smoke(t *testing.T) {
+	withFakeHome(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	origCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(origCwd); err != nil {
+			t.Errorf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runDoctor(&buf); err != nil {
+		t.Fatalf("runDoctor returned an error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "LLMs ready for multi-review.") {
+		t.Errorf("expected the ready-count summary line, got:\n%s", out)
+	}
+}
+
 // --- doctorLLMOverrides / doctorProviderSpecs / printLLMRows ---
 // (extracted from runDoctor to cut its cognitive complexity — SonarCloud)
 
