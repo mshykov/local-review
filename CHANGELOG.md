@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.3] - 2026-07-01
+
+**Patch: SonarCloud sweep + dependency hygiene.** Closes out the full SonarCloud Security and Maintainability backlog and locks in a local gate so complexity debt can't quietly regrow, plus routine dependency bumps.
+
+### Security
+
+- **Fixed all 10 outstanding SonarCloud Security findings.** CI/install tools (`govulncheck`, `gitleaks`) now run via `go tool` off a checksum-verified `go.mod` `tool` directive instead of an unpinned `go install x@version`. Every redirect-following `curl` call — `install.sh`, the Homebrew-tap release step, and the copy-paste onboarding commands in the docs — now pins `--proto '=https' --proto-redir '=https'`, so a compromised or misconfigured hop on the redirect chain can't downgrade the request to plain HTTP.
+
+### Fixed
+
+- **A standalone `nwaples/rardecode` bump broke `go build` on the `gitleaks` tool.** `rardecode` v2.2.0 added a method to an interface that `mholt/archives` v0.1.2 (a transitive dependency `gitleaks` uses for archive scanning) didn't implement. Bumped `mholt/archives` to v0.1.5 alongside it.
+
+### Internal
+
+- **Cognitive-complexity sweep: all 22 SonarCloud Maintainability findings fixed, 0 remaining repo-wide.** Mechanical extraction across `cmd/local-review`'s danger zone, `internal/*` source, and test files brought every function to ≤15 (SonarSource's S3776 budget), with new characterization tests for previously-uncovered extracted internals (`runDoctor`, `checkPromptOverride`, `runInit`, `selectMergeLLM`).
+- **New `gocognit` CI gate (`.golangci.yml` + `ci.yml`'s "Complexity" step).** Enforces the same 15-per-function budget on every push/PR against the whole repo, not just a PR's diff — closes the blind spot where SonarCloud's new-code-only gate misses a function that was already over budget on `main`.
+- Routine `golang.org/x/crypto` bump (0.35.0 → 0.45.0).
+- README header refresh: wide banner image, CI/Go-version badges, star-and-discuss CTA.
+
 ## [0.17.2] - 2026-06-12
 
 **Cleanup patch.** Robustness, accessibility, and tidy-ups from the audit "Later" tier and the SonarCloud board — no new features (those land in v0.18.0).
