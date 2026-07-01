@@ -192,3 +192,17 @@ CI/infra change.
   the `go.sum` cost. `go.mod` tool directives are the right call for a single, small
   binary (govulncheck, gitleaks); a SHA-pinned Action is the right call for a large
   one. Weigh both before defaulting to "no vendor SDK, so always `go tool`."
+- **`main`'s own Quality Gate silently drifted red for months because `sonar.projectVersion`
+  was never set.** The project's New Code period is "previous version" — Sonar detects a
+  release boundary by watching the version string change between scans. Every scan reported
+  it as `"not provided"`, so the string never changed, so Sonar never saw a boundary and kept
+  comparing `main` against the oldest analysis it still had (v0.7.2, ~2 months and 10+
+  releases back) — silently growing "new code" to span most of that window and failing the
+  80% new-code-coverage condition on code that had already shipped clean, one release at a
+  time. `.github/workflows/sonar.yml` now resolves `git describe --tags --abbrev=0` (stays
+  constant between releases, only changes when a new tag lands) and passes it as
+  `sonar.projectVersion`. Caught by looking at the SonarCloud dashboard directly rather than
+  assuming "80% new-code coverage failing" meant *this* PR's diff was undertested — the
+  first move on a surprising Sonar gate is always to check what "new code" actually spans
+  (`/api/qualitygates/project_status`'s `periods[0].date`), not to start writing tests against
+  an assumption.

@@ -57,9 +57,13 @@ jobs:
     steps:
       # fetch-depth: 0 gives Sonar the full history it needs for blame data
       # ("new code" calculations against branch lifetime) and PR base detection.
+      # fetch-tags: true is required alongside it — a full-history fetch does
+      # NOT guarantee tag refs come along, and the next step needs `git
+      # describe --tags` to resolve real tags.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
@@ -78,12 +82,38 @@ jobs:
         run: |
           go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
+      - name: Resolve project version
+        # The main branch's Quality Gate uses New Code = "previous version"
+        # (SonarCloud project setting), which detects a release boundary by
+        # watching sonar.projectVersion change between scans. We were never
+        # passing it, so every scan reported "not provided" — the version
+        # string never changed, so Sonar never saw a boundary and kept
+        # comparing against the oldest analysis it had (v0.7.2, 2026-05-07),
+        # silently growing "new code" to ~10 releases' worth of diff and
+        # failing the coverage condition on code most of which had already
+        # shipped. `git describe --tags --abbrev=0` resolves the nearest
+        # reachable tag with no commit-distance suffix, so it stays constant
+        # between releases and only changes when a new tag lands — matching
+        # how this repo actually versions.
+        id: version
+        run: |
+          version=$(git describe --tags --abbrev=0 2>/dev/null) || true
+          if [ -z "$version" ]; then
+            echo "::error::No git tag resolved via 'git describe --tags --abbrev=0' — check the checkout step still has fetch-tags: true. Refusing to fall back to a fixed placeholder version: a version string that never changes is exactly the bug this step exists to fix (it stalls Sonar's previous_version baseline forever)."
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
       - name: SonarQube Scan
         # The action auto-detects PR context (sonar.pullrequest.key/branch/base)
         # from the GitHub Actions environment, so PRs and main both work with no
-        # extra config.
+        # extra config. PR analysis always diffs against the PR's base branch
+        # regardless of projectVersion, so this arg only changes main's own
+        # dashboard/gate behavior (see "Resolve project version" above).
         uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # v8.2.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           # SONAR_HOST_URL only needed for self-hosted SonarQube; SonarCloud
           # is the default and the action picks the right URL when omitted.
+        with:
+          args: -Dsonar.projectVersion=${{ steps.version.outputs.value }}
