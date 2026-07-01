@@ -24,18 +24,7 @@ func jaccard(runs [][]ProducedFinding) float64 {
 		return 0
 	}
 
-	sets := make([]map[string]struct{}, len(runs))
-	allEmpty := true
-	for i, r := range runs {
-		s := make(map[string]struct{}, len(r))
-		for _, f := range r {
-			s[findingKey(f)] = struct{}{}
-		}
-		sets[i] = s
-		if len(s) > 0 {
-			allEmpty = false
-		}
-	}
+	sets, allEmpty := findingSets(runs)
 	if allEmpty {
 		return 1
 	}
@@ -48,7 +37,32 @@ func jaccard(runs [][]ProducedFinding) float64 {
 		}
 	}
 
-	// Intersection: every key seen in *every* run.
+	if len(union) == 0 {
+		return 1
+	}
+	return float64(countIntersection(sets)) / float64(len(union))
+}
+
+// findingSets reduces each run to its set of "<file>:<line>" keys.
+// allEmpty is true only when every run's set is empty.
+func findingSets(runs [][]ProducedFinding) (sets []map[string]struct{}, allEmpty bool) {
+	sets = make([]map[string]struct{}, len(runs))
+	allEmpty = true
+	for i, r := range runs {
+		s := make(map[string]struct{}, len(r))
+		for _, f := range r {
+			s[findingKey(f)] = struct{}{}
+		}
+		sets[i] = s
+		if len(s) > 0 {
+			allEmpty = false
+		}
+	}
+	return sets, allEmpty
+}
+
+// countIntersection counts keys present in every one of sets[0:].
+func countIntersection(sets []map[string]struct{}) int {
 	intersection := 0
 	for k := range sets[0] {
 		inAll := true
@@ -62,11 +76,7 @@ func jaccard(runs [][]ProducedFinding) float64 {
 			intersection++
 		}
 	}
-
-	if len(union) == 0 {
-		return 1
-	}
-	return float64(intersection) / float64(len(union))
+	return intersection
 }
 
 // findingKey returns the dedupe key Jaccard works on. file:line is
