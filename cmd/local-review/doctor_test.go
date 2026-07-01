@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -641,6 +642,155 @@ func TestGeminiSunsetBanner_PostSunsetForceShowsOverride(t *testing.T) {
 	// Must NOT show auto-disabled wording when the user has opted in.
 	if strings.Contains(out, "auto-disabled") {
 		t.Errorf("force-overridden banner must not say 'auto-disabled':\n%s", out)
+	}
+}
+
+// TestRunDoctor_Smoke exercises runDoctor end-to-end — it had NO direct
+// test before the cognitive-complexity refactor split it into named
+// helpers, which is itself the point: this fills a real, pre-existing gap
+// (SonarCloud's new-code coverage gate caught it) rather than just
+// asserting against a mock. Hermetic per runConfigCmdIn's established
+// pattern in this package: fake $HOME (no repo/user config, no auth
+// files) + a real, empty cwd, so loadConfig() falls through to compiled-in
+// defaults deterministically regardless of the machine running the test.
+//
+// Doesn't assert exact ready/review-capable counts — cli.DetectAllWithOverrides
+// does real PATH lookups, so which LLM CLIs are actually installed on the
+// machine running this test is out of this test's control. Asserts only
+// what runDoctor itself guarantees: no error, and the summary line it
+// always prints.
+func TestRunDoctor_Smoke(t *testing.T) {
+	withFakeHome(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	origCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(origCwd); err != nil {
+			t.Errorf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := runDoctor(&buf); err != nil {
+		t.Fatalf("runDoctor returned an error: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "LLMs ready for multi-review.") {
+		t.Errorf("expected the ready-count summary line, got:\n%s", out)
+	}
+}
+
+// --- doctorLLMOverrides / doctorProviderSpecs / printLLMRows ---
+// (extracted from runDoctor to cut its cognitive complexity — SonarCloud)
+
+func TestDoctorLLMOverrides_CfgErrReturnsEmptyMaps(t *testing.T) {
+	overrides, customEnvVars, models := doctorLLMOverrides(config.Config{
+		LLMs: map[string]config.LLMConfig{"claude": {CLIPath: "/x/claude"}},
+	}, errFakeConfigLoad)
+	if len(overrides) != 0 || len(customEnvVars) != 0 || len(models) != 0 {
+		t.Errorf("cfgErr != nil must yield empty maps, got overrides=%v customEnvVars=%v models=%v", overrides, customEnvVars, models)
+	}
+}
+
+func TestDoctorLLMOverrides_PopulatesOnlySetFields(t *testing.T) {
+	cfg := config.Config{LLMs: map[string]config.LLMConfig{
+		"claude": {CLIPath: "/usr/local/bin/claude", APIKeyEnv: "MY_KEY", Model: "opus"},
+		"gemini": {}, // no overrides set — must not appear in any map
+	}}
+	overrides, customEnvVars, models := doctorLLMOverrides(cfg, nil)
+	if overrides["claude"] != "/usr/local/bin/claude" {
+		t.Errorf("overrides[claude] = %q, want the configured CLIPath", overrides["claude"])
+	}
+	if customEnvVars["claude"] != "MY_KEY" {
+		t.Errorf("customEnvVars[claude] = %q, want MY_KEY", customEnvVars["claude"])
+	}
+	if models["claude"] != "opus" {
+		t.Errorf("models[claude] = %q, want opus", models["claude"])
+	}
+	if _, ok := overrides["gemini"]; ok {
+		t.Error("gemini has no CLIPath set; must not appear in overrides")
+	}
+	if _, ok := customEnvVars["gemini"]; ok {
+		t.Error("gemini has no APIKeyEnv set; must not appear in customEnvVars")
+	}
+	if _, ok := models["gemini"]; ok {
+		t.Error("gemini has no Model set; must not appear in models")
+	}
+}
+
+func TestDoctorProviderSpecs_CfgErrReturnsNil(t *testing.T) {
+	specs := doctorProviderSpecs(config.Config{
+		LLMs: map[string]config.LLMConfig{"local": {BaseURL: "http://x"}},
+	}, errFakeConfigLoad)
+	if specs != nil {
+		t.Errorf("cfgErr != nil must yield nil specs, got %v", specs)
+	}
+}
+
+func TestDoctorProviderSpecs_OnlyBaseURLEntriesSortedByName(t *testing.T) {
+	cfg := config.Config{LLMs: map[string]config.LLMConfig{
+		"zeta":  {BaseURL: "http://z", Model: "m-z"},
+		"alpha": {BaseURL: "http://a", Model: "m-a", APIKey: "k", TimeoutSec: 30},
+		"claude": {
+			// No BaseURL — a plain CLI agent, must be excluded.
+			CLIPath: "/usr/local/bin/claude",
+		},
+	}}
+	specs := doctorProviderSpecs(cfg, nil)
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 provider specs (BaseURL entries only), got %d: %+v", len(specs), specs)
+	}
+	if specs[0].Name != "alpha" || specs[1].Name != "zeta" {
+		t.Errorf("expected sorted [alpha, zeta], got [%s, %s]", specs[0].Name, specs[1].Name)
+	}
+	if specs[0].BaseURL != "http://a" || specs[0].Model != "m-a" || specs[0].APIKey != "k" || specs[0].TimeoutSec != 30 {
+		t.Errorf("alpha spec fields not carried through: %+v", specs[0])
+	}
+}
+
+// errFakeConfigLoad is a non-nil sentinel error for exercising the
+// cfgErr != nil branch of doctorLLMOverrides / doctorProviderSpecs — the
+// functions only check err != nil, never its value.
+var errFakeConfigLoad = fmt.Errorf("fake config load failure")
+
+func TestPrintLLMRows_CountsReadyAndReviewCapable(t *testing.T) {
+	// A fixed pre-2026 `now` keeps every CLI agent's sunset gate off
+	// regardless of real-world sunset dates, so this test doesn't
+	// depend on when it's run.
+	now := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	llms := []cli.LLM{
+		// Provider agent, BaseURL set + Available=true: classify()
+		// returns statusReady with zero filesystem/env dependency —
+		// the simplest deterministic "ready" case.
+		{Name: "myprovider", BaseURL: "http://x", Available: true},
+		// A real CLI agent that isn't installed: statusNotInstalled,
+		// still review-capable (not experimental), just not ready.
+		{Name: "claude", Available: false},
+		// Experimental (review-incapable): must NOT count toward
+		// reviewCapable even though Available=true.
+		{Name: "antigravity", Available: true},
+	}
+	var buf bytes.Buffer
+	readyCount, reviewCapable := printLLMRows(&buf, llms, config.Config{}, map[string]string{}, map[string]string{}, now)
+	if reviewCapable != 2 {
+		t.Errorf("reviewCapable = %d, want 2 (myprovider + claude; antigravity excluded)", reviewCapable)
+	}
+	if readyCount != 1 {
+		t.Errorf("readyCount = %d, want 1 (myprovider only)", readyCount)
+	}
+	out := buf.String()
+	for _, name := range []string{"myprovider", "Claude", "Antigravity"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("expected a printed row mentioning %q, got:\n%s", name, out)
+		}
 	}
 }
 

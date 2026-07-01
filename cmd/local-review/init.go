@@ -158,58 +158,19 @@ var providerPresets = []providerPreset{
 func runInit(out io.Writer, in io.Reader, target string, force bool) error {
 	r := bufio.NewReader(in)
 
-	if info, err := os.Stat(target); err == nil {
-		if info.IsDir() {
-			return fmt.Errorf("%s is a directory; refusing to overwrite", target)
-		}
-		if !force {
-			fmt.Fprintf(out, "%s already exists.\n", target)
-			yn, err := promptString(out, r, "Overwrite?", "n")
-			if err != nil {
-				return err
-			}
-			if !isYes(yn) {
-				fmt.Fprintln(out, "Aborted; no changes made.")
-				return nil
-			}
-		}
+	proceed, err := confirmOverwriteExisting(out, r, target, force)
+	if err != nil {
+		return err
+	}
+	if !proceed {
+		fmt.Fprintln(out, "Aborted; no changes made.")
+		return nil
 	}
 
 	fmt.Fprintln(out, "local-review init — quick setup. Press Enter to accept defaults.")
 	fmt.Fprintln(out)
 
-	preset, err := promptProviderRetry(out, r)
-	if err != nil {
-		return err
-	}
-
-	baseURL := preset.baseURL
-	if baseURL == "" {
-		baseURL, err = promptNonEmpty(out, r, "Base URL (e.g. https://api.example.com/v1)", "")
-		if err != nil {
-			return err
-		}
-	}
-
-	model, err := promptNonEmpty(out, r, "Model", preset.defaultMdl)
-	if err != nil {
-		return err
-	}
-
-	var apiKeyEnv string
-	if preset.requiresKey {
-		apiKeyEnv, err = promptString(out, r, "API key environment variable", preset.apiKeyEnv)
-		if err != nil {
-			return err
-		}
-	}
-
-	minSeverity, err := promptChoiceRetry(out, r, "Minimum severity to show", []string{"nit", "info", "warning", "major", "critical"}, 2)
-	if err != nil {
-		return err
-	}
-
-	maxFindings, err := promptPositiveIntRetry(out, r, "Maximum findings per review", 20)
+	preset, baseURL, model, apiKeyEnv, minSeverity, maxFindings, err := promptConfigValues(out, r)
 	if err != nil {
 		return err
 	}
@@ -222,18 +183,13 @@ func runInit(out io.Writer, in io.Reader, target string, force bool) error {
 	fmt.Fprint(out, yml)
 	fmt.Fprintln(out, "----------------")
 
-	if force {
-		// --force is the non-interactive flag; don't prompt for the final confirmation either.
-		fmt.Fprintf(out, "Writing to %s (--force).\n", target)
-	} else {
-		confirm, err := promptString(out, r, fmt.Sprintf("Write to %s?", target), "y")
-		if err != nil {
-			return err
-		}
-		if !isYes(confirm) {
-			fmt.Fprintln(out, "Aborted; no changes made.")
-			return nil
-		}
+	proceed, err = confirmWrite(out, r, target, force)
+	if err != nil {
+		return err
+	}
+	if !proceed {
+		fmt.Fprintln(out, "Aborted; no changes made.")
+		return nil
 	}
 
 	if err := os.WriteFile(target, []byte(yml), 0o600); err != nil {
@@ -253,6 +209,87 @@ func runInit(out io.Writer, in io.Reader, target string, force bool) error {
 	}
 	fmt.Fprintln(out, "  Try a review:      local-review staged")
 	return nil
+}
+
+// confirmOverwriteExisting checks whether target already exists and, if so,
+// refuses outright for a directory or prompts (unless force) before
+// allowing the overwrite. Returns proceed=false (no error) when the user
+// declines — runInit treats that as a clean abort, not a failure.
+func confirmOverwriteExisting(out io.Writer, r *bufio.Reader, target string, force bool) (proceed bool, err error) {
+	info, statErr := os.Stat(target)
+	if statErr != nil {
+		return true, nil
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("%s is a directory; refusing to overwrite", target)
+	}
+	if force {
+		return true, nil
+	}
+	fmt.Fprintf(out, "%s already exists.\n", target)
+	yn, err := promptString(out, r, "Overwrite?", "n")
+	if err != nil {
+		return false, err
+	}
+	return isYes(yn), nil
+}
+
+// promptConfigValues walks the interactive prompt sequence that builds a
+// config: provider preset, base URL (only when the preset doesn't supply
+// one), model, API key env var (only when the preset requires one), min
+// severity, and max findings.
+func promptConfigValues(out io.Writer, r *bufio.Reader) (preset providerPreset, baseURL, model, apiKeyEnv, minSeverity string, maxFindings int, err error) {
+	preset, err = promptProviderRetry(out, r)
+	if err != nil {
+		return preset, "", "", "", "", 0, err
+	}
+
+	baseURL = preset.baseURL
+	if baseURL == "" {
+		baseURL, err = promptNonEmpty(out, r, "Base URL (e.g. https://api.example.com/v1)", "")
+		if err != nil {
+			return preset, "", "", "", "", 0, err
+		}
+	}
+
+	model, err = promptNonEmpty(out, r, "Model", preset.defaultMdl)
+	if err != nil {
+		return preset, "", "", "", "", 0, err
+	}
+
+	if preset.requiresKey {
+		apiKeyEnv, err = promptString(out, r, "API key environment variable", preset.apiKeyEnv)
+		if err != nil {
+			return preset, "", "", "", "", 0, err
+		}
+	}
+
+	minSeverity, err = promptChoiceRetry(out, r, "Minimum severity to show", []string{"nit", "info", "warning", "major", "critical"}, 2)
+	if err != nil {
+		return preset, "", "", "", "", 0, err
+	}
+
+	maxFindings, err = promptPositiveIntRetry(out, r, "Maximum findings per review", 20)
+	if err != nil {
+		return preset, "", "", "", "", 0, err
+	}
+
+	return preset, baseURL, model, apiKeyEnv, minSeverity, maxFindings, nil
+}
+
+// confirmWrite prompts "Write to <target>?" before the final write, unless
+// force is set (the non-interactive flag skips the final confirmation too).
+// Returns proceed=false (no error) when the user declines.
+func confirmWrite(out io.Writer, r *bufio.Reader, target string, force bool) (proceed bool, err error) {
+	if force {
+		fmt.Fprintf(out, "Writing to %s (--force).\n", target)
+		return true, nil
+	}
+	confirm, err := promptString(out, r, fmt.Sprintf("Write to %s?", target), "y")
+	if err != nil {
+		return false, err
+	}
+	return isYes(confirm), nil
 }
 
 func resolveTarget(location string) (string, error) {
