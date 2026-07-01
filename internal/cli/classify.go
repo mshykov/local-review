@@ -69,27 +69,39 @@ func ClassifyExit(ctx context.Context, err error, combinedOutput []byte, agent s
 	// `claude login`", gemini says "API key not valid", codex says
 	// "Tool 'web_search_preview' is not supported with gpt-4", etc.
 	if strings.HasPrefix(errMsg, "exit status ") || strings.Contains(errMsg, "exited with status") {
-		stderr := strings.TrimSpace(string(combinedOutput))
-		if stderr != "" {
-			if len(stderr) > stderrTailMaxLen {
-				// Walk the cut forward to a UTF-8 rune boundary.
-				// Pre-fix this byte slice could split a multi-byte
-				// codepoint (Cyrillic, CJK, emoji) and emit invalid
-				// UTF-8 in the failure line — exactly when the user
-				// is already debugging a non-ASCII error message.
-				cut := len(stderr) - stderrTailMaxLen
-				for cut < len(stderr) && !utf8.RuneStart(stderr[cut]) {
-					cut++
-				}
-				stderr = "…" + stderr[cut:]
-			}
-			return fmt.Sprintf("%s: %s", errMsg, stderr)
-		}
-		return fmt.Sprintf("%s (no stderr captured — re-run with `%s --help` to verify auth and model)", errMsg, agent)
+		return formatExitStatusFailure(errMsg, combinedOutput, agent)
 	}
 
 	if errMsg != "" {
 		return errMsg
 	}
 	return "unknown error"
+}
+
+// formatExitStatusFailure formats the non-zero-exit-status case: the
+// stderr tail when there is one (truncated to stderrTailMaxLen), or a
+// re-run hint when stderr was empty.
+func formatExitStatusFailure(errMsg string, combinedOutput []byte, agent string) string {
+	stderr := strings.TrimSpace(string(combinedOutput))
+	if stderr == "" {
+		return fmt.Sprintf("%s (no stderr captured — re-run with `%s --help` to verify auth and model)", errMsg, agent)
+	}
+	return fmt.Sprintf("%s: %s", errMsg, truncateStderrTail(stderr))
+}
+
+// truncateStderrTail keeps only the last stderrTailMaxLen bytes of stderr
+// (the actionable signal is almost always toward the end — see
+// stderrTailMaxLen's doc), walking the cut point forward to a UTF-8 rune
+// boundary so a multi-byte codepoint (Cyrillic, CJK, emoji) can't be split
+// and emit invalid UTF-8 in the failure line — exactly when the user is
+// already debugging a non-ASCII error message.
+func truncateStderrTail(stderr string) string {
+	if len(stderr) <= stderrTailMaxLen {
+		return stderr
+	}
+	cut := len(stderr) - stderrTailMaxLen
+	for cut < len(stderr) && !utf8.RuneStart(stderr[cut]) {
+		cut++
+	}
+	return "…" + stderr[cut:]
 }
