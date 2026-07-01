@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="local-review logo" width="200"/>
+  <img src="docs/social-preview.png" alt="local-review — local, BYOK code review for any language" width="800"/>
 </p>
 
 <h1 align="center">local-review</h1>
@@ -12,6 +12,8 @@
 
 <p align="center">
   <a href="https://github.com/mshykov/local-review/releases"><img src="https://img.shields.io/github/v/release/mshykov/local-review?style=flat-square" alt="Release"></a>
+  <a href="https://github.com/mshykov/local-review/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mshykov/local-review/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.26+"></a>
   <a href="https://github.com/mshykov/local-review/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
   <a href="https://github.com/mshykov/local-review/stargazers"><img src="https://img.shields.io/github/stars/mshykov/local-review?style=flat-square" alt="Stars"></a>
   <a href="https://sonarcloud.io/summary/new_code?id=mshykov_local-review"><img src="https://sonarcloud.io/api/project_badges/measure?project=mshykov_local-review&metric=alert_status" alt="Quality Gate Status"></a>
@@ -24,6 +26,10 @@
   <a href="CHECKLIST.md">Checklist</a> •
   <a href="#customise-for-your-team">Customise</a> •
   <a href="https://local-review.shykov.dev">Website</a>
+</p>
+
+<p align="center">
+  If local-review saves you a review round, <a href="https://github.com/mshykov/local-review/stargazers">star the repo</a> and <a href="https://github.com/mshykov/local-review/discussions">join the discussion</a>.
 </p>
 
 ---
