@@ -256,16 +256,16 @@ func checkPromptOverride(w io.Writer, cfg config.Config) {
 // pack and lists any that are unreadable or empty. Two things to check,
 // both caught by self-review iterations:
 //
-// 1. Counting any *.md file silenced the diagnostic when the user dropped
-//    a README.md into the prompts directory but no actual override files.
-//    Fix: match against the known language-id set.
+//  1. Counting any *.md file silenced the diagnostic when the user dropped
+//     a README.md into the prompts directory but no actual override files.
+//     Fix: match against the known language-id set.
 //
-// 2. A known-language override file that EXISTS but isn't READABLE (perms
-//    drift, broken symlink, NFS hiccup) would pass the count check but get
-//    silently skipped at review time by the resolver's fall-through-on-
-//    error contract. Fix: actively probe readability here, where surfacing
-//    the problem doesn't disrupt a real review run. The resolver stays
-//    resilient; doctor stays loud.
+//  2. A known-language override file that EXISTS but isn't READABLE (perms
+//     drift, broken symlink, NFS hiccup) would pass the count check but get
+//     silently skipped at review time by the resolver's fall-through-on-
+//     error contract. Fix: actively probe readability here, where surfacing
+//     the problem doesn't disrupt a real review run. The resolver stays
+//     resilient; doctor stays loud.
 func scanPromptOverrides(dir string, entries []os.DirEntry) (overrideCount int, unreadable []string) {
 	knownLangs := promptLanguageSet()
 	for _, e := range entries {
