@@ -1113,15 +1113,7 @@ func sortByRoster(results []multi.ReviewResult, available []cli.LLM) []multi.Rev
 // work for the merge prompt; whether an earlier per-LLM SaveReview
 // happened to succeed is unrelated.
 func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred string) *cli.LLM {
-	eligible := make(map[string]cli.LLM)
-	for _, llm := range available {
-		for _, r := range results {
-			if r.LLM == llm.Name && multi.HasMergeableOutput(r) {
-				eligible[llm.Name] = llm
-				break
-			}
-		}
-	}
+	eligible := mergeEligibleAgents(results, available)
 	if len(eligible) == 0 {
 		return nil
 	}
@@ -1147,6 +1139,22 @@ func selectMergeLLM(results []multi.ReviewResult, available []cli.LLM, preferred
 		}
 	}
 	return nil
+}
+
+// mergeEligibleAgents returns the subset of available agents that produced
+// mergeable output (per multi.HasMergeableOutput) somewhere in results,
+// keyed by name for O(1) lookup by the caller's selection strategies.
+func mergeEligibleAgents(results []multi.ReviewResult, available []cli.LLM) map[string]cli.LLM {
+	eligible := make(map[string]cli.LLM)
+	for _, llm := range available {
+		for _, r := range results {
+			if r.LLM == llm.Name && multi.HasMergeableOutput(r) {
+				eligible[llm.Name] = llm
+				break
+			}
+		}
+	}
+	return eligible
 }
 
 // selectPromptPack picks the language pack for this multi-LLM run.
