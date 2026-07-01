@@ -381,17 +381,24 @@ func TestMergePromptRendersByReviewCount(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			out := render(tc.n, tc.threshold)
-			for _, want := range tc.mustHave {
-				if !strings.Contains(out, want) {
-					t.Errorf("rendered prompt missing %q", want)
-				}
-			}
-			for _, no := range tc.mustNot {
-				if strings.Contains(out, no) {
-					t.Errorf("rendered prompt unexpectedly contains %q", no)
-				}
-			}
+			assertPromptContainsAndExcludes(t, out, tc.mustHave, tc.mustNot)
 		})
+	}
+}
+
+// assertPromptContainsAndExcludes checks that out contains every string in
+// mustHave and none of the strings in mustNot.
+func assertPromptContainsAndExcludes(t *testing.T, out string, mustHave, mustNot []string) {
+	t.Helper()
+	for _, want := range mustHave {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered prompt missing %q", want)
+		}
+	}
+	for _, no := range mustNot {
+		if strings.Contains(out, no) {
+			t.Errorf("rendered prompt unexpectedly contains %q", no)
+		}
 	}
 }
 

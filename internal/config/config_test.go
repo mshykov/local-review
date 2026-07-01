@@ -860,40 +860,48 @@ func nonZeroConfig() Config {
 // findZeroFields walks v's exported fields and returns dotted paths of
 // any that are still their zero value. Used to detect merge() drift.
 func findZeroFields(v reflect.Value, prefix string) []string {
-	var out []string
 	switch v.Kind() {
 	case reflect.Struct:
-		t := v.Type()
-		for i := 0; i < v.NumField(); i++ {
-			fv := v.Field(i)
-			ft := t.Field(i)
-			if !ft.IsExported() {
-				continue
-			}
-			path := prefix + ft.Name
-			out = append(out, findZeroFields(fv, path+".")...)
-		}
+		return findZeroFieldsInStruct(v, prefix)
 	case reflect.Map:
-		if v.Len() == 0 {
-			out = append(out, strings.TrimSuffix(prefix, "."))
-			return out
-		}
-		// Recurse into one entry — sufficient to catch "the inner struct
-		// type isn't fully merged"; we don't need to walk every key.
-		for _, k := range v.MapKeys() {
-			out = append(out, findZeroFields(v.MapIndex(k), prefix+k.String()+".")...)
-			break
-		}
+		return findZeroFieldsInMap(v, prefix)
 	case reflect.Pointer:
 		if v.IsNil() {
-			out = append(out, strings.TrimSuffix(prefix, "."))
+			return []string{strings.TrimSuffix(prefix, ".")}
 		}
 	default:
 		if v.IsZero() {
-			out = append(out, strings.TrimSuffix(prefix, "."))
+			return []string{strings.TrimSuffix(prefix, ".")}
 		}
 	}
+	return nil
+}
+
+func findZeroFieldsInStruct(v reflect.Value, prefix string) []string {
+	var out []string
+	t := v.Type()
+	for i := 0; i < v.NumField(); i++ {
+		fv := v.Field(i)
+		ft := t.Field(i)
+		if !ft.IsExported() {
+			continue
+		}
+		path := prefix + ft.Name
+		out = append(out, findZeroFields(fv, path+".")...)
+	}
 	return out
+}
+
+func findZeroFieldsInMap(v reflect.Value, prefix string) []string {
+	if v.Len() == 0 {
+		return []string{strings.TrimSuffix(prefix, ".")}
+	}
+	// Recurse into one entry — sufficient to catch "the inner struct
+	// type isn't fully merged"; we don't need to walk every key.
+	for _, k := range v.MapKeys() {
+		return findZeroFields(v.MapIndex(k), prefix+k.String()+".")
+	}
+	return nil
 }
 
 // --- v0.14 provider: deprecation -----------------------------------------

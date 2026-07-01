@@ -491,15 +491,17 @@ func TestSingleLine_CollapsesAndTrims(t *testing.T) {
 // (b) the rendered timeout uses the CONFIGURED value, not the
 // hard-coded cli.DefaultProbeTimeout (so --preflight-timeout's
 // effect is visible in the rendered line).
+type formatProbeLineCase struct {
+	name            string
+	result          cli.ProbeResult
+	timeout         time.Duration
+	wantContains    []string
+	wantNotContains []string
+	wantStartsWith  string // exact prefix check for column-padding
+}
+
 func TestFormatProbeLine(t *testing.T) {
-	cases := []struct {
-		name            string
-		result          cli.ProbeResult
-		timeout         time.Duration
-		wantContains    []string
-		wantNotContains []string
-		wantStartsWith  string // exact prefix check for column-padding
-	}{
+	cases := []formatProbeLineCase{
 		{
 			name:           "ready_shows_glyph_and_duration",
 			result:         cli.ProbeResult{LLM: "claude", Status: cli.ProbeReady, Duration: 1234 * time.Millisecond},
@@ -563,20 +565,25 @@ func TestFormatProbeLine(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := formatProbeLine(tc.result, tc.timeout)
-			for _, sub := range tc.wantContains {
-				if !strings.Contains(got, sub) {
-					t.Errorf("formatProbeLine = %q, want it to contain %q", got, sub)
-				}
-			}
-			for _, sub := range tc.wantNotContains {
-				if strings.Contains(got, sub) {
-					t.Errorf("formatProbeLine = %q, want it NOT to contain %q", got, sub)
-				}
-			}
-			if tc.wantStartsWith != "" && !strings.HasPrefix(got, tc.wantStartsWith) {
-				t.Errorf("formatProbeLine = %q, want prefix %q (column padding)", got, tc.wantStartsWith)
-			}
+			assertFormatProbeLine(t, tc)
 		})
+	}
+}
+
+func assertFormatProbeLine(t *testing.T, tc formatProbeLineCase) {
+	t.Helper()
+	got := formatProbeLine(tc.result, tc.timeout)
+	for _, sub := range tc.wantContains {
+		if !strings.Contains(got, sub) {
+			t.Errorf("formatProbeLine = %q, want it to contain %q", got, sub)
+		}
+	}
+	for _, sub := range tc.wantNotContains {
+		if strings.Contains(got, sub) {
+			t.Errorf("formatProbeLine = %q, want it NOT to contain %q", got, sub)
+		}
+	}
+	if tc.wantStartsWith != "" && !strings.HasPrefix(got, tc.wantStartsWith) {
+		t.Errorf("formatProbeLine = %q, want prefix %q (column padding)", got, tc.wantStartsWith)
 	}
 }
