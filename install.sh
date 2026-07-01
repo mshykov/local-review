@@ -2,16 +2,19 @@
 # local-review installer — downloads the right pre-built binary from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | VERSION=v0.1.0 sh
+#   curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
+#   curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | VERSION=v0.1.0 sh
 #
 # Override the install dir with INSTALL_DIR (default: ~/.local/bin).
 #
-# Every curl call below pins --proto '=https' --proto-redir '=https'
-# (SonarCloud Security finding): -L follows redirects, and without pinning
-# the protocol, a compromised/misconfigured server on the redirect chain
-# could downgrade the request to plain http mid-flight — the https:// in
-# the initial URL doesn't protect against that on its own.
+# Every curl call in this file — including the usage examples above and the
+# fallback command this script itself prints — pins
+# --proto '=https' --proto-redir '=https' (SonarCloud Security finding):
+# -L follows redirects, and without pinning the protocol, a compromised/
+# misconfigured server on the redirect chain could downgrade the request to
+# plain http mid-flight — the https:// in the initial URL doesn't protect
+# against that on its own. Matters most for the usage examples above: they
+# fetch this very script and pipe it straight into `sh`.
 set -eu
 
 REPO="mshykov/local-review"
@@ -197,7 +200,7 @@ else
     echo "❌ failed to fetch ${checksums_url}" >&2
     echo "   refusing to install — the checksum manifest may be unavailable due to a network issue or a release packaging error" >&2
     echo "   if you're installing a release older than v0.6.0 (which doesn't ship a manifest), re-run with:" >&2
-    echo "     curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | INSTALL_REVIEW_SKIP_VERIFICATION=1 sh" >&2
+    echo "     curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/${REPO}/main/install.sh | INSTALL_REVIEW_SKIP_VERIFICATION=1 sh" >&2
     exit 1
   fi
 fi
