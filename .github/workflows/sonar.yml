@@ -96,7 +96,13 @@ jobs:
         # between releases and only changes when a new tag lands — matching
         # how this repo actually versions.
         id: version
-        run: echo "value=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(git describe --tags --abbrev=0 2>/dev/null) || true
+          if [ -z "$version" ]; then
+            echo "::error::No git tag resolved via 'git describe --tags --abbrev=0' — check the checkout step still has fetch-tags: true. Refusing to fall back to a fixed placeholder version: a version string that never changes is exactly the bug this step exists to fix (it stalls Sonar's previous_version baseline forever)."
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
 
       - name: SonarQube Scan
         # The action auto-detects PR context (sonar.pullrequest.key/branch/base)
