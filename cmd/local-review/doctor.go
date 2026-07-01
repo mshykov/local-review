@@ -68,13 +68,6 @@ func runDoctor(out io.Writer) error {
 	fmt.Fprintln(w, "Checking LLM installations and authentication...")
 	fmt.Fprintln(w)
 
-	// Mirror the runner: honor cfg.LLMs[*].CLIPath overrides so doctor
-	// and runtime see the same binaries. Without this a user with a
-	// custom cli_path would see ✗ in doctor but a successful run, or
-	// vice versa.
-	overrides := map[string]string{}
-	customEnvVars := map[string]string{}
-	models := map[string]string{}
 	cfg, cfgErr := loadConfig()
 	if cfgErr != nil {
 		// Surface the failure inline. doctor's whole job is "tell me
@@ -85,56 +78,10 @@ func runDoctor(out io.Writer) error {
 		fmt.Fprintf(w, "WARNING: failed to load config: %v\n", cfgErr)
 		fmt.Fprintln(w, "         Falling back to compiled-in defaults; cli_path / api_key_env shown below may not reflect your config.")
 		fmt.Fprintln(w)
-	} else {
-		for name, c := range cfg.LLMs {
-			if c.CLIPath != "" {
-				overrides[name] = c.CLIPath
-			}
-			// Honor cfg.LLMs[*].APIKeyEnv so a user with a key under,
-			// say, MY_GEMINI_KEY sees ✓ ready instead of "not authed".
-			// Empty falls through to the canonical default per LLM.
-			if c.APIKeyEnv != "" {
-				customEnvVars[name] = c.APIKeyEnv
-			}
-			// Surface the configured model so doctor exposes "which
-			// weights will run" — pre-fix the user only learned the
-			// model name when `review` printed the roster, too late
-			// to catch a misconfigured model before triggering an
-			// expensive call.
-			if c.Model != "" {
-				models[name] = c.Model
-			}
-		}
 	}
+	overrides, customEnvVars, models := doctorLLMOverrides(cfg, cfgErr)
 	llms := cli.DetectAllWithOverrides(overrides)
-	// Provider agents (entries with base_url in cfg.LLMs) — detected via
-	// HTTP /v1/models probe and rendered alongside CLI agents in the same
-	// readiness summary. Empty when no provider entries are configured.
-	// Specs sorted by name so doctor's provider rows appear in a stable
-	// order across runs (Go map iteration is randomised; without the sort
-	// the output flickered between invocations).
-	var providerSpecs []cli.ProviderSpec
-	if cfgErr == nil {
-		names := make([]string, 0, len(cfg.LLMs))
-		for name, c := range cfg.LLMs {
-			if c.BaseURL == "" {
-				continue
-			}
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			c := cfg.LLMs[name]
-			providerSpecs = append(providerSpecs, cli.ProviderSpec{
-				Name:       name,
-				BaseURL:    c.BaseURL,
-				Model:      c.Model,
-				APIKey:     c.APIKey,
-				TimeoutSec: c.TimeoutSec,
-			})
-		}
-	}
-	llms = append(llms, cli.DetectProviders(context.Background(), providerSpecs)...)
+	llms = append(llms, cli.DetectProviders(context.Background(), doctorProviderSpecs(cfg, cfgErr))...)
 
 	// Capture `now` once so every clock-driven decision in this
 	// run (sunset gate on the numerator AND denominator, sunset
@@ -145,8 +92,99 @@ func runDoctor(out io.Writer) error {
 	// agent as available, or vice versa. (v0.15 pre-release QA
 	// catch from codex.)
 	now := time.Now().UTC()
-	readyCount := 0
-	reviewCapable := 0
+	readyCount, reviewCapable := printLLMRows(w, llms, cfg, customEnvVars, models, now)
+
+	fmt.Fprintln(w)
+	// Denominator is the review-capable count, not len(llms): an
+	// experimental CLI (e.g. antigravity) is detected but can't join
+	// the fan-out, so counting it would make "3/4 ready" read like a
+	// fixable gap when nothing is wrong.
+	fmt.Fprintf(w, "%d/%d LLMs ready for multi-review.\n", readyCount, reviewCapable)
+
+	// Issue #55: warn when prompts.pack_dir is configured but the
+	// directory is missing/empty. A misconfigured override is silent
+	// at runtime (the resolver falls through to embedded packs), so
+	// without doctor surfacing it the user would only notice their
+	// house rules aren't applying after running a review and seeing
+	// the wrong tone.
+	if cfgErr == nil {
+		checkPromptOverride(w, cfg)
+	}
+
+	return w.err
+}
+
+// doctorLLMOverrides mirrors the runner: honor cfg.LLMs[*].CLIPath overrides
+// so doctor and runtime see the same binaries (without this a user with a
+// custom cli_path would see ✗ in doctor but a successful run, or vice
+// versa), plus per-LLM APIKeyEnv and Model overrides. Returns empty maps
+// when cfg failed to load (cfgErr != nil) — same as runDoctor's pre-
+// extraction behaviour, which only populated these from a successfully
+// loaded cfg.
+func doctorLLMOverrides(cfg config.Config, cfgErr error) (overrides, customEnvVars, models map[string]string) {
+	overrides = map[string]string{}
+	customEnvVars = map[string]string{}
+	models = map[string]string{}
+	if cfgErr != nil {
+		return overrides, customEnvVars, models
+	}
+	for name, c := range cfg.LLMs {
+		if c.CLIPath != "" {
+			overrides[name] = c.CLIPath
+		}
+		// Honor cfg.LLMs[*].APIKeyEnv so a user with a key under,
+		// say, MY_GEMINI_KEY sees ✓ ready instead of "not authed".
+		// Empty falls through to the canonical default per LLM.
+		if c.APIKeyEnv != "" {
+			customEnvVars[name] = c.APIKeyEnv
+		}
+		// Surface the configured model so doctor exposes "which
+		// weights will run" — pre-fix the user only learned the
+		// model name when `review` printed the roster, too late
+		// to catch a misconfigured model before triggering an
+		// expensive call.
+		if c.Model != "" {
+			models[name] = c.Model
+		}
+	}
+	return overrides, customEnvVars, models
+}
+
+// doctorProviderSpecs builds the provider agents (entries with base_url in
+// cfg.LLMs) — detected via HTTP /v1/models probe and rendered alongside CLI
+// agents in the same readiness summary. Empty when no provider entries are
+// configured (or cfg failed to load). Specs sorted by name so doctor's
+// provider rows appear in a stable order across runs (Go map iteration is
+// randomised; without the sort the output flickered between invocations).
+func doctorProviderSpecs(cfg config.Config, cfgErr error) []cli.ProviderSpec {
+	if cfgErr != nil {
+		return nil
+	}
+	names := make([]string, 0, len(cfg.LLMs))
+	for name, c := range cfg.LLMs {
+		if c.BaseURL == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var providerSpecs []cli.ProviderSpec
+	for _, name := range names {
+		c := cfg.LLMs[name]
+		providerSpecs = append(providerSpecs, cli.ProviderSpec{
+			Name:       name,
+			BaseURL:    c.BaseURL,
+			Model:      c.Model,
+			APIKey:     c.APIKey,
+			TimeoutSec: c.TimeoutSec,
+		})
+	}
+	return providerSpecs
+}
+
+// printLLMRows prints one row per detected LLM and returns the ready /
+// review-capable counts runDoctor needs for the "N/M LLMs ready" summary.
+func printLLMRows(w io.Writer, llms []cli.LLM, cfg config.Config, customEnvVars, models map[string]string, now time.Time) (readyCount, reviewCapable int) {
 	for _, llm := range llms {
 		var force bool
 		if c, ok := cfg.LLMs[llm.Name]; ok && c.ForceAfterSunset != nil {
@@ -170,25 +208,7 @@ func runDoctor(out io.Writer) error {
 		}
 		printLLMRow(w, llm, status, auth, models[llm.Name], force, now)
 	}
-
-	fmt.Fprintln(w)
-	// Denominator is the review-capable count, not len(llms): an
-	// experimental CLI (e.g. antigravity) is detected but can't join
-	// the fan-out, so counting it would make "3/4 ready" read like a
-	// fixable gap when nothing is wrong.
-	fmt.Fprintf(w, "%d/%d LLMs ready for multi-review.\n", readyCount, reviewCapable)
-
-	// Issue #55: warn when prompts.pack_dir is configured but the
-	// directory is missing/empty. A misconfigured override is silent
-	// at runtime (the resolver falls through to embedded packs), so
-	// without doctor surfacing it the user would only notice their
-	// house rules aren't applying after running a review and seeing
-	// the wrong tone.
-	if cfgErr == nil {
-		checkPromptOverride(w, cfg)
-	}
-
-	return w.err
+	return readyCount, reviewCapable
 }
 
 // checkPromptOverride writes a warning line when cfg.Prompts.PackDir
@@ -217,23 +237,37 @@ func checkPromptOverride(w io.Writer, cfg config.Config) {
 		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q is unreadable: %v\n", dir, err)
 		return
 	}
-	// Two things to check, both caught by self-review iterations:
-	//
-	// 1. Counting any *.md file silenced the diagnostic when the
-	//    user dropped a README.md into the prompts directory but
-	//    no actual override files. Fix: match against the known
-	//    language-id set.
-	//
-	// 2. A known-language override file that EXISTS but isn't
-	//    READABLE (perms drift, broken symlink, NFS hiccup) would
-	//    pass the count check but get silently skipped at review
-	//    time by the resolver's fall-through-on-error contract.
-	//    Fix: actively probe readability here, where surfacing the
-	//    problem doesn't disrupt a real review run. The resolver
-	//    stays resilient; doctor stays loud.
+	overrideCount, unreadable := scanPromptOverrides(dir, entries)
+	if overrideCount == 0 {
+		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q has no <language>.md files matching a shipped pack.\n", dir)
+		fmt.Fprintln(w, "  Drop a file like `go.md` or `default.md` into the directory to override the embedded pack.")
+		return
+	}
+	if len(unreadable) > 0 {
+		fmt.Fprintf(w, "\n⚠ Prompt override file(s) in %q present but unreadable:\n", dir)
+		for _, u := range unreadable {
+			fmt.Fprintf(w, "    %s\n", u)
+		}
+		fmt.Fprintln(w, "  Reviews will silently fall through to embedded packs for those languages. Fix permissions or remove the file.")
+	}
+}
+
+// scanPromptOverrides counts <language>.md files in dir matching a shipped
+// pack and lists any that are unreadable or empty. Two things to check,
+// both caught by self-review iterations:
+//
+// 1. Counting any *.md file silenced the diagnostic when the user dropped
+//    a README.md into the prompts directory but no actual override files.
+//    Fix: match against the known language-id set.
+//
+// 2. A known-language override file that EXISTS but isn't READABLE (perms
+//    drift, broken symlink, NFS hiccup) would pass the count check but get
+//    silently skipped at review time by the resolver's fall-through-on-
+//    error contract. Fix: actively probe readability here, where surfacing
+//    the problem doesn't disrupt a real review run. The resolver stays
+//    resilient; doctor stays loud.
+func scanPromptOverrides(dir string, entries []os.DirEntry) (overrideCount int, unreadable []string) {
 	knownLangs := promptLanguageSet()
-	overrideCount := 0
-	var unreadable []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -269,18 +303,7 @@ func checkPromptOverride(w io.Writer, cfg config.Config) {
 			unreadable = append(unreadable, fmt.Sprintf("%s (empty)", name))
 		}
 	}
-	if overrideCount == 0 {
-		fmt.Fprintf(w, "\n⚠ Prompt pack_dir %q has no <language>.md files matching a shipped pack.\n", dir)
-		fmt.Fprintln(w, "  Drop a file like `go.md` or `default.md` into the directory to override the embedded pack.")
-		return
-	}
-	if len(unreadable) > 0 {
-		fmt.Fprintf(w, "\n⚠ Prompt override file(s) in %q present but unreadable:\n", dir)
-		for _, u := range unreadable {
-			fmt.Fprintf(w, "    %s\n", u)
-		}
-		fmt.Fprintln(w, "  Reviews will silently fall through to embedded packs for those languages. Fix permissions or remove the file.")
-	}
+	return overrideCount, unreadable
 }
 
 // promptLanguageSet returns the set of language ids that have a
@@ -695,52 +718,63 @@ func checkCodexAuth(customEnvVar string) authStatus {
 			detail:        envVar + envVarSetSuffix,
 		}
 	}
-	// Codex stores an explicit auth_mode field in ~/.codex/auth.json.
-	// Newer versions write "chatgpt" or "api_key"; older versions or
-	// hand-edited files may have an empty auth_mode but a non-null
-	// OPENAI_API_KEY field — also treat that as authenticated.
 	if home := authHomeDir(); home != "" {
-		b, err := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
-		if err == nil {
-			var a struct {
-				AuthMode     string  `json:"auth_mode"`
-				OpenAIAPIKey *string `json:"OPENAI_API_KEY"`
-			}
-			if err := json.Unmarshal(b, &a); err == nil {
-				switch a.AuthMode {
-				case "chatgpt":
-					return authStatus{
-						authenticated: true,
-						detail:        "logged in via 'codex login' (ChatGPT subscription)",
-					}
-				case "api_key":
-					// auth_mode: "api_key" only counts when the stored
-					// key is actually non-empty. A partial / corrupted
-					// auth.json with the mode set but the key cleared
-					// must not produce a false "authenticated" result.
-					if a.OpenAIAPIKey != nil && *a.OpenAIAPIKey != "" {
-						return authStatus{
-							authenticated: true,
-							detail:        "API key configured via 'codex login --api-key'",
-						}
-					}
-				default:
-					// Older / hand-edited auth.json files may lack
-					// auth_mode but have a stored key. Honor that.
-					if a.OpenAIAPIKey != nil && *a.OpenAIAPIKey != "" {
-						return authStatus{
-							authenticated: true,
-							detail:        "API key stored in ~/.codex/auth.json",
-						}
-					}
-				}
-			}
+		if status, ok := codexAuthFromFile(home); ok {
+			return status
 		}
 	}
 	return authStatus{
 		authenticated: false,
 		hint:          fmt.Sprintf("run 'codex login' (ChatGPT Plus, $20/mo) — or export %s=... (pay-per-token, usually cheaper)", envVar),
 	}
+}
+
+// codexAuthFromFile reads ~/.codex/auth.json, which stores an explicit
+// auth_mode field. Newer versions write "chatgpt" or "api_key"; older
+// versions or hand-edited files may have an empty auth_mode but a non-null
+// OPENAI_API_KEY field — also treated as authenticated. Returns ok=false
+// when the file is missing/unreadable/unparseable or doesn't establish
+// authentication.
+func codexAuthFromFile(home string) (authStatus, bool) {
+	b, err := os.ReadFile(filepath.Join(home, ".codex", "auth.json"))
+	if err != nil {
+		return authStatus{}, false
+	}
+	var a struct {
+		AuthMode     string  `json:"auth_mode"`
+		OpenAIAPIKey *string `json:"OPENAI_API_KEY"`
+	}
+	if err := json.Unmarshal(b, &a); err != nil {
+		return authStatus{}, false
+	}
+	switch a.AuthMode {
+	case "chatgpt":
+		return authStatus{
+			authenticated: true,
+			detail:        "logged in via 'codex login' (ChatGPT subscription)",
+		}, true
+	case "api_key":
+		// auth_mode: "api_key" only counts when the stored key is
+		// actually non-empty. A partial / corrupted auth.json with
+		// the mode set but the key cleared must not produce a false
+		// "authenticated" result.
+		if a.OpenAIAPIKey != nil && *a.OpenAIAPIKey != "" {
+			return authStatus{
+				authenticated: true,
+				detail:        "API key configured via 'codex login --api-key'",
+			}, true
+		}
+	default:
+		// Older / hand-edited auth.json files may lack auth_mode but
+		// have a stored key. Honor that.
+		if a.OpenAIAPIKey != nil && *a.OpenAIAPIKey != "" {
+			return authStatus{
+				authenticated: true,
+				detail:        "API key stored in ~/.codex/auth.json",
+			}, true
+		}
+	}
+	return authStatus{}, false
 }
 
 // copilotConfigDir returns Copilot CLI's config/login home — $COPILOT_HOME
