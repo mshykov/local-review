@@ -200,34 +200,8 @@ type response struct {
 // providers respect this; for those that don't, the system prompt
 // should still steer the model to JSON.
 func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (string, Usage, error) {
-	// Scheme guard at the actual exfil sink: Complete POSTs the diff (or,
-	// under audit, the source) to BaseURL. The pre-flight probe checks
-	// this too, but --no-preflight skips the probe, so validate here as
-	// well — a non-http(s) base_url must never reach the HTTP client.
-	if u, err := url.Parse(c.BaseURL); err != nil || (strings.ToLower(u.Scheme) != "http" && strings.ToLower(u.Scheme) != "https") {
-		return "", Usage{}, fmt.Errorf("invalid base_url %q: must be an http:// or https:// URL", c.BaseURL)
-	}
-	if c.APIKey == "" && !isLocalURL(c.BaseURL) {
-		// Local-review init's "Ollama" preset writes a config with no
-		// api_key_env line because Ollama doesn't authenticate. A blank
-		// LOCAL_REVIEW_API_KEY (the legacy default) used to crash the
-		// review here despite the provider needing no key. Skip the
-		// check when base_url points at a local-or-LAN host (see
-		// isLocalURL — loopback + RFC1918 + CGNAT/Tailscale + IPv6
-		// unique/link-local);
-		// any public URL still requires a key. A user with a LAN
-		// gateway that DOES authenticate just sets api_key as usual
-		// (the !c.APIKey guard here means the bypass only fires when
-		// no key is configured).
-		// Name the env var the user actually configured
-		// (llms.<name>.api_key_env), threaded through from the provider
-		// spec. When it's empty the key was never wired to a var name, so
-		// point at the config field rather than the removed-in-v0.15
-		// LOCAL_REVIEW_API_KEY default the old fallback named.
-		if envName := strings.TrimSpace(c.APIKeyEnv); envName != "" {
-			return "", Usage{}, fmt.Errorf("no API key: $%s is unset or empty\n         export %s=... (or run `local-review init`), or use an LLM CLI instead (see `local-review doctor`)", envName, envName)
-		}
-		return "", Usage{}, fmt.Errorf("no API key configured for this provider\n         set llms.<name>.api_key_env to an env var name and export the key, or run `local-review init`\n         (local/LAN endpoints need no key — see `local-review doctor`)")
+	if err := validateCompleteRequest(c); err != nil {
+		return "", Usage{}, err
 	}
 
 	req := request{
@@ -276,15 +250,51 @@ func (c *Client) Complete(ctx context.Context, msgs []Message, jsonMode bool) (s
 	}
 
 	if resp.StatusCode >= 400 {
-		// Try to extract a useful message from the JSON error envelope
-		var parsed response
-		_ = json.Unmarshal(respBody, &parsed)
-		if parsed.Error != nil {
-			return "", Usage{}, fmt.Errorf("llm %s: %s", resp.Status, parsed.Error.Message)
-		}
-		return "", Usage{}, fmt.Errorf("llm %s: %s", resp.Status, string(respBody))
+		return "", Usage{}, completeErrorFromBody(resp.Status, respBody)
 	}
+	return parseCompleteBody(respBody)
+}
 
+// validateCompleteRequest checks c is safe/ready to POST to: BaseURL must
+// be an http(s) scheme (Complete POSTs the diff, or under audit the
+// source, to BaseURL — the pre-flight probe checks this too, but
+// --no-preflight skips the probe, so validate here as well), and an API
+// key must be configured unless BaseURL is local-or-LAN (see isLocalURL —
+// loopback + RFC1918 + CGNAT/Tailscale + IPv6 unique/link-local; Ollama
+// and similar don't authenticate, so local-review init's "Ollama" preset
+// writes no api_key_env line).
+func validateCompleteRequest(c *Client) error {
+	if u, err := url.Parse(c.BaseURL); err != nil || (strings.ToLower(u.Scheme) != "http" && strings.ToLower(u.Scheme) != "https") {
+		return fmt.Errorf("invalid base_url %q: must be an http:// or https:// URL", c.BaseURL)
+	}
+	if c.APIKey != "" || isLocalURL(c.BaseURL) {
+		return nil
+	}
+	// Name the env var the user actually configured
+	// (llms.<name>.api_key_env), threaded through from the provider
+	// spec. When it's empty the key was never wired to a var name, so
+	// point at the config field rather than the removed-in-v0.15
+	// LOCAL_REVIEW_API_KEY default the old fallback named.
+	if envName := strings.TrimSpace(c.APIKeyEnv); envName != "" {
+		return fmt.Errorf("no API key: $%s is unset or empty\n         export %s=... (or run `local-review init`), or use an LLM CLI instead (see `local-review doctor`)", envName, envName)
+	}
+	return fmt.Errorf("no API key configured for this provider\n         set llms.<name>.api_key_env to an env var name and export the key, or run `local-review init`\n         (local/LAN endpoints need no key — see `local-review doctor`)")
+}
+
+// completeErrorFromBody builds the error for an HTTP >=400 response,
+// preferring the provider's JSON error envelope message when present.
+func completeErrorFromBody(status string, respBody []byte) error {
+	var parsed response
+	_ = json.Unmarshal(respBody, &parsed)
+	if parsed.Error != nil {
+		return fmt.Errorf("llm %s: %s", status, parsed.Error.Message)
+	}
+	return fmt.Errorf("llm %s: %s", status, string(respBody))
+}
+
+// parseCompleteBody parses a successful (< 400) response body into the
+// assistant's text + usage.
+func parseCompleteBody(respBody []byte) (string, Usage, error) {
 	var out response
 	if err := json.Unmarshal(respBody, &out); err != nil {
 		return "", Usage{}, fmt.Errorf("parse response: %w", err)
