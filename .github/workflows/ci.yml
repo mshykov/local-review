@@ -42,6 +42,16 @@ jobs:
           fi
       - name: Vet
         run: go vet ./...
+      - name: Complexity
+        # Enforces gocognit (SonarSource's Cognitive Complexity, per-function
+        # budget 15 — see .golangci.yml) on every push/PR, not just on a
+        # PR's changed lines. SonarCloud's own S3776 rule only gates *new*
+        # code in a diff, so a function already over budget on `main` stays
+        # invisible until someone happens to touch it — this step catches a
+        # NEW function crossing the line at the PR that introduces it.
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
       - name: Test
         run: go test -race -count=1 ./...
       - name: Build

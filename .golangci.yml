@@ -1,0 +1,39 @@
+version: "2"
+
+# Deliberately minimal: only the linter this file exists for. `default:
+# standard` (or any broader preset) would turn this config into a second,
+# uncoordinated source of findings on top of `go vet` + gofmt + SonarCloud
+# — a wave of unrelated new findings on an unrelated PR is exactly the
+# kind of noise that erodes trust in the gate. Add another linter here
+# only with its own explicit rationale, not as a drive-by "while we're
+# at it."
+#
+# gocognit (SonarSource's Cognitive Complexity concept, reimplemented for
+# Go) closes the gap SonarCloud's own S3776 rule left: Sonar only enforces
+# it on *new* code in a PR's diff, so a function already over the
+# threshold on `main` is invisible to the gate until someone happens to
+# touch it — and by then the "new code" is often just one changed line
+# deep inside an already-complex function, not the whole thing. Running
+# gocognit locally / in CI enforces the SAME 15-per-function budget
+# unconditionally, on every function, so a regression is caught at the
+# PR that introduces it rather than surfacing later as a SonarCloud
+# Maintainability finding against code that already merged.
+linters:
+  default: none
+  enable:
+    - gocognit
+  settings:
+    gocognit:
+      min-complexity: 15
+  exclusions:
+    rules:
+      # Table-driven tests routinely have a t.Run closure whose body
+      # legitimately walks several assertions — that's the point of the
+      # pattern, and Sonar's own S3776 rule exempts *_test.go for the
+      # same reason (see docs/developer.md's "Lessons learned"). Keeping
+      # test files in-scope here would just push contributors toward
+      # extracting an assertXxx helper for its own sake rather than
+      # because the test got hard to follow.
+      - path: _test\.go
+        linters:
+          - gocognit

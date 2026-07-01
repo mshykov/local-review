@@ -140,11 +140,55 @@ CI/infra change.
   exempt in `sonar-project.properties` (same rationale as the `init.go` provider
   table and the S3776 test-file exemption) — expect a new table test to need this;
   don't contort it to satisfy CPD.
-- **Don't chase the cognitive-complexity metric across the board.** ~20 functions
-  exceed Sonar's S3776 threshold of 15; most are legitimately-complex orchestration /
-  parsing and are existing-code issues that don't fail the new-code gate. Decompose
-  the genuine worst offender for readability; leave the rest. Refactoring purely to
-  satisfy a metric adds indirection without value.
+- **A full cognitive-complexity sweep is worth it once `.golangci.yml` exists to keep
+  it clean.** An earlier pass here decomposed only the worst offender and left ~20
+  functions over budget as "existing-code, doesn't fail the new-code gate" — true at
+  the time, but it meant the debt just sat there until each function was touched for
+  an unrelated reason, at which point the SAME extraction had to happen anyway, under
+  more time pressure. A later sweep fixed all 22 (mechanical extraction, no logic
+  changes, one PR per risk tier — danger zone / internal source / test files) and
+  added the `gocognit` CI gate below so the count stays at zero going forward instead
+  of slowly regrowing. Do the one-time sweep; don't leave a "mostly fixed" pile for
+  the next person.
+- **`golangci-lint` with only `gocognit` enabled closes the gap SonarCloud's own
+  new-code-only gate leaves.** `.github/workflows/ci.yml`'s "Complexity" step runs it
+  on every push/PR against the WHOLE repo, not just the diff — a regression is caught
+  at the PR that introduces it, not months later when SonarCloud finally flags it
+  because someone touched an adjacent line. `.golangci.yml` deliberately enables only
+  `gocognit` (not `default: standard` or any broader preset) — a wave of unrelated
+  new findings on an unrelated PR is exactly the kind of noise that erodes trust in a
+  gate. It also exempts `*_test.go`, mirroring `sonar-project.properties`'s own S3776
+  exemption for tests (see the note above) — local tooling and Sonar's gate should
+  agree, not fight each other.
+- **Extracting an untested function's internals turns "always was uncovered" into
+  "new code at 0%" in a diff-based coverage gate.** SonarCloud's new-code-coverage
+  gate (≥80%) failed twice during the complexity sweep — not because the refactor
+  broke anything, but because splitting a function that had ZERO direct test
+  coverage (e.g. `runDoctor`, `Walk`) into named helpers puts those helpers' bodies
+  into the PR's diff, and a diff-coverage tool can't see that the parent was already
+  just as untested on `main`. The fix is to add real tests for the newly-legible
+  pieces (which is a genuine improvement, not gate-satisfying theater) — write the
+  characterization tests against the CURRENT code first, confirm they pass, then
+  refactor, then confirm they still pass unchanged. Check coverage per extracted
+  function (`go test -coverprofile=... && go tool cover -func=...`) before pushing,
+  not after Sonar tells you.
 - **Branch before you edit.** Several refactors started with edits on `main` and had
   to be moved onto a feature branch (`git checkout -b` carries the working tree, so
   it's recoverable) — but starting on the branch is one less thing to get wrong.
+- **`go get -tool <module>@<version>` alone doesn't produce a `go mod tidy`-clean
+  `go.sum`.** Adding `govulncheck` / `gitleaks` as `tool` directives (closing the
+  Sonar "unpredictable dependency version" finding on `go install x@version` in CI)
+  passed `go build` / `go vet` / `go test` locally but still failed CI's `go mod tidy
+  && git diff --exit-code go.mod go.sum` step — `go mod tidy` pulls in a tool's
+  test-only transitive dependencies too, which `go get -tool` alone doesn't. Always
+  run `go mod tidy` (not just build/vet/test) after adding or bumping a `tool`
+  directive, and commit whatever it changes, before pushing.
+- **A tool with a large dependency tree can bloat `go.sum` far more than the value it
+  adds as a `tool` directive.** `golangci-lint` alone would have added ~650 lines to
+  `go.sum` (it bundles ~100 linters) for a dev-only CI tool — a real cost against
+  "no vendor SDKs... keeps the dependency surface... minimal" even though it's a
+  `tool`, not a runtime dependency. Used the SHA-pinned `golangci-lint-action`
+  instead: still fully reproducible (a real commit SHA, not a floating tag) without
+  the `go.sum` cost. `go.mod` tool directives are the right call for a single, small
+  binary (govulncheck, gitleaks); a SHA-pinned Action is the right call for a large
+  one. Weigh both before defaulting to "no vendor SDK, so always `go tool`."

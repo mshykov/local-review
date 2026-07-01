@@ -64,3 +64,30 @@ No vendor SDKs — raw HTTP only in `internal/llm/`, keeping the dependency surf
 thus supply-chain risk) minimal. See [developer.md](developer.md). Dependencies are
 kept current: Dependabot opens update PRs and `gitleaks` runs in CI on pull requests
 and pushes to `main`.
+
+- **CI/install tools go in `go.mod` as a `tool` directive, never `go install
+  x@version`.** `go get -tool <module>@<version>` (Go 1.24+) pins the version AND
+  checksum-verifies its full dependency graph in `go.sum` — the same integrity
+  guarantee the main build gets. A bare `go install x@version` inside a workflow step
+  has no lock file backing it; SonarCloud flags this (Security, "dependency versions
+  are not predictable"). `go tool <name>` then builds-and-runs it from the module
+  cache — no separate install step. See `.github/workflows/{govulncheck,secret-scan}.yml`
+  for the pattern. Exception: a tool with a large dependency tree (e.g.
+  `golangci-lint`, ~100 bundled linters) can cost more in `go.sum` bloat than it's
+  worth as a `tool` directive — a SHA-pinned GitHub Action is the better call there
+  (see `.github/workflows/ci.yml`'s "Complexity" step). Don't add `go mod tidy` to
+  the "later" pile either — `go get -tool` alone doesn't produce a tidy-clean
+  `go.sum` (it misses the tool's test-only transitive deps); run `go mod tidy` and
+  commit its output in the same change.
+- **Every `curl`/`wget` call that follows redirects must pin the protocol.**
+  `curl -L` (implied by `-fsSL`) follows redirects; without `--proto '=https'
+  --proto-redir '=https'`, a compromised or misconfigured server anywhere on the
+  redirect chain could downgrade the request to plain `http` mid-flight — the
+  `https://` in the *initial* URL doesn't protect against that on its own.
+  SonarCloud flags any un-pinned `curl -fsSL` as a Security finding ("not enforcing
+  HTTPS"). This applies to every occurrence of a URL, including ones a user is meant
+  to copy-paste (a documented `curl ... | sh` onboarding command is the highest-value
+  one to pin — it fetches executable code and pipes it straight into a shell). See
+  `install.sh` and `.github/workflows/release.yml`'s `update-homebrew` job for the
+  pattern; grep the repo for every `curl` when adding a new one so a fresh copy
+  doesn't miss the flags.
