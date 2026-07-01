@@ -125,21 +125,9 @@ func WriteMarkdown(w io.Writer, rep Report) error {
 	if err := writeMarkdownSummary(w, rep); err != nil {
 		return err
 	}
-	// Group: packages with findings first, then clean (collapsed),
-	// then errored (so they stand out at the bottom).
-	var clean, errored []PackageReport
-	for _, pr := range rep.Packages {
-		if pr.Error != "" {
-			errored = append(errored, pr)
-			continue
-		}
-		if pr.Clean || len(pr.Findings) == 0 {
-			clean = append(clean, pr)
-			continue
-		}
-		if err := writeMarkdownPackage(w, pr); err != nil {
-			return err
-		}
+	clean, errored, err := writeMarkdownPackages(w, rep.Packages)
+	if err != nil {
+		return err
 	}
 	if len(clean) > 0 {
 		if err := writeMarkdownCleanList(w, clean); err != nil {
@@ -152,6 +140,28 @@ func WriteMarkdown(w io.Writer, rep Report) error {
 		}
 	}
 	return nil
+}
+
+// writeMarkdownPackages writes each package with findings immediately (in
+// rep.Packages order) and buckets the rest into clean / errored for the
+// caller to render as collapsed lists afterward — packages with findings
+// come first, then clean (collapsed), then errored, so errors stand out at
+// the bottom.
+func writeMarkdownPackages(w io.Writer, packages []PackageReport) (clean, errored []PackageReport, err error) {
+	for _, pr := range packages {
+		if pr.Error != "" {
+			errored = append(errored, pr)
+			continue
+		}
+		if pr.Clean || len(pr.Findings) == 0 {
+			clean = append(clean, pr)
+			continue
+		}
+		if err := writeMarkdownPackage(w, pr); err != nil {
+			return nil, nil, err
+		}
+	}
+	return clean, errored, nil
 }
 
 func writeMarkdownSummary(w io.Writer, rep Report) error {

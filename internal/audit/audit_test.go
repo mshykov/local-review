@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -704,6 +705,80 @@ func TestWalk_RejectsNegativeMaxBytesPerChunk(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "MaxBytesPerChunk must be >= 0") {
 		t.Errorf("error should mention the constraint; got %v", err)
+	}
+}
+
+// initTestGitRepo creates a real git repo at t.TempDir() with the given
+// tracked files, mirroring internal/git's own test pattern (diff_test.go) —
+// Walk shells out to real `git ls-files`, so groupFilesByPackage /
+// buildChunksFromPackages need an actual repo to exercise, not a mock.
+func initTestGitRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init", "-q")
+	runGit("config", "user.email", "t@example.com")
+	runGit("config", "user.name", "T")
+	runGit("config", "commit.gpgsign", "false")
+	for rel, content := range files {
+		full := filepath.Join(repo, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGit("add", rel)
+	}
+	runGit("commit", "-q", "-m", "init")
+	return repo
+}
+
+// TestWalk_GroupsFilesByPackageAndSortsDeterministically exercises Walk
+// end-to-end against a real git repo: two packages, each with tracked
+// source files plus one file that pathPassesFilters/isAuditable should
+// exclude (Exclude prefix, and a binary-shaped extension). Covers
+// groupFilesByPackage + buildChunksFromPackages, which had no direct test
+// before the cognitive-complexity refactor extracted them from Walk.
+func TestWalk_GroupsFilesByPackageAndSortsDeterministically(t *testing.T) {
+	repo := initTestGitRepo(t, map[string]string{
+		"pkgb/z.go":       "package pkgb\n",
+		"pkgb/a.go":       "package pkgb\n",
+		"pkga/main.go":    "package pkga\n",
+		"pkga/skip.png":   "not source",
+		"excluded/foo.go": "package excluded\n",
+	})
+	chunks, err := Walk(WalkOptions{Root: repo, Exclude: []string{"excluded"}})
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 package chunks (pkga, pkgb), got %d: %+v", len(chunks), chunks)
+	}
+	// Packages sorted alphabetically: pkga before pkgb.
+	if chunks[0].Package != "pkga" || chunks[1].Package != "pkgb" {
+		t.Errorf("expected chunks sorted [pkga, pkgb], got [%s, %s]", chunks[0].Package, chunks[1].Package)
+	}
+	if len(chunks[0].Files) != 1 || chunks[0].Files[0] != "pkga/main.go" {
+		t.Errorf("pkga chunk should contain only main.go (skip.png excluded by isAuditable), got %v", chunks[0].Files)
+	}
+	// Files within a package sorted too: a.go before z.go.
+	wantPkgB := []string{"pkgb/a.go", "pkgb/z.go"}
+	if len(chunks[1].Files) != 2 || chunks[1].Files[0] != wantPkgB[0] || chunks[1].Files[1] != wantPkgB[1] {
+		t.Errorf("pkgb chunk files = %v, want %v (sorted)", chunks[1].Files, wantPkgB)
+	}
+	for _, c := range chunks {
+		if strings.Contains(c.Package, "excluded") {
+			t.Errorf("excluded/ package must not appear in chunks, got %+v", c)
+		}
 	}
 }
 

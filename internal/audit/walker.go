@@ -147,10 +147,16 @@ func Walk(opts WalkOptions) ([]Chunk, error) {
 		maxBytes = defaultMaxBytesPerChunk
 	}
 
-	// Group eligible files by package (directory).
+	byPkg := groupFilesByPackage(files, opts.Include, opts.Exclude)
+	return buildChunksFromPackages(root, byPkg, maxBytes, opts.Warn)
+}
+
+// groupFilesByPackage buckets files by package (directory) after applying
+// the Include/Exclude filters and the isAuditable eligibility check.
+func groupFilesByPackage(files, include, exclude []string) map[string][]string {
 	byPkg := map[string][]string{}
 	for _, p := range files {
-		if !pathPassesFilters(p, opts.Include, opts.Exclude) {
+		if !pathPassesFilters(p, include, exclude) {
 			continue
 		}
 		if !isAuditable(p) {
@@ -162,9 +168,13 @@ func Walk(opts WalkOptions) ([]Chunk, error) {
 		}
 		byPkg[pkg] = append(byPkg[pkg], p)
 	}
+	return byPkg
+}
 
-	// Build chunks. Sort packages so the audit output order is
-	// stable; sort files within each package for the same reason.
+// buildChunksFromPackages sorts packages (and each package's files) for
+// deterministic output order, then splits each package into one or more
+// Chunks via splitChunk.
+func buildChunksFromPackages(root string, byPkg map[string][]string, maxBytes int, warn io.Writer) ([]Chunk, error) {
 	pkgs := make([]string, 0, len(byPkg))
 	for p := range byPkg {
 		pkgs = append(pkgs, p)
@@ -175,7 +185,7 @@ func Walk(opts WalkOptions) ([]Chunk, error) {
 	for _, pkg := range pkgs {
 		paths := byPkg[pkg]
 		sort.Strings(paths)
-		parts, err := splitChunk(root, pkg, paths, maxBytes, opts.Warn)
+		parts, err := splitChunk(root, pkg, paths, maxBytes, warn)
 		if err != nil {
 			return nil, err
 		}
