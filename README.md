@@ -70,7 +70,7 @@ brew install mshykov/tap/local-review
 Or
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
 ```
 
 Or

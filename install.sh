@@ -2,10 +2,19 @@
 # local-review installer — downloads the right pre-built binary from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | VERSION=v0.1.0 sh
+#   curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
+#   curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | VERSION=v0.1.0 sh
 #
 # Override the install dir with INSTALL_DIR (default: ~/.local/bin).
+#
+# Every curl call in this file — including the usage examples above and the
+# fallback command this script itself prints — pins
+# --proto '=https' --proto-redir '=https' (SonarCloud Security finding):
+# -L follows redirects, and without pinning the protocol, a compromised/
+# misconfigured server on the redirect chain could downgrade the request to
+# plain http mid-flight — the https:// in the initial URL doesn't protect
+# against that on its own. Matters most for the usage examples above: they
+# fetch this very script and pipe it straight into `sh`.
 set -eu
 
 REPO="mshykov/local-review"
@@ -30,7 +39,7 @@ esac
 
 # ----- Resolve version ---------------------------------------------------
 if [ "$VERSION" = "latest" ]; then
-  VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  VERSION=$(curl -fsSL --proto '=https' --proto-redir '=https' "https://api.github.com/repos/${REPO}/releases/latest" \
     | grep -o '"tag_name": *"[^"]*"' \
     | head -n1 \
     | sed -E 's/.*"([^"]+)"/\1/')
@@ -50,14 +59,14 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 echo "Downloading ${url}"
-curl -fsSL "$url" -o "${tmp}/${asset}"
+curl -fsSL --proto '=https' --proto-redir '=https' "$url" -o "${tmp}/${asset}"
 
 # SHA-256 verification before extract. The checksums manifest ships
 # alongside the tarball in every v0.6+ release; for older versions
 # (no manifest) we fall through with a loud warning so the user can
 # still install but knows verification didn't run.
 echo "Downloading ${checksums_url}"
-if curl -fsSL "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
+if curl -fsSL --proto '=https' --proto-redir '=https' "$checksums_url" -o "${tmp}/${checksums}" 2>/dev/null; then
   cd "$tmp"
   # Extract the manifest line for this exact asset before piping. POSIX
   # sh has no `pipefail`, so `grep <asset> | sha256sum -c -` would have
@@ -191,7 +200,7 @@ else
     echo "❌ failed to fetch ${checksums_url}" >&2
     echo "   refusing to install — the checksum manifest may be unavailable due to a network issue or a release packaging error" >&2
     echo "   if you're installing a release older than v0.6.0 (which doesn't ship a manifest), re-run with:" >&2
-    echo "     curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | INSTALL_REVIEW_SKIP_VERIFICATION=1 sh" >&2
+    echo "     curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/${REPO}/main/install.sh | INSTALL_REVIEW_SKIP_VERIFICATION=1 sh" >&2
     exit 1
   fi
 fi

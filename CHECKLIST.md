@@ -160,7 +160,7 @@ When the diff touches:
 [`local-review`](https://github.com/mshykov/local-review) implements every rule above as an LLM-driven prompt pack. Install it, run `local-review review` on a branch, and get findings in seconds — using whichever LLM CLI you've authenticated (Claude, Gemini, Codex), no SaaS, no telemetry, BYOK.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
+curl -fsSL --proto '=https' --proto-redir '=https' https://raw.githubusercontent.com/mshykov/local-review/main/install.sh | sh
 local-review review
 ```
 
