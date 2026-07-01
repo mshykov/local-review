@@ -69,13 +69,13 @@ require (
 	github.com/zricethezav/gitleaks/v8 v8.30.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
-	golang.org/x/crypto v0.35.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260611141451-d61e87d5f4a3 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
 	golang.org/x/tools v0.46.0 // indirect
 	golang.org/x/vuln v1.4.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
