@@ -738,11 +738,17 @@ func TestDoctorProviderSpecs_CfgErrReturnsNil(t *testing.T) {
 func TestDoctorProviderSpecs_OnlyBaseURLEntriesSortedByName(t *testing.T) {
 	cfg := config.Config{LLMs: map[string]config.LLMConfig{
 		"zeta":  {BaseURL: "http://z", Model: "m-z"},
-		"alpha": {BaseURL: "http://a", Model: "m-a", APIKey: "k", TimeoutSec: 30},
+		"alpha": {BaseURL: "http://a", Model: "m-a", APIKey: "k", APIKeyEnv: "ALPHA_KEY", TimeoutSec: 30},
 		"claude": {
 			// No BaseURL — a plain CLI agent, must be excluded.
 			CLIPath: "/usr/local/bin/claude",
 		},
+		// Whitespace-only base_url: the runner's constructor
+		// (agentselect.ProviderSpecsFromConfig) skips it after
+		// TrimSpace; doctor's old hand-rolled copy treated it as a
+		// real provider — the exact doctor-vs-runtime drift the
+		// delegation closed. Must be excluded here too.
+		"padded": {BaseURL: "   "},
 	}}
 	specs := doctorProviderSpecs(cfg, nil)
 	if len(specs) != 2 {
@@ -753,6 +759,12 @@ func TestDoctorProviderSpecs_OnlyBaseURLEntriesSortedByName(t *testing.T) {
 	}
 	if specs[0].BaseURL != "http://a" || specs[0].Model != "m-a" || specs[0].APIKey != "k" || specs[0].TimeoutSec != 30 {
 		t.Errorf("alpha spec fields not carried through: %+v", specs[0])
+	}
+	// APIKeyEnv was the drifted field: doctor's old copy dropped it, so a
+	// provider authenticated via api_key_env showed a different auth
+	// state in doctor than at runtime.
+	if specs[0].APIKeyEnv != "ALPHA_KEY" {
+		t.Errorf("alpha APIKeyEnv = %q, want ALPHA_KEY (the drift the dedup fixed)", specs[0].APIKeyEnv)
 	}
 }
 

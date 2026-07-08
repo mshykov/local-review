@@ -7,12 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/mshykov/local-review/internal/agentselect"
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/prompts"
@@ -151,35 +151,19 @@ func doctorLLMOverrides(cfg config.Config, cfgErr error) (overrides, customEnvVa
 }
 
 // doctorProviderSpecs builds the provider agents (entries with base_url in
-// cfg.LLMs) — detected via HTTP /v1/models probe and rendered alongside CLI
-// agents in the same readiness summary. Empty when no provider entries are
-// configured (or cfg failed to load). Specs sorted by name so doctor's
-// provider rows appear in a stable order across runs (Go map iteration is
-// randomised; without the sort the output flickered between invocations).
+// cfg.LLMs) for doctor's readiness summary. Nil when cfg failed to load.
+// Delegates to agentselect.ProviderSpecsFromConfig — the SAME constructor
+// the runner uses — so doctor and runtime cannot disagree about what
+// counts as a provider. Doctor previously had its own hand-rolled copy,
+// and it had already drifted (missing APIKeyEnv, no BaseURL TrimSpace):
+// a whitespace-padded base_url showed a provider row in doctor that the
+// runner skipped. Same duplicated-primitive defect class as the v0.17.1
+// pathsafe incident — don't re-inline this.
 func doctorProviderSpecs(cfg config.Config, cfgErr error) []cli.ProviderSpec {
 	if cfgErr != nil {
 		return nil
 	}
-	names := make([]string, 0, len(cfg.LLMs))
-	for name, c := range cfg.LLMs {
-		if c.BaseURL == "" {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var providerSpecs []cli.ProviderSpec
-	for _, name := range names {
-		c := cfg.LLMs[name]
-		providerSpecs = append(providerSpecs, cli.ProviderSpec{
-			Name:       name,
-			BaseURL:    c.BaseURL,
-			Model:      c.Model,
-			APIKey:     c.APIKey,
-			TimeoutSec: c.TimeoutSec,
-		})
-	}
-	return providerSpecs
+	return agentselect.ProviderSpecsFromConfig(cfg)
 }
 
 // printLLMRows prints one row per detected LLM and returns the ready /
