@@ -27,10 +27,24 @@ from untrusted layers before merge, each with a stderr warning:
 - `api_key` — secret-in-repo.
 - `api_key_env` — would otherwise let a repo redirect which env var is read as an
   agent's credential, exfiltrating an arbitrary env var as that agent's auth token.
+- `prompts.pack_dir` (absolute only) — `resolveRelativePaths` containment-checks
+  only *relative* paths, so a checked-in absolute path would read
+  `<dir>/<lang>.md` from an attacker-chosen location into every LLM prompt.
+  Relative pack_dirs survive (resolved against the repo, symlink-safe-contained).
+- `storage.base_path` — CWD/absolute-resolved by the storage layer, so an
+  untrusted value directs `MkdirAll` + report writes (partially LLM-authored
+  content) at an attacker-chosen directory.
 
 The home-directory layer (`~/.local-review.yml`) is trusted; the repo layer is
-not, unless `LOCAL_REVIEW_TRUST_REPO_CONFIG=1` is set. Non-sensitive fields
-(model / timeout / enabled / prompts / review) still merge from the repo layer.
+not, unless `LOCAL_REVIEW_TRUST_REPO_CONFIG=1` is set. The house-rules fields
+(model / timeout / enabled / prompts.prepend/append / review) still merge from
+the repo layer — they are the advertised "Customise for your team" feature —
+but they are **not** risk-free from a hostile repo: `prompts.prepend/append`
+splice repo-authored text into every reviewer's *system prompt*, `review.exclude`
+can glob away the entire diff (`"**"` → "No changes to review" → exit 0), and
+`llms.*.enabled` can thin out or re-enable agents. When an untrusted layer sets
+any of them, a `NOTE: repo config ... shapes this review` line on stderr gives
+the operator a visible signal to inspect the file before trusting a clean result.
 
 ## Symlink-escape protection
 

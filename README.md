@@ -123,7 +123,7 @@ review:
 
 You can ship the whole pack of overrides this way — see [Customise for your team](#customise-for-your-team) below.
 
-> **Security: a repo's `.local-review.yml` is untrusted by default.** Because it ships inside code you might be reviewing for the first time, the execution / network / secret fields — `llms.<name>.cli_path` (runs a binary), `base_url` (sends your diff to a server), and `api_key` — are **ignored when they come from the repo config**, with a warning. House-rules fields (`prompts`, `review`, model/timeout) still apply. Put `cli_path` / `base_url` / `api_key` in your own `~/.local-review.yml` instead, or — if you genuinely trust the repo (e.g. a team-standardised LAN Ollama endpoint) — set `LOCAL_REVIEW_TRUST_REPO_CONFIG=1`.
+> **Security: a repo's `.local-review.yml` is untrusted by default.** Because it ships inside code you might be reviewing for the first time, the execution / network / secret / location fields — `llms.<name>.cli_path` (runs a binary), `base_url` (sends your diff to a server), `api_key` / `api_key_env`, an **absolute** `prompts.pack_dir`, and `storage.base_path` — are **ignored when they come from the repo config**, with a warning. House-rules fields still apply, but when a repo config sets `prompts.prepend/append`, `review.exclude`, or `llms.*.enabled`, a `NOTE` on stderr flags that the repo under review is shaping its own review. House-rules fields (`prompts`, `review`, model/timeout) still apply. Put `cli_path` / `base_url` / `api_key` in your own `~/.local-review.yml` instead, or — if you genuinely trust the repo (e.g. a team-standardised LAN Ollama endpoint) — set `LOCAL_REVIEW_TRUST_REPO_CONFIG=1`.
 
 **4. Review your current branch** vs `main`:
 

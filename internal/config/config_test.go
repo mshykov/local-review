@@ -298,9 +298,34 @@ storage:
 		t.Error("merge.deduplicate should be false")
 	}
 
-	// Check storage config
+	// storage.base_path from the UNTRUSTED repo layer is stripped as of
+	// the 2026-07 hardening (an attacker-chosen write location for review
+	// files); the built-in default must survive. The trusted opt-in shape
+	// is covered by TestLoadUsesRepoYAML_V01_TrustedBasePathMerges.
+	if cfg.Storage.BasePath != ".local-review/reviews" {
+		t.Errorf("storage.base_path = %q, want built-in default (untrusted repo value must be ignored)", cfg.Storage.BasePath)
+	}
+}
+
+// TestLoadUsesRepoYAML_V01_TrustedBasePathMerges pins the escape hatch:
+// with LOCAL_REVIEW_TRUST_REPO_CONFIG=1 the repo layer is trusted and
+// storage.base_path merges as before the hardening.
+func TestLoadUsesRepoYAML_V01_TrustedBasePathMerges(t *testing.T) {
+	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "1")
+	dir := t.TempDir()
+	repoCfg := filepath.Join(dir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+storage:
+  base_path: /custom/path
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
 	if cfg.Storage.BasePath != "/custom/path" {
-		t.Errorf("storage.base_path = %q", cfg.Storage.BasePath)
+		t.Errorf("storage.base_path = %q, want /custom/path (trusted opt-in must merge)", cfg.Storage.BasePath)
 	}
 }
 
@@ -363,10 +388,14 @@ prompts:
 }
 
 func TestLoadUsesRepoYAML_PromptsPackDir_AbsolutePathPreserved(t *testing.T) {
-	// Absolute paths must pass through unchanged — only relative
-	// paths get rewritten. A user with a corporate-shared prompt
-	// dir at /etc/local-review/prompts should not have it
-	// re-rooted.
+	// As of the 2026-07 hardening, an ABSOLUTE pack_dir from the
+	// UNTRUSTED repo layer is stripped: resolveRelativePaths only
+	// containment-checks relative paths, so a checked-in absolute
+	// path would read <dir>/<lang>.md from an attacker-chosen
+	// location into every LLM prompt. The corporate-shared-dir
+	// shape still works via the trusted layer — either
+	// ~/.local-review.yml or LOCAL_REVIEW_TRUST_REPO_CONFIG=1
+	// (asserted below).
 	dir := t.TempDir()
 	repoCfg := filepath.Join(dir, ".local-review.yml")
 	// Use an OS-native absolute path (filepath.Abs of a temp
@@ -383,12 +412,23 @@ prompts:
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
+	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "") // untrusted: stripped
 	cfg, err := Load(repoCfg)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	if cfg.Prompts.PackDir != "" {
+		t.Errorf("PackDir = %q, want empty (absolute path from untrusted repo layer must be stripped)", cfg.Prompts.PackDir)
+	}
+
+	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "1") // trusted opt-in: passes through
+	cfg, err = Load(repoCfg)
+	if err != nil {
+		t.Fatalf("Load (trusted): %v", err)
+	}
 	if cfg.Prompts.PackDir != abs {
-		t.Errorf("PackDir = %q, want absolute %q (must pass through)", cfg.Prompts.PackDir, abs)
+		t.Errorf("PackDir = %q, want absolute %q (trusted opt-in must pass through)", cfg.Prompts.PackDir, abs)
 	}
 }
 
@@ -400,9 +440,9 @@ prompts:
 // read whatever files happened to be in the resulting absolute
 // location.
 //
-// Absolute paths still pass through (the TestLoadUsesRepoYAML_
-// PromptsPackDir_AbsolutePathPreserved case directly above
-// covers that explicit-opt-in shape).
+// Absolute paths pass through only from TRUSTED layers as of the
+// 2026-07 hardening (see TestLoadUsesRepoYAML_PromptsPackDir_
+// AbsolutePathPreserved directly above for both shapes).
 func TestLoadUsesRepoYAML_PromptsPackDir_RejectsPathTraversal(t *testing.T) {
 	for _, badPath := range []string{
 		"../escape",
