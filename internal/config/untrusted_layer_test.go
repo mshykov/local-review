@@ -201,3 +201,93 @@ llms:
 		t.Errorf("user-home base_url should be honored without opt-in, got %q", got)
 	}
 }
+
+// TestLoad_RepoConfigUntrusted_StripsWriteAndReadLocations pins the 2026-07
+// hardening: an untrusted repo layer may not choose where review files are
+// WRITTEN (storage.base_path) or point prompt-pack READS at an absolute
+// location outside itself (prompts.pack_dir). Both strip with a warning;
+// the built-in default survives.
+func TestLoad_RepoConfigUntrusted_StripsWriteAndReadLocations(t *testing.T) {
+	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "")
+	dir := t.TempDir()
+	abs, err := filepath.Abs(filepath.Join(t.TempDir(), "outside"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoCfg := filepath.Join(dir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+storage:
+  base_path: /somewhere/attacker/chose
+prompts:
+  pack_dir: `+abs+`
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg Config
+	var loadErr error
+	stderr := captureStderr(t, func() { cfg, loadErr = Load(repoCfg) })
+	if loadErr != nil {
+		t.Fatalf("Load: %v", loadErr)
+	}
+	if cfg.Storage.BasePath != ".local-review/reviews" {
+		t.Errorf("storage.base_path = %q, want built-in default", cfg.Storage.BasePath)
+	}
+	if cfg.Prompts.PackDir != "" {
+		t.Errorf("prompts.pack_dir = %q, want empty", cfg.Prompts.PackDir)
+	}
+	for _, want := range []string{"ignoring storage.base_path", "ignoring absolute prompts.pack_dir"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q, got:\n%s", want, stderr)
+		}
+	}
+}
+
+// TestLoad_RepoConfigUntrusted_WarnsButMergesHouseRules pins the
+// warn-don't-strip contract for the advertised repo-level house-rules
+// fields: prompts.prepend/append, review.exclude, and llms.*.enabled
+// still MERGE from an untrusted repo layer (stripping would break the
+// README's "Customise for your team" feature for every legitimate team
+// repo), but a visible NOTE tells a CI operator the repo under review
+// is shaping the review itself — a "**" exclude can green-light a
+// hostile commit via "No changes to review" → exit 0.
+func TestLoad_RepoConfigUntrusted_WarnsButMergesHouseRules(t *testing.T) {
+	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "")
+	dir := t.TempDir()
+	repoCfg := filepath.Join(dir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte(`
+prompts:
+  prepend: "house rule: flag TODOs"
+review:
+  exclude: ["**"]
+llms:
+  codex:
+    enabled: false
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg Config
+	var loadErr error
+	stderr := captureStderr(t, func() { cfg, loadErr = Load(repoCfg) })
+	if loadErr != nil {
+		t.Fatalf("Load: %v", loadErr)
+	}
+	if cfg.Prompts.Prepend != "house rule: flag TODOs" {
+		t.Errorf("prompts.prepend = %q, want the house rule to merge", cfg.Prompts.Prepend)
+	}
+	if len(cfg.Review.ExcludeGlobs) != 1 || cfg.Review.ExcludeGlobs[0] != "**" {
+		t.Errorf("review.exclude = %v, want [**] to merge", cfg.Review.ExcludeGlobs)
+	}
+	if cfg.LLMs["codex"].Enabled == nil || *cfg.LLMs["codex"].Enabled {
+		t.Error("llms.codex.enabled=false should merge")
+	}
+	if !strings.Contains(stderr, "shapes this review") {
+		t.Errorf("stderr missing the shaping NOTE, got:\n%s", stderr)
+	}
+	for _, want := range []string{"prompts.prepend", "review.exclude", "llms.codex.enabled=false"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("shaping NOTE missing %q, got:\n%s", want, stderr)
+		}
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/mshykov/local-review/internal/pathsafe"
@@ -379,6 +380,14 @@ func mergeFrom(dst *Config, path string, trusted bool) error {
 	if err := yaml.Unmarshal(b, &layer); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
+	// Sanitize BEFORE resolving relative paths: the sanitizer must see
+	// the raw YAML values so a repo-supplied ABSOLUTE prompts.pack_dir
+	// (stripped — attacker-directed read location) is distinguishable
+	// from a legit relative one that resolution below would have
+	// already made absolute.
+	if !trusted {
+		sanitizeUntrustedLayer(&layer, path)
+	}
 	// Resolve any path-typed field that's natural to express
 	// relative to the config file's directory before merging. The
 	// most important case (codex flagged it on PR self-review):
@@ -388,9 +397,6 @@ func mergeFrom(dst *Config, path string, trusted bool) error {
 	// from a subdirectory silently fell through to embedded packs.
 	if err := resolveRelativePaths(&layer, filepath.Dir(path)); err != nil {
 		return fmt.Errorf("resolve relative paths in %s: %w", path, err)
-	}
-	if !trusted {
-		sanitizeUntrustedLayer(&layer, path)
 	}
 	merge(dst, layer)
 	return nil
@@ -416,6 +422,14 @@ func mergeFrom(dst *Config, path string, trusted bool) error {
 // Opt back in for a genuinely trusted repo with
 // LOCAL_REVIEW_TRUST_REPO_CONFIG=1.
 func sanitizeUntrustedLayer(layer *Config, path string) {
+	stripUntrustedLLMFields(layer, path)
+	stripUntrustedLocations(layer, path)
+	warnUntrustedShaping(layer, path)
+}
+
+// stripUntrustedLLMFields zeroes the exec/network/credential fields on
+// every llms.<name> entry of an untrusted layer, warning per agent.
+func stripUntrustedLLMFields(layer *Config, path string) {
 	for name, llmCfg := range layer.LLMs {
 		var dropped []string
 		if llmCfg.CLIPath != "" {
@@ -448,6 +462,74 @@ func sanitizeUntrustedLayer(layer *Config, path string) {
 		fmt.Fprintf(os.Stderr, "         The repo-level .local-review.yml is untrusted by default — it could run an arbitrary\n")
 		fmt.Fprintf(os.Stderr, "         binary or redirect your code to another server. Move the field to ~/.local-review.yml,\n")
 		fmt.Fprintf(os.Stderr, "         or set %s=1 if you trust this repository.\n", envTrustRepoConfig)
+	}
+
+}
+
+// stripUntrustedLocations drops attacker-chooseable read/write locations
+// from an untrusted layer: an absolute prompts.pack_dir and any
+// storage.base_path.
+func stripUntrustedLocations(layer *Config, path string) {
+	// An ABSOLUTE prompts.pack_dir from the untrusted layer is stripped:
+	// resolveRelativePaths containment-checks only RELATIVE paths (its
+	// absolute-passthrough is a deliberate opt-in for the user's own
+	// trusted config), so a checked-in absolute path would read
+	// <dir>/<lang>.md from an attacker-chosen location into every LLM
+	// prompt. Relative pack_dirs survive — they're resolved against the
+	// repo and symlink-safe-contained by resolveRelativePaths after this.
+	if p := layer.Prompts.PackDir; p != "" && filepath.IsAbs(p) {
+		layer.Prompts.PackDir = ""
+		fmt.Fprintf(os.Stderr, "WARNING: ignoring absolute prompts.pack_dir=%q from repo config %s\n", p, path)
+		fmt.Fprintf(os.Stderr, "         An untrusted repo may not point prompt-pack overrides outside itself. Use a\n")
+		fmt.Fprintf(os.Stderr, "         repo-relative path, or set %s=1 if you trust this repository.\n", envTrustRepoConfig)
+	}
+
+	// storage.base_path is CWD/absolute-resolved by the storage layer, so
+	// an untrusted value directs MkdirAll + report writes (partially
+	// LLM-authored content) at an attacker-chosen directory. No legitimate
+	// per-repo use justifies that risk from an untrusted layer.
+	if bp := layer.Storage.BasePath; bp != "" {
+		layer.Storage.BasePath = ""
+		fmt.Fprintf(os.Stderr, "WARNING: ignoring storage.base_path=%q from repo config %s\n", bp, path)
+		fmt.Fprintf(os.Stderr, "         An untrusted repo may not choose where review files are written. Move the field\n")
+		fmt.Fprintf(os.Stderr, "         to ~/.local-review.yml, or set %s=1 if you trust this repository.\n", envTrustRepoConfig)
+	}
+
+}
+
+// warnUntrustedShaping emits a single stderr NOTE when an untrusted layer
+// sets house-rules fields that steer the review itself.
+func warnUntrustedShaping(layer *Config, path string) {
+	// The fields below still MERGE (they're the advertised repo-level
+	// house-rules feature — README "Customise for your team"), but a
+	// CI operator reviewing code they didn't write deserves a visible
+	// signal that the repo under review is shaping the review itself:
+	// prepend/append splice attacker text into every reviewer's SYSTEM
+	// prompt, review.exclude can glob away the whole diff ("**" → "No
+	// changes to review" → exit 0), and llms.*.enabled can thin out or
+	// re-enable agents (enabled: true on copilot spends a paid Premium
+	// request). Warning, not stripping — stripping would break the
+	// feature for every legitimate team repo.
+	var shaping []string
+	if layer.Prompts.Prepend != "" {
+		shaping = append(shaping, "prompts.prepend")
+	}
+	if layer.Prompts.Append != "" {
+		shaping = append(shaping, "prompts.append")
+	}
+	if len(layer.Review.ExcludeGlobs) > 0 {
+		shaping = append(shaping, fmt.Sprintf("review.exclude=%v", layer.Review.ExcludeGlobs))
+	}
+	for name, llmCfg := range layer.LLMs {
+		if llmCfg.Enabled != nil {
+			shaping = append(shaping, fmt.Sprintf("llms.%s.enabled=%t", name, *llmCfg.Enabled))
+		}
+	}
+	if len(shaping) > 0 {
+		sort.Strings(shaping)
+		fmt.Fprintf(os.Stderr, "NOTE: repo config %s shapes this review: %s\n", path, strings.Join(shaping, ", "))
+		fmt.Fprintf(os.Stderr, "      These merge as designed (house rules), but they come from the repo under review —\n")
+		fmt.Fprintf(os.Stderr, "      if you didn't expect them, inspect the file before trusting a clean result.\n")
 	}
 }
 
