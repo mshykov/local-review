@@ -401,3 +401,58 @@ func TestSanitizeBranchName(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveRef_ResolvesRealRefs is the regression test for the v0.6.0 →
+// v0.17.3 breakage where `rev-parse --short -- <ref>` treated the ref as a
+// pathspec and failed for EVERY input, silently breaking `local-review
+// commit <rev>` for ~11 releases. Exercises the function against real git:
+// HEAD, a branch, a lightweight tag, an annotated tag (must peel to its
+// commit), a full hash round-trip, and the two failure shapes (unknown ref,
+// flag-injection attempt) that must return "".
+func TestResolveRef_ResolvesRealRefs(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("init", "-q", "-b", "main")
+	runGit("config", "user.email", "t@example.com")
+	runGit("config", "user.name", "T")
+	runGit("config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "f.txt")
+	runGit("commit", "-q", "-m", "init")
+	runGit("tag", "light")
+	runGit("tag", "-a", "annot", "-m", "annotated")
+	short := runGit("rev-parse", "--short", "HEAD")
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(orig) }()
+
+	for _, ref := range []string{"HEAD", "main", "light", "annot", short} {
+		if got := ResolveRef(ref); got != short {
+			t.Errorf("ResolveRef(%q) = %q, want %q", ref, got, short)
+		}
+	}
+	if got := ResolveRef("no-such-ref"); got != "" {
+		t.Errorf("ResolveRef(unknown) = %q, want empty", got)
+	}
+	if got := ResolveRef("--flags-are-rejected"); got != "" {
+		t.Errorf("ResolveRef(flag-shaped) = %q, want empty (ValidateRef)", got)
+	}
+}

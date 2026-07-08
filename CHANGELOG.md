@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`local-review commit <rev>` was broken for every explicit ref — including `HEAD`.** `ResolveRef` ran `git rev-parse --short -- <ref>`; after `--`, rev-parse treats the argument as a *pathspec*, so resolution failed with "Needed a single revision" for all inputs and the command errored with "failed to resolve ref". Only the no-argument form (`local-review commit`) worked. Introduced by the v0.6.0 flag-injection hardening (the `--` defense broke the feature it defended) and unnoticed for ~11 releases because nothing tested the function against real git — the tool's own error hints even recommended the broken command. Now uses `--verify <ref>^{commit}` (same injection defense, correct semantics: annotated tags peel to their commit, tree/blob refs fail cleanly), with a real-git regression test covering HEAD / branch / lightweight tag / annotated tag / hash / unknown-ref / flag-shaped-ref shapes.
+
 ## [0.17.3] - 2026-07-01
 
 **Patch: SonarCloud sweep + dependency hygiene.** Closes out the full SonarCloud Security and Maintainability backlog and locks in a local gate so complexity debt can't quietly regrow, plus routine dependency bumps.
