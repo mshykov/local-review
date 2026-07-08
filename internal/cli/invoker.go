@@ -7,10 +7,21 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/mshykov/local-review/internal/agents"
 	"github.com/mshykov/local-review/internal/agents/provider"
 )
+
+// subprocessWaitDelay bounds how long cmd.Wait may block on pipe
+// drainage after the context is canceled. Without it, a vendor CLI
+// whose child process inherits our pipes (node CLIs spawn helpers)
+// can hold Run/Wait open indefinitely AFTER the per-agent timeout or
+// Ctrl+C SIGKILLs the direct child — the exact v0.10.5 probe wedge
+// (CLAUDE.md "Pre-flight readiness probe"), which was fixed in the
+// probe's select-race but remained open on every real invocation
+// path until this landed. 5s is generous for flushing final output.
+const subprocessWaitDelay = 5 * time.Second
 
 // Invoker is the review-agent contract. Moved to internal/agents in
 // v0.14 so the HTTP provider invoker (internal/agents/provider) could
@@ -189,6 +200,7 @@ func (c *CodexInvoker) runExec(ctx context.Context, prompt, errLabel string) (st
 		args = append(args, "-m", c.model)
 	}
 	cmd := exec.CommandContext(ctx, c.path, args...)
+	cmd.WaitDelay = subprocessWaitDelay
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["codex"], c.apiKey)
 	// Switched from CombinedOutput() to separate stdout/stderr
@@ -283,6 +295,7 @@ func (g *GeminiInvoker) run(ctx context.Context, prompt string) (string, TokenUs
 		args = append(args, "-m", g.model)
 	}
 	cmd := exec.CommandContext(ctx, g.path, args...)
+	cmd.WaitDelay = subprocessWaitDelay
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["gemini"], g.apiKey)
 	var stdout, stderr bytes.Buffer
@@ -354,6 +367,7 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt string) (string, TokenUs
 		args = append(args, "--model", c.model)
 	}
 	cmd := exec.CommandContext(ctx, c.path, args...)
+	cmd.WaitDelay = subprocessWaitDelay
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["claude"], c.apiKey)
 	var stdout, stderr bytes.Buffer
@@ -476,6 +490,7 @@ func (a *AntigravityInvoker) run(ctx context.Context, prompt string) (string, To
 	}
 	args := []string{"-p", prompt, "--dangerously-skip-permissions"}
 	cmd := exec.CommandContext(ctx, a.path, args...)
+	cmd.WaitDelay = subprocessWaitDelay
 	// No stdin: agy reads the prompt from argv. Leave cmd.Stdin nil.
 	cmd.Env = os.Environ() // OAuth session lives in agy's own config dir; no key to inject
 	var stdout, stderr bytes.Buffer
@@ -573,11 +588,9 @@ func (c *CopilotInvoker) run(ctx context.Context, prompt string) (string, TokenU
 	// --allow-all-tools and there's no permission prompt to hang on.
 	// --no-ask-user additionally stops the agent from blocking on a
 	// clarifying question in non-interactive mode.
-	args := []string{"-p", prompt, "--available-tools=", "--no-ask-user", "--no-color"}
-	if c.model != "" {
-		args = append(args, "--model", c.model)
-	}
+	args := copilotArgs(prompt, c.model)
 	cmd := exec.CommandContext(ctx, c.path, args...)
+	cmd.WaitDelay = subprocessWaitDelay
 	cmd.Env = withInjectedKey(CanonicalAPIKeyEnv["copilot"], c.apiKey)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -588,4 +601,20 @@ func (c *CopilotInvoker) run(ctx context.Context, prompt string) (string, TokenU
 	}
 	// Clean review on stdout; usage summary on stderr (best-effort).
 	return strings.TrimSpace(stdout.String()), parseCopilotStderrTokens(stderr.String()), nil
+}
+
+// copilotArgs builds the copilot CLI argv. Extracted so the SECURITY
+// contract is directly testable: `--available-tools=` (whitelist-to-
+// nothing — the diff in the prompt is attacker-controllable, and any
+// available tool is a prompt-injection target) and `--no-ask-user`
+// (never block on a question in non-interactive mode) must both always
+// be present. TestCopilotArgs_ToolsDisabledContract pins them; a
+// refactor that drops either flag re-arms the injection vector the
+// 2026-07 SecOps audit flagged as the one untested runtime control.
+func copilotArgs(prompt, model string) []string {
+	args := []string{"-p", prompt, "--available-tools=", "--no-ask-user", "--no-color"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	return args
 }

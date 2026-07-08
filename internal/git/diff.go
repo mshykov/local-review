@@ -48,6 +48,13 @@ type Hunk struct {
 // signal-handler cancellation) still interrupts sooner on Ctrl+C.
 const gitDiffTimeout = 2 * time.Minute
 
+// gitWaitDelay bounds how long cmd.Wait may block on pipe drainage
+// after the context is canceled — without it, a git hook or filter
+// child that inherits our pipes can hold Wait open past the timeout
+// (same pipe-drain wedge the LLM invokers had; see internal/cli's
+// subprocessWaitDelay).
+const gitWaitDelay = 5 * time.Second
+
 // maxDiffBytes caps the diff we buffer and parse. Past this, the review is
 // almost certainly noise (vendored-blob churn, a generated-file rewrite) and
 // parsing risks a multi-hundred-MB memory peak. var (not const) so tests can
@@ -73,6 +80,7 @@ func Extract(ctx context.Context, mode Mode, ref string) ([]Diff, error) {
 
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = gitWaitDelay
 	cmd.Stderr = &stderr
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -336,6 +344,7 @@ func CurrentCommit() string {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", gitRevParse, "--short", "HEAD")
+	cmd.WaitDelay = gitWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
 		return "HEAD"
@@ -350,6 +359,7 @@ func CurrentBranch() string {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", gitRevParse, "--abbrev-ref", "HEAD")
+	cmd.WaitDelay = gitWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
 		return "unknown"
@@ -416,6 +426,7 @@ func ResolveRef(ref string) string {
 	// still parses `-`-prefixed args as options): ValidateRef above
 	// is what rejects those before git ever sees them.
 	cmd := exec.CommandContext(ctx, "git", gitRevParse, "--short", "--verify", ref+"^{commit}")
+	cmd.WaitDelay = gitWaitDelay
 	output, err := cmd.Output()
 	if err != nil {
 		return ""
