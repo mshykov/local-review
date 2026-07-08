@@ -205,7 +205,7 @@ local-review audit --topic security --with ollama
 | **Gemini** *(sunset 2026-06-18 — v0.15+ auto-disables)* | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` |
 | **Codex** | ⚠️ ChatGPT Plus ($20/mo) **or** OpenAI API key (pay-per-token) | `npm install -g @openai/codex` |
 | **Copilot** | ⚠️ GitHub Copilot subscription (one Premium request per run) | `npm install -g @github/copilot` |
-| **Antigravity** *(detected — review integration experimental)* | Google OAuth (`agy` login) | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` (binary: `agy`) |
+| **Antigravity** *(detected — review integration experimental)* | Google OAuth (`agy` login) | `curl -fsSL --proto '=https' --proto-redir '=https' https://antigravity.google/cli/install.sh \| bash` (binary: `agy`) |
 
 > **Gemini sunset 2026-06-18.** Google's Gemini CLI stops serving Pro/Ultra/free-tier requests on this date. **v0.15+ handles this automatically**: pre-sunset `doctor` shows a live countdown banner ("N days until sunset"); on/after the cutoff, gemini is auto-disabled in the review fan-out with a clear note. Want to keep trying past the cutoff (in case Google extends, or your network sees a different rollout)? Set `llms.gemini.force_after_sunset: true` to opt back in. Antigravity (`agy`) is Google's announced successor and `local-review doctor` detects it as *experimental* — its headless `--print` mode runs an autonomous agent loop (explores the repo, rebuilds its own diff, emits step-narration) instead of returning a clean review, so it isn't yet in the fan-out. Until that lands, keep using Gemini (until the cutoff) or any of the other CLIs / providers.
 

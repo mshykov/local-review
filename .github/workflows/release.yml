@@ -74,6 +74,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Gate (release label or manual dispatch)
         id: gate
@@ -209,10 +210,16 @@ jobs:
           - { goos: windows, goarch: amd64 }
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.26'
-          cache: true
+          # No restored cache for SHIPPED binaries: a cache hit skips
+          # go.sum re-verification, so a poisoned cache entry would flow
+          # into release artifacts. Cold build costs seconds here; CI's
+          # non-shipping jobs keep cache: true for speed.
+          cache: false
 
       - name: Build
         env:
@@ -250,7 +257,9 @@ jobs:
     needs: [prepare, build]
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # push tag + softprops/action-gh-release attaches assets
+      contents: write     # push tag + softprops/action-gh-release attaches assets
+      id-token: write     # OIDC identity for build-provenance attestation
+      attestations: write # persist the provenance attestation
     outputs:
       tag: ${{ needs.prepare.outputs.version }}
     steps:
@@ -279,19 +288,40 @@ jobs:
           echo "--- generated checksums ---"
           cat "local-review_${VERSION}_checksums.txt"
 
+      - name: Attest build provenance
+        # Publishes a signed SLSA provenance attestation binding every
+        # release asset (binaries + checksums manifest) to THIS workflow
+        # run's identity. Verify with:
+        #   gh attestation verify <file> --repo mshykov/local-review
+        # Complements (doesn't replace) the checksums manifest: the
+        # manifest proves integrity, the attestation proves the asset
+        # came from this repo's release pipeline. Cosign remains on the
+        # roadmap for keyless signature files shipped alongside assets.
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/local-review_*_checksums.txt
+
       - name: Create and push tag
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Idempotent: skip if the tag already exists on the remote.
+          # Fail closed if the tag already exists: proceeding would rebuild
+          # from current HEAD and OVERWRITE the published release's assets
+          # (including the checksums manifest) under the same version — the
+          # silent-replacement path the 2026-07 SecOps audit flagged. A tag
+          # ruleset also blocks v* updates/deletion server-side; releases
+          # are append-only, so a redo means bumping the version.
           if git ls-remote --tags origin "$VERSION" | grep -q "$VERSION"; then
-            echo "Tag $VERSION already exists — reusing"
-          else
-            git tag -a "$VERSION" -m "Release $VERSION"
-            git push origin "$VERSION"
+            echo "::error::Tag $VERSION already exists. Releases are append-only — bump the version instead of re-releasing onto an existing tag."
+            exit 1
           fi
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
