@@ -407,15 +407,21 @@ func TestSanitizeBranchName(t *testing.T) {
 // pathspec and failed for EVERY input, silently breaking `local-review
 // commit <rev>` for ~11 releases. Exercises the function against real git:
 // HEAD, a branch, a lightweight tag, an annotated tag (must peel to its
-// commit), a full hash round-trip, and the two failure shapes (unknown ref,
+// commit), a short-hash round-trip, and the two failure shapes (unknown ref,
 // flag-injection attempt) that must return "".
 func TestResolveRef_ResolvesRealRefs(t *testing.T) {
 	repo := t.TempDir()
+	// Neutralize user/system git config for the WHOLE test process, not
+	// just the helper invocations: ResolveRef runs git with the process
+	// env, so a developer's global `core.abbrev` would otherwise produce
+	// a different abbreviation length than the helper's and flake the
+	// equality assertions. os.DevNull keeps it portable.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 	runGit := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", args...)
 		cmd.Dir = repo
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)

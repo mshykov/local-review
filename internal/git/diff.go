@@ -403,17 +403,18 @@ func ResolveRef(ref string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// `--verify` (not `--`) is the right flag-injection defense for
-	// rev-parse: after `--`, rev-parse treats the argument as a
-	// PATHSPEC, so it failed with "Needed a single revision" for
-	// EVERY input — the v0.6.0 `--` hardening broke `local-review
-	// commit <rev>` for all refs (including HEAD) and it survived
-	// ~11 releases because nothing exercised this function against
-	// real git. `--verify` requires the argument to resolve to a
-	// single object, and the `^{commit}` suffix requires that object
-	// to peel to a commit — annotated tags resolve to their target,
-	// a tree/blob ref fails cleanly. ValidateRef stays as the first
-	// line of defense against `-`-prefixed arguments.
+	// `--verify` replaces the broken `--` separator: after `--`,
+	// rev-parse treats the argument as a PATHSPEC, so it failed with
+	// "Needed a single revision" for EVERY input — the v0.6.0 `--`
+	// hardening broke `local-review commit <rev>` for all refs
+	// (including HEAD) and survived ~11 releases because nothing
+	// exercised this function against real git. `--verify` requires
+	// the argument to resolve to a single object, and the `^{commit}`
+	// suffix requires that object to peel to a commit — annotated
+	// tags resolve to their target, a tree/blob ref fails cleanly.
+	// Note `--verify` is NOT the flag-injection defense (rev-parse
+	// still parses `-`-prefixed args as options): ValidateRef above
+	// is what rejects those before git ever sees them.
 	cmd := exec.CommandContext(ctx, "git", gitRevParse, "--short", "--verify", ref+"^{commit}")
 	output, err := cmd.Output()
 	if err != nil {
