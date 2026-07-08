@@ -87,11 +87,13 @@ type ResolveOptions struct {
 	RequireJSON bool
 }
 
-// FindingsJSONSchema is the single source of truth for the output
-// contract the single-LLM path parses (internal/review.parseFindings).
-// Appended to the resolved pack when ResolveOptions.RequireJSON is set.
-// Keep the field names + severity/tag enums in sync with rawFinding /
-// ParseSeverity in internal/review.
+// FindingsJSONSchema is the single source of truth for the structured
+// output contract. Appended to the resolved pack when
+// ResolveOptions.RequireJSON is set. The parser that consumed it
+// (internal/review's single-LLM path) was removed in v0.15 along with
+// the rest of that package's types; the schema is kept for the planned
+// opt-in structured-JSON multi-LLM mode (see CLAUDE.md), whose parser
+// must match these field names + severity/tag enums.
 const FindingsJSONSchema = "## Output format\n\n" +
 	"Return a single JSON object with this exact shape:\n\n" +
 	"```json\n" +

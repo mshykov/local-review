@@ -84,8 +84,7 @@ Code is authoritative; this is just a pointer table. Read the package, don't tru
 | [internal/git/](internal/git/) | Shells out to `git`; `-U10` context; modes: `staged`, `commit <rev>`, `branch <base>...HEAD` |
 | [internal/lang/](internal/lang/) | Extension → language ID mapping |
 | [internal/prompts/](internal/prompts/) | `go:embed`-ed packs in `packs/*.md`; user override via `prompts.pack_dir` (v0.7+) |
-| [internal/review/](internal/review/) | Filtering (min_severity, max_findings, include/exclude globs), formatting |
-| [internal/output/](internal/output/) | Text and JSON renderers |
+| [internal/review/](internal/review/) | Diff glob filtering (include/exclude) + blocking-markdown exit-gate scan |
 | [bench/](bench/) | Regression dataset + harness; `--uplift` compares treatment vs baseline (v0.8+) |
 
 ---
