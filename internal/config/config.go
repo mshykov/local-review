@@ -422,6 +422,14 @@ func mergeFrom(dst *Config, path string, trusted bool) error {
 // Opt back in for a genuinely trusted repo with
 // LOCAL_REVIEW_TRUST_REPO_CONFIG=1.
 func sanitizeUntrustedLayer(layer *Config, path string) {
+	stripUntrustedLLMFields(layer, path)
+	stripUntrustedLocations(layer, path)
+	warnUntrustedShaping(layer, path)
+}
+
+// stripUntrustedLLMFields zeroes the exec/network/credential fields on
+// every llms.<name> entry of an untrusted layer, warning per agent.
+func stripUntrustedLLMFields(layer *Config, path string) {
 	for name, llmCfg := range layer.LLMs {
 		var dropped []string
 		if llmCfg.CLIPath != "" {
@@ -456,6 +464,12 @@ func sanitizeUntrustedLayer(layer *Config, path string) {
 		fmt.Fprintf(os.Stderr, "         or set %s=1 if you trust this repository.\n", envTrustRepoConfig)
 	}
 
+}
+
+// stripUntrustedLocations drops attacker-chooseable read/write locations
+// from an untrusted layer: an absolute prompts.pack_dir and any
+// storage.base_path.
+func stripUntrustedLocations(layer *Config, path string) {
 	// An ABSOLUTE prompts.pack_dir from the untrusted layer is stripped:
 	// resolveRelativePaths containment-checks only RELATIVE paths (its
 	// absolute-passthrough is a deliberate opt-in for the user's own
@@ -481,6 +495,11 @@ func sanitizeUntrustedLayer(layer *Config, path string) {
 		fmt.Fprintf(os.Stderr, "         to ~/.local-review.yml, or set %s=1 if you trust this repository.\n", envTrustRepoConfig)
 	}
 
+}
+
+// warnUntrustedShaping emits a single stderr NOTE when an untrusted layer
+// sets house-rules fields that steer the review itself.
+func warnUntrustedShaping(layer *Config, path string) {
 	// The fields below still MERGE (they're the advertised repo-level
 	// house-rules feature — README "Customise for your team"), but a
 	// CI operator reviewing code they didn't write deserves a visible
