@@ -199,3 +199,35 @@ func TestBuildReviewPrompt(t *testing.T) {
 func contains(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+// TestCopilotArgs_ToolsDisabledContract pins the copilot security
+// contract from docs/security.md: the diff embedded in the prompt is
+// attacker-controllable, so copilot MUST run with its tool whitelist
+// emptied (`--available-tools=`) and without blocking on questions
+// (`--no-ask-user`). Of the three documented runtime security controls,
+// this was the only one without a regression test (2026-07 SecOps
+// audit) — a refactor dropping either flag would silently re-arm
+// prompt-injection-driven tool use.
+func TestCopilotArgs_ToolsDisabledContract(t *testing.T) {
+	for _, model := range []string{"", "gpt-5"} {
+		args := copilotArgs("review this diff", model)
+		var hasToolsDisabled, hasNoAskUser bool
+		for _, a := range args {
+			if a == "--available-tools=" {
+				hasToolsDisabled = true
+			}
+			if a == "--no-ask-user" {
+				hasNoAskUser = true
+			}
+			if a == "--allow-all-tools" {
+				t.Fatalf("copilot argv must never contain --allow-all-tools, got %v", args)
+			}
+		}
+		if !hasToolsDisabled {
+			t.Errorf("copilot argv (model=%q) missing --available-tools= (empty whitelist): %v", model, args)
+		}
+		if !hasNoAskUser {
+			t.Errorf("copilot argv (model=%q) missing --no-ask-user: %v", model, args)
+		}
+	}
+}

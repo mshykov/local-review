@@ -27,6 +27,7 @@ func runVersionCmd(path string, args ...string) string {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.WaitDelay = subprocessWaitDelay
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "unknown"
