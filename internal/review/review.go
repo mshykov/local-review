@@ -1,5 +1,5 @@
-// Package review owns the diff-filter helpers + the structured types
-// (Severity, Finding, Report) used downstream.
+// Package review owns the diff-filter helpers and the blocking-markdown
+// exit-gate scan.
 //
 // History: pre-v0.15 this file also contained the single-LLM-fallback
 // orchestration (Reviewer.Run, parseFindings, etc.) — the v0 code path
