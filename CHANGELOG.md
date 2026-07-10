@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`local-review config` now prints a `# Config sources:` block** — the cascade layers this invocation actually resolved: the home config path, the repo config found by walking up from the current directory (or "none found"), whether each file exists, and whether the repo layer merged as trusted or was sanitized. Answers "which `.local-review.yml` is this folder using?" — previously the resolved values were printed with no way to tell which file produced them (or whether a repo-level file was being read at all). Internally, `config.Load` now iterates the same `DescribeSources` description the command prints, so the diagnostic cannot drift from real load behavior.
+
 ### Fixed
 
 - **`local-review commit <rev>` was broken for every explicit ref — including `HEAD`.** `ResolveRef` ran `git rev-parse --short -- <ref>`; after `--`, rev-parse treats the argument as a *pathspec*, so resolution failed with "Needed a single revision" for all inputs and the command errored with "failed to resolve ref". Only the no-argument form (`local-review commit`) worked. Introduced by the v0.6.0 flag-injection hardening (the `--` defense broke the feature it defended) and unnoticed for ~11 releases because nothing tested the function against real git — the tool's own error hints even recommended the broken command. Now uses `--verify <ref>^{commit}` (correct semantics: annotated tags peel to their commit, tree/blob refs fail cleanly; flag injection remains guarded by `ValidateRef`, which rejects `-`-prefixed refs before git sees them), with a real-git regression test covering HEAD / branch / lightweight tag / annotated tag / hash / unknown-ref / flag-shaped-ref shapes.

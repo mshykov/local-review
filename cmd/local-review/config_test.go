@@ -133,3 +133,27 @@ llms:
 		t.Errorf("plain llms.ollama.base_url must roundtrip; got:\n%s", out)
 	}
 }
+
+// TestConfigCommand_PrintsConfigSources pins the "# Config sources:"
+// diagnostic block: users need `config` to answer "which
+// .local-review.yml is this folder actually using, and was it
+// trusted?" — the resolved YAML alone can't (2026-07 dogfood).
+func TestConfigCommand_PrintsConfigSources(t *testing.T) {
+	out := runConfigCmdIn(t, `
+review:
+  max_findings: 7
+`)
+	if !strings.Contains(out, "# Config sources") {
+		t.Fatalf("missing config-sources block:\n%s", out)
+	}
+	for _, want := range []string{"built-in defaults", "home", "repo", "loaded (trusted)", "CLI flags"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("config-sources block missing %q:\n%s", want, out)
+		}
+	}
+	// The harness's fake $HOME has no config file — that layer must
+	// say so rather than claiming it loaded.
+	if !strings.Contains(out, "(not found)") {
+		t.Errorf("expected home layer to report (not found) under the fake $HOME:\n%s", out)
+	}
+}

@@ -229,13 +229,20 @@ func Defaults() Config {
 func Load(repoConfigPath string) (Config, error) {
 	cfg := Defaults()
 
-	// User config (~/.local-review.yml) — trusted: it lives in the
-	// invoking user's home, not in a repo someone else can write to.
-	var homeConfigPath string
-	if home, err := os.UserHomeDir(); err == nil {
-		homeConfigPath = filepath.Join(home, ".local-review.yml")
-		if err := mergeFrom(&cfg, homeConfigPath, true); err != nil {
-			return cfg, fmt.Errorf("load user config: %w", err)
+	// Drive the merge off the SAME source description the `config`
+	// command prints (DescribeSources) so the diagnostic output can
+	// never drift from what Load actually does — the duplicated-logic
+	// drift class behind the v0.17.1 pathsafe incident and the
+	// doctor-vs-runner provider-spec divergence.
+	for _, src := range DescribeSources(repoConfigPath) {
+		if !src.Merges {
+			continue
+		}
+		if err := mergeFrom(&cfg, src.Path, src.Trusted); err != nil {
+			if src.Role == SourceRoleHome {
+				return cfg, fmt.Errorf("load user config: %w", err)
+			}
+			return cfg, fmt.Errorf("load repo config (%s): %w", src.Path, err)
 		}
 	}
 
@@ -257,12 +264,6 @@ func Load(repoConfigPath string) (Config, error) {
 	// api_key_env and print an alarming "untrusted config" warning about the
 	// user's own trusted file (a v0.16.0 regression). A file that IS the
 	// home config is trusted — skip the redundant untrusted pass.
-	if repoConfigPath != "" && !sameFile(repoConfigPath, homeConfigPath) {
-		trusted := os.Getenv(envTrustRepoConfig) == "1"
-		if err := mergeFrom(&cfg, repoConfigPath, trusted); err != nil {
-			return cfg, fmt.Errorf("load repo config (%s): %w", repoConfigPath, err)
-		}
-	}
 
 	// Warn about deprecated api_key in YAML (security risk)
 	warnDeprecatedAPIKeys(&cfg)
@@ -306,6 +307,69 @@ func detectRemovedProviderBlock(b []byte) (bool, error) {
 
 // FindRepoConfig walks up from start looking for a .local-review.yml. Returns
 // "" when none is found (not an error).
+// SourceRole labels a config cascade layer in Source.
+type SourceRole string
+
+const (
+	SourceRoleHome SourceRole = "home"
+	SourceRoleRepo SourceRole = "repo"
+)
+
+// Source describes one file-backed layer of the config cascade —
+// which path a layer resolves to, whether the file exists, whether
+// Load will merge it, and under what trust. Load itself iterates
+// this description, and the `config` command prints it, so the two
+// cannot disagree.
+type Source struct {
+	Role    SourceRole
+	Path    string // "" when the layer can't be resolved (no home dir / no repo file found)
+	Found   bool   // the file exists on disk
+	Merges  bool   // Load will call mergeFrom on it (mergeFrom no-ops when !Found)
+	Trusted bool   // merged without sanitizeUntrustedLayer
+	// SameAsHome is set on the repo layer when the walk-up found the
+	// user's own home config (project lives under $HOME with no
+	// project-local file) — Load skips the redundant untrusted pass.
+	SameAsHome bool
+}
+
+// DescribeSources resolves the file-backed cascade layers for a given
+// repo-config path (as found by FindRepoConfig; may be empty). The
+// home layer is always trusted. The repo layer is untrusted unless
+// LOCAL_REVIEW_TRUST_REPO_CONFIG=1, and is skipped entirely when it
+// IS the home config file.
+func DescribeSources(repoConfigPath string) []Source {
+	var homeConfigPath string
+	if home, err := os.UserHomeDir(); err == nil {
+		homeConfigPath = filepath.Join(home, ".local-review.yml")
+	}
+	homeSrc := Source{
+		Role:    SourceRoleHome,
+		Path:    homeConfigPath,
+		Found:   fileExists(homeConfigPath),
+		Merges:  homeConfigPath != "",
+		Trusted: true,
+	}
+	repoSrc := Source{
+		Role:       SourceRoleRepo,
+		Path:       repoConfigPath,
+		Found:      fileExists(repoConfigPath),
+		SameAsHome: sameFile(repoConfigPath, homeConfigPath),
+		Trusted:    os.Getenv(envTrustRepoConfig) == "1",
+	}
+	repoSrc.Merges = repoConfigPath != "" && !repoSrc.SameAsHome
+	return []Source{homeSrc, repoSrc}
+}
+
+// fileExists reports whether path names an existing file. Empty path
+// is "not found" (a layer that couldn't be resolved).
+func fileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func FindRepoConfig(start string) string {
 	dir := start
 	for {
