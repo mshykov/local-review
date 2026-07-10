@@ -7,15 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.4] - 2026-07-10
+
+**Patch: the external-audit fixes.** A broken user-facing command, a widened security boundary, hung-subprocess protection, and better diagnostics — everything from the 2026-07 architecture + SecOps audit plus the dogfood findings that followed. This is also the first release shipped by the hardened pipeline: append-only tags, signed SLSA build provenance on every asset (`gh attestation verify <file> --repo mshykov/local-review`), and hermetic release builds.
+
 ### Added
 
 - **`local-review config` now prints a `# Config sources:` block** — the cascade layers this invocation actually resolved: the home config path, the repo config found by walking up from the current directory (or "none found"), whether each file exists, and whether the repo layer merged as trusted or was sanitized. Answers "which `.local-review.yml` is this folder using?" — previously the resolved values were printed with no way to tell which file produced them (or whether a repo-level file was being read at all). Internally, `config.Load` now iterates the same `DescribeSources` description the command prints, so the diagnostic cannot drift from real load behavior.
 
+### Security
+
+- **Widened the untrusted repo-config boundary.** An **absolute** `prompts.pack_dir` (attacker-directed read location — the relative-only containment check never saw it) and `storage.base_path` (attacker-chosen write location) are now stripped from the untrusted repo layer, alongside the existing exec/network/credential strips. House-rules fields still merge, but when a repo config sets `prompts.prepend/append`, `review.exclude`, or `llms.*.enabled`, a `NOTE: repo config … shapes this review` stderr line flags that the repo under review is steering its own review (`review.exclude: ["**"]` can self-approve a hostile commit via exit 0).
+- **Release pipeline hardening.** Releases are append-only (the publish job fails closed on tag reuse instead of overwriting published assets, backed by a server-side `v*` tag ruleset); every asset ships a signed SLSA build-provenance attestation (`gh attestation verify <file> --repo mshykov/local-review`); release binaries build without a restored module cache; non-pushing CI checkouts run with `persist-credentials: false`.
+
 ### Fixed
 
+- **Hung vendor subprocesses can no longer stall a review past cancellation.** Every `exec.CommandContext` site (all five LLM invokers, the version probe, and the git helpers) now sets `WaitDelay = 5s`, closing the v0.10.5 pipe-drain wedge on the *real* invocation paths — previously a child process that inherited our pipes could hold the fan-out barrier open indefinitely after the per-agent timeout or Ctrl+C.
 - **Claude failures now surface the vendor's actual error instead of JSON noise.** claude's CLI reports API failures as a JSON payload on stdout (`{"is_error":true,"api_error_status":401,"result":"Failed to authenticate…"}`) with a non-zero exit; the generic error path showed the *tail* of combined output — trailing metadata like `"service_tier":"standard"` — while the diagnosis sat at the front. A pre-flight probe against expired `claude login` credentials rendered as unreadable noise (2026-07 dogfood). The structured payload is now parsed and surfaced directly, with a `run \`claude login\`` hint on HTTP 401. Also closes a latent bug: on exit 0 with `is_error:true`, the error text would previously have been returned *as the review* and saved as a review file.
 - **Copilot's per-run cost is now visible in the review roster.** copilot joins the fan-out automatically on `copilot login` — including for users who never listed it in YAML — and each run bills one paid Copilot Premium request. The roster line now says so, with the off switch inline (`llms.copilot.enabled: false`), so participation is never a billing surprise.
 - **`local-review commit <rev>` was broken for every explicit ref — including `HEAD`.** `ResolveRef` ran `git rev-parse --short -- <ref>`; after `--`, rev-parse treats the argument as a *pathspec*, so resolution failed with "Needed a single revision" for all inputs and the command errored with "failed to resolve ref". Only the no-argument form (`local-review commit`) worked. Introduced by the v0.6.0 flag-injection hardening (the `--` defense broke the feature it defended) and unnoticed for ~11 releases because nothing tested the function against real git — the tool's own error hints even recommended the broken command. Now uses `--verify <ref>^{commit}` (correct semantics: annotated tags peel to their commit, tree/blob refs fail cleanly; flag injection remains guarded by `ValidateRef`, which rejects `-`-prefixed refs before git sees them), with a real-git regression test covering HEAD / branch / lightweight tag / annotated tag / hash / unknown-ref / flag-shaped-ref shapes.
+
+### Internal
+
+- **Copilot's tools-disabled invocation is now regression-tested** (`--available-tools=` + `--no-ask-user` pinned; `--allow-all-tools` asserted absent) — the last of the three documented runtime security controls to get a test.
+- **Doctor delegates provider-spec construction to `agentselect`** (the runner's constructor) — the hand-rolled copy had drifted (dropped `APIKeyEnv`, skipped `TrimSpace`), so doctor and runtime could disagree about a provider's existence and auth state.
+- **Removed the dead `internal/output` package** and orphaned `internal/review` types (469 lines) left behind by the v0.15 single-LLM-path removal.
 
 ## [0.17.3] - 2026-07-01
 
