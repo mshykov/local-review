@@ -244,8 +244,16 @@ func writeFakeClaude(t *testing.T, payload string, exitCode int) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell stub uses /bin/sh; skip on windows")
 	}
-	bin := filepath.Join(t.TempDir(), "claude")
-	script := "#!/bin/sh\ncat >/dev/null\nprintf '%s' '" + payload + "'\nexit " + fmt.Sprint(exitCode) + "\n"
+	dir := t.TempDir()
+	// The payload goes into its own file and the script cats it —
+	// concatenating JSON into shell single-quotes would break on any
+	// payload containing an apostrophe (valid inside result strings).
+	payloadFile := filepath.Join(dir, "payload.json")
+	if err := os.WriteFile(payloadFile, []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "claude")
+	script := "#!/bin/sh\ncat >/dev/null\ncat \"" + payloadFile + "\"\nexit " + fmt.Sprint(exitCode) + "\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
