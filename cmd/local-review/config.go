@@ -37,23 +37,7 @@ which settings are being used.`,
 			// command silently dropped flag overrides on the floor.
 			applyFlagsToConfig(&cfg, sf)
 
-			// Mask API keys + strip credentials embedded in base_url
-			// values before printing (config dumps should be
-			// shareable). Same sanitizer (SanitizeBaseURLForDisplay)
-			// covers basic-auth userinfo (`https://user:pass@host`)
-			// and query-string keys (`?api_key=…`). The v0
-			// `cfg.Provider` branch was removed in v0.15 along with
-			// the top-level `provider:` block; all endpoints now
-			// flow through `cfg.LLMs[*]`.
-			for name, llmCfg := range cfg.LLMs {
-				if llmCfg.APIKey != "" {
-					llmCfg.APIKey = "***"
-				}
-				if llmCfg.BaseURL != "" {
-					llmCfg.BaseURL = config.SanitizeBaseURLForDisplay(llmCfg.BaseURL)
-				}
-				cfg.LLMs[name] = llmCfg
-			}
+			maskSensitiveForDisplay(&cfg)
 
 			enc := yaml.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent(2)
@@ -164,4 +148,22 @@ func printConfigSources(w io.Writer) error {
 	}
 	_, err = fmt.Fprintln(w, "#   4. CLI flags")
 	return err
+}
+
+// maskSensitiveForDisplay masks API keys and strips credentials embedded
+// in base_url values before printing — config dumps should be shareable.
+// SanitizeBaseURLForDisplay covers basic-auth userinfo
+// (`https://user:pass@host`) and query-string keys (`?api_key=…`). The v0
+// `cfg.Provider` branch was removed in v0.15 along with the top-level
+// `provider:` block; all endpoints now flow through `cfg.LLMs[*]`.
+func maskSensitiveForDisplay(cfg *config.Config) {
+	for name, llmCfg := range cfg.LLMs {
+		if llmCfg.APIKey != "" {
+			llmCfg.APIKey = "***"
+		}
+		if llmCfg.BaseURL != "" {
+			llmCfg.BaseURL = config.SanitizeBaseURLForDisplay(llmCfg.BaseURL)
+		}
+		cfg.LLMs[name] = llmCfg
+	}
 }
