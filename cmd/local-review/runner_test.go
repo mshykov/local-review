@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,8 +12,6 @@ import (
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/multi"
-	"io"
-	"os"
 )
 
 func TestApplyFlagsToConfig_PerAgentModelOverride(t *testing.T) {
