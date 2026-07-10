@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.4] - 2026-07-10
+
+**Patch: the external-audit fixes.** A broken user-facing command, a widened security boundary, hung-subprocess protection, and better diagnostics — everything from the 2026-07 architecture + SecOps audit plus the dogfood findings that followed. This is also the first release shipped by the hardened pipeline: append-only tags, signed SLSA build provenance on every asset (`gh attestation verify <file> --repo mshykov/local-review`), and hermetic release builds.
+
 ### Added
 
 - **`local-review config` now prints a `# Config sources:` block** — the cascade layers this invocation actually resolved: the home config path, the repo config found by walking up from the current directory (or "none found"), whether each file exists, and whether the repo layer merged as trusted or was sanitized. Answers "which `.local-review.yml` is this folder using?" — previously the resolved values were printed with no way to tell which file produced them (or whether a repo-level file was being read at all). Internally, `config.Load` now iterates the same `DescribeSources` description the command prints, so the diagnostic cannot drift from real load behavior.
