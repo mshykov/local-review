@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -36,23 +37,7 @@ which settings are being used.`,
 			// command silently dropped flag overrides on the floor.
 			applyFlagsToConfig(&cfg, sf)
 
-			// Mask API keys + strip credentials embedded in base_url
-			// values before printing (config dumps should be
-			// shareable). Same sanitizer (SanitizeBaseURLForDisplay)
-			// covers basic-auth userinfo (`https://user:pass@host`)
-			// and query-string keys (`?api_key=…`). The v0
-			// `cfg.Provider` branch was removed in v0.15 along with
-			// the top-level `provider:` block; all endpoints now
-			// flow through `cfg.LLMs[*]`.
-			for name, llmCfg := range cfg.LLMs {
-				if llmCfg.APIKey != "" {
-					llmCfg.APIKey = "***"
-				}
-				if llmCfg.BaseURL != "" {
-					llmCfg.BaseURL = config.SanitizeBaseURLForDisplay(llmCfg.BaseURL)
-				}
-				cfg.LLMs[name] = llmCfg
-			}
+			maskSensitiveForDisplay(&cfg)
 
 			enc := yaml.NewEncoder(cmd.OutOrStdout())
 			enc.SetIndent(2)
@@ -73,7 +58,13 @@ which settings are being used.`,
 			// a YAML round-trip alone wouldn't reveal that, since
 			// PromptsConfig only carries inputs. The block below
 			// shows what each language *actually* loaded.
-			return printPromptResolution(cmd.OutOrStdout(), cfg)
+			if err := printPromptResolution(cmd.OutOrStdout(), cfg); err != nil {
+				return err
+			}
+			// And WHICH config files produced the values above — the
+			// resolved dump alone can't answer "is my repo-level
+			// .local-review.yml even being read, and was it trusted?"
+			return printConfigSources(cmd.OutOrStdout())
 		},
 	}
 }
@@ -119,4 +110,60 @@ func printPromptResolution(w io.Writer, cfg config.Config) error {
 		}
 	}
 	return nil
+}
+
+// printConfigSources writes a comment block naming the file-backed
+// cascade layers this invocation resolves — the same description
+// config.Load merges from (config.DescribeSources), so this output
+// cannot drift from real load behavior. Comment lines keep the
+// overall output `yq`-parseable, matching printPromptResolution.
+func printConfigSources(w io.Writer) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		_, werr := fmt.Fprintf(w, "\n# (could not resolve config sources: %v)\n", err)
+		return werr
+	}
+	if _, err := fmt.Fprintln(w, "\n# Config sources (cascade order; later layers override earlier):\n#   1. built-in defaults"); err != nil {
+		return err
+	}
+	for i, src := range config.DescribeSources(config.FindRepoConfig(cwd)) {
+		var state string
+		switch {
+		case src.Path == "" && src.Role == config.SourceRoleRepo:
+			state = fmt.Sprintf("(none found walking up from %s)", cwd)
+		case src.Path == "":
+			state = "(could not resolve home directory)"
+		case src.SameAsHome:
+			state = fmt.Sprintf("%s — same file as the home config, merged once as trusted", src.Path)
+		case !src.Found:
+			state = fmt.Sprintf("%s (not found)", src.Path)
+		case src.Trusted:
+			state = fmt.Sprintf("%s loaded (trusted)", src.Path)
+		default:
+			state = fmt.Sprintf("%s loaded (untrusted: security-sensitive fields stripped; opt in with LOCAL_REVIEW_TRUST_REPO_CONFIG=1)", src.Path)
+		}
+		if _, err := fmt.Fprintf(w, "#   %d. %s  %s\n", i+2, src.Role, state); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintln(w, "#   4. CLI flags")
+	return err
+}
+
+// maskSensitiveForDisplay masks API keys and strips credentials embedded
+// in base_url values before printing — config dumps should be shareable.
+// SanitizeBaseURLForDisplay covers basic-auth userinfo
+// (`https://user:pass@host`) and query-string keys (`?api_key=…`). The v0
+// `cfg.Provider` branch was removed in v0.15 along with the top-level
+// `provider:` block; all endpoints now flow through `cfg.LLMs[*]`.
+func maskSensitiveForDisplay(cfg *config.Config) {
+	for name, llmCfg := range cfg.LLMs {
+		if llmCfg.APIKey != "" {
+			llmCfg.APIKey = "***"
+		}
+		if llmCfg.BaseURL != "" {
+			llmCfg.BaseURL = config.SanitizeBaseURLForDisplay(llmCfg.BaseURL)
+		}
+		cfg.LLMs[name] = llmCfg
+	}
 }

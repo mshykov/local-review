@@ -291,3 +291,53 @@ llms:
 		}
 	}
 }
+
+// TestDescribeSources_MatchesLoadSemantics pins the contract that makes
+// the `config` command's "# Config sources:" block trustworthy: the
+// description IS what Load iterates, so every branch here corresponds
+// to a real merge decision — repo untrusted by default, trusted via
+// the env opt-in, and skipped entirely when the walk-up found the
+// user's own home config.
+func TestDescribeSources_MatchesLoadSemantics(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	homeCfg := filepath.Join(home, ".local-review.yml")
+	if err := os.WriteFile(homeCfg, []byte("review:\n  max_findings: 5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repoDir := t.TempDir()
+	repoCfg := filepath.Join(repoDir, ".local-review.yml")
+	if err := os.WriteFile(repoCfg, []byte("review:\n  max_findings: 7\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "")
+	srcs := DescribeSources(repoCfg)
+	if len(srcs) != 2 {
+		t.Fatalf("expected 2 sources, got %d", len(srcs))
+	}
+	h, r := srcs[0], srcs[1]
+	if h.Role != SourceRoleHome || !h.Found || !h.Merges || !h.Trusted {
+		t.Errorf("home source = %+v, want found+merges+trusted", h)
+	}
+	if r.Role != SourceRoleRepo || !r.Found || !r.Merges || r.Trusted || r.SameAsHome {
+		t.Errorf("repo source = %+v, want found+merges+untrusted", r)
+	}
+
+	t.Setenv("LOCAL_REVIEW_TRUST_REPO_CONFIG", "1")
+	if r := DescribeSources(repoCfg)[1]; !r.Trusted {
+		t.Errorf("repo source with opt-in = %+v, want trusted", r)
+	}
+
+	// Walk-up found the home config itself: merged once (as home), the
+	// repo pass is skipped — the v0.16.0 double-processing regression.
+	if r := DescribeSources(homeCfg)[1]; !r.SameAsHome || r.Merges {
+		t.Errorf("repo==home source = %+v, want SameAsHome and !Merges", r)
+	}
+
+	// Missing repo layer: nothing to merge.
+	if r := DescribeSources("")[1]; r.Merges || r.Found {
+		t.Errorf("empty repo source = %+v, want !Merges/!Found", r)
+	}
+}
