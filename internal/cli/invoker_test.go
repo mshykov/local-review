@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -229,5 +231,54 @@ func TestCopilotArgs_ToolsDisabledContract(t *testing.T) {
 		if !hasNoAskUser {
 			t.Errorf("copilot argv (model=%q) missing --no-ask-user: %v", model, args)
 		}
+	}
+}
+
+// writeFakeClaude drops an executable shell script that mimics the claude
+// CLI's --print --output-format json contract: emits the given payload on
+// stdout and exits with the given code. Same fake-binary pattern as
+// detector_test.go.
+func writeFakeClaude(t *testing.T, payload string, exitCode int) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "claude")
+	script := "#!/bin/sh\ncat >/dev/null\nprintf '%s' '" + payload + "'\nexit " + fmt.Sprint(exitCode) + "\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// TestClaudeInvoker_SurfacesStructuredErrorOnExit1 locks the WIRING of
+// claudeResultError into the exit-1 branch: the surfaced error must be
+// the vendor's diagnosis (front of the payload), not ClassifyExit's
+// output tail (2026-07 dogfood: an expired-login 401 rendered as
+// trailing JSON metadata in the pre-flight probe).
+func TestClaudeInvoker_SurfacesStructuredErrorOnExit1(t *testing.T) {
+	payload := `{"type":"result","is_error":true,"api_error_status":401,"result":"Failed to authenticate. API Error: 401 Invalid authentication credentials","service_tier":"standard"}`
+	inv := &ClaudeInvoker{path: writeFakeClaude(t, payload, 1)}
+	_, _, err := inv.RunPrompt(context.Background(), "Reply OK")
+	if err == nil {
+		t.Fatal("expected an error from exit status 1")
+	}
+	if !strings.Contains(err.Error(), "Failed to authenticate") || !strings.Contains(err.Error(), "claude login") {
+		t.Errorf("error must carry the vendor diagnosis + re-login hint, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "service_tier") {
+		t.Errorf("error must not be the raw JSON tail, got: %v", err)
+	}
+}
+
+// TestClaudeInvoker_ErrorPayloadOnExit0IsNotAReview locks the exit-0
+// guard: is_error:true with a zero exit must be an error, never returned
+// as the review text (which would be persisted as a review file).
+func TestClaudeInvoker_ErrorPayloadOnExit0IsNotAReview(t *testing.T) {
+	payload := `{"type":"result","is_error":true,"api_error_status":429,"result":"Rate limited"}`
+	inv := &ClaudeInvoker{path: writeFakeClaude(t, payload, 0)}
+	text, _, err := inv.RunPrompt(context.Background(), "Reply OK")
+	if err == nil {
+		t.Fatalf("expected an error, got review text %q", text)
+	}
+	if !strings.Contains(err.Error(), "Rate limited") {
+		t.Errorf("error must carry the vendor diagnosis, got: %v", err)
 	}
 }

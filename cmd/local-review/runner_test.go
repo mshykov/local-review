@@ -10,6 +10,8 @@ import (
 	"github.com/mshykov/local-review/internal/cli"
 	"github.com/mshykov/local-review/internal/config"
 	"github.com/mshykov/local-review/internal/multi"
+	"io"
+	"os"
 )
 
 func TestApplyFlagsToConfig_PerAgentModelOverride(t *testing.T) {
@@ -585,5 +587,63 @@ func assertFormatProbeLine(t *testing.T, tc formatProbeLineCase) {
 	}
 	if tc.wantStartsWith != "" && !strings.HasPrefix(got, tc.wantStartsWith) {
 		t.Errorf("formatProbeLine = %q, want prefix %q (column padding)", got, tc.wantStartsWith)
+	}
+}
+
+// TestPrintAgentRoster_CopilotCostNote pins the billing-visibility line:
+// copilot joins the fan-out automatically on `copilot login` (even when
+// absent from YAML) and each run costs one paid Premium request — the
+// roster must say so, with the off switch, on both the model-pinned and
+// vendor-default-model row variants. Free agents must NOT carry it.
+func TestPrintAgentRoster_CopilotCostNote(t *testing.T) {
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	printAgentRoster(
+		[]cli.LLM{
+			{Name: "copilot", Version: "1.0.66", Available: true},
+			{Name: "claude", Version: "2.1.196", Available: true},
+		},
+		nil, nil,
+		config.Config{LLMs: map[string]config.LLMConfig{
+			"claude": {Model: "claude-opus-4-8"},
+		}},
+		"feat/x", "abc1234",
+	)
+	_ = w.Close()
+	os.Stdout = origStdout
+	outBytes, _ := io.ReadAll(r)
+	out := string(outBytes)
+
+	if !strings.Contains(out, "costs 1 Copilot Premium request") ||
+		!strings.Contains(out, "llms.copilot.enabled: false") {
+		t.Errorf("copilot roster line missing the cost note + off switch:\n%s", out)
+	}
+	if c := strings.Count(out, "Premium request"); c != 1 {
+		t.Errorf("cost note must appear exactly once (copilot only), got %d:\n%s", c, out)
+	}
+
+	// Model-pinned variant: pin copilot's model and re-render.
+	r2, w2, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w2
+	printAgentRoster(
+		[]cli.LLM{{Name: "copilot", Version: "1.0.66", Available: true}},
+		nil, nil,
+		config.Config{LLMs: map[string]config.LLMConfig{
+			"copilot": {Model: "gpt-5"},
+		}},
+		"", "",
+	)
+	_ = w2.Close()
+	os.Stdout = origStdout
+	out2Bytes, _ := io.ReadAll(r2)
+	if out2 := string(out2Bytes); !strings.Contains(out2, "copilot_gpt-5") || !strings.Contains(out2, "Premium request") {
+		t.Errorf("model-pinned copilot row missing identifier or cost note:\n%s", out2)
 	}
 }
