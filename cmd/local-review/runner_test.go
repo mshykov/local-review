@@ -626,6 +626,25 @@ func TestPrintAgentRoster_CopilotCostNote(t *testing.T) {
 		t.Errorf("cost note must appear exactly once (copilot only), got %d:\n%s", c, out)
 	}
 
+	// A PROVIDER agent legally named copilot (base_url set; dropCLITwins
+	// drops the CLI twin) is self-hosted and bills nothing — it must NOT
+	// carry the Premium-request note.
+	rp, wp, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = wp
+	printAgentRoster(
+		[]cli.LLM{{Name: "copilot", BaseURL: "http://localhost:11434/v1", Available: true}},
+		nil, nil, config.Config{}, "", "",
+	)
+	_ = wp.Close()
+	os.Stdout = origStdout
+	provBytes, _ := io.ReadAll(rp)
+	if prov := string(provBytes); strings.Contains(prov, "Premium request") {
+		t.Errorf("provider agent named copilot must not carry the cost note:\n%s", prov)
+	}
+
 	// Model-pinned variant: pin copilot's model and re-render.
 	r2, w2, err := os.Pipe()
 	if err != nil {

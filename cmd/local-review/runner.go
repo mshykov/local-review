@@ -533,7 +533,11 @@ func printAgentRoster(active []cli.LLM, configDisabled, sunsetDropped []string, 
 		// (2026-07 dogfood: "why did copilot review if I removed it from
 		// the YAML?"). Say so in the roster, with the off switch.
 		cost := ""
-		if llm.Name == "copilot" {
+		// BaseURL == "" gates this to the Copilot CLI agent: a provider
+		// entry may legally be NAMED copilot (dropCLITwins then drops
+		// the CLI twin and the provider wins), and a self-hosted
+		// endpoint doesn't bill Premium requests.
+		if llm.Name == "copilot" && llm.BaseURL == "" {
 			cost = " · costs 1 Copilot Premium request (disable: `llms.copilot.enabled: false`)"
 		}
 		if model != "" {
