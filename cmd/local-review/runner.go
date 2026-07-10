@@ -526,11 +526,21 @@ func printAgentRoster(active []cli.LLM, configDisabled, sunsetDropped []string, 
 		if timeout == 0 {
 			timeout = cli.DefaultTimeoutSec
 		}
+		// copilot is the one agent whose participation costs real money
+		// per run (one Copilot Premium request) rather than BYOK tokens —
+		// and it joins automatically on `copilot login`, so a user who
+		// never listed it in YAML can be billed without realizing why
+		// (2026-07 dogfood: "why did copilot review if I removed it from
+		// the YAML?"). Say so in the roster, with the off switch.
+		cost := ""
+		if llm.Name == "copilot" {
+			cost = " · costs 1 Copilot Premium request (disable: `llms.copilot.enabled: false`)"
+		}
 		if model != "" {
 			// agent_<model> reads as a single identifier (think
 			// docker image names) so users see "what model is
 			// running" at a glance.
-			fmt.Printf("  • %s_%s (CLI v%s) | timeout: %ds\n", llm.Name, model, llm.Version, timeout)
+			fmt.Printf("  • %s_%s (CLI v%s) | timeout: %ds%s\n", llm.Name, model, llm.Version, timeout, cost)
 		} else {
 			// No model pinned → the invoker doesn't pass --model and
 			// the vendor CLI picks its own current default. We can't
@@ -538,7 +548,7 @@ func printAgentRoster(active []cli.LLM, configDisabled, sunsetDropped []string, 
 			// portable way), so we say so explicitly and tell the
 			// user how to take control. Pre-fix this said "model: CLI
 			// default" which the user reported as a non-answer.
-			fmt.Printf("  • %s (CLI v%s) | timeout: %ds — using vendor's default model; pin via `llms.%s.model:`\n", llm.Name, llm.Version, timeout, llm.Name)
+			fmt.Printf("  • %s (CLI v%s) | timeout: %ds — using vendor's default model; pin via `llms.%s.model:`%s\n", llm.Name, llm.Version, timeout, llm.Name, cost)
 		}
 	}
 	if len(configDisabled) > 0 {

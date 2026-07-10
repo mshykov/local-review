@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -39,6 +40,43 @@ import (
 // three input components. Cost accounting (where cache reads are
 // discounted ~10x) is not what this number is for; that lives in
 // the vendor's billing dashboard.
+// claudeResultError inspects claude's --output-format json payload for
+// the vendor's structured failure shape: {"is_error": true,
+// "api_error_status": 401, "result": "Failed to authenticate…"}. When
+// present it returns a targeted, actionable message; ok=false means
+// "not that shape" and the caller falls back to generic handling.
+//
+// Why this exists: claude exits 1 with the error JSON on STDOUT, and
+// the generic path (ClassifyExit) surfaces the TAIL of combined
+// output — for this payload that's trailing metadata
+// ("service_tier":"standard"…), while the actual diagnosis sits at
+// the FRONT. A real 401 (expired `claude login`) rendered as
+// unreadable JSON noise in the pre-flight probe, and the user had to
+// re-run the CLI by hand to learn why (2026-07 dogfood).
+func claudeResultError(output []byte) (string, bool) {
+	var resp struct {
+		IsError        bool    `json:"is_error"`
+		APIErrorStatus int     `json:"api_error_status"`
+		Result         *string `json:"result"`
+	}
+	if err := json.Unmarshal(output, &resp); err != nil || !resp.IsError {
+		return "", false
+	}
+	msg := "claude reported an error"
+	if resp.Result != nil && strings.TrimSpace(*resp.Result) != "" {
+		msg = strings.TrimSpace(*resp.Result)
+	}
+	if resp.APIErrorStatus != 0 {
+		msg = fmt.Sprintf("%s (HTTP %d)", msg, resp.APIErrorStatus)
+	}
+	// 401 has one overwhelmingly common cause for a login-based
+	// setup: the stored OAuth session expired or was revoked.
+	if resp.APIErrorStatus == 401 {
+		msg += " — credentials expired or invalid; run `claude login` to re-authenticate (or check the API key env var if you use one)"
+	}
+	return msg, true
+}
+
 func parseClaudeJSON(output []byte) (string, TokenUsage) {
 	var resp struct {
 		Type   string  `json:"type"`
