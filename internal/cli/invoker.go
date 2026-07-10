@@ -383,8 +383,20 @@ func (c *ClaudeInvoker) run(ctx context.Context, prompt string) (string, TokenUs
 		// "claude review failed:" prefix on the message would
 		// duplicate. ClassifyExit's output is the user-facing summary;
 		// no caller-side framing needed.
+		// Prefer claude's structured error payload (stdout JSON with
+		// is_error:true) over ClassifyExit's generic output tail — the
+		// tail of this payload is metadata; the diagnosis is up front.
+		if msg, ok := claudeResultError(stdout.Bytes()); ok {
+			return "", TokenUsage{}, fmt.Errorf("%s", msg)
+		}
 		combined := append(stdout.Bytes(), stderr.Bytes()...)
 		return "", TokenUsage{}, fmt.Errorf("%s", ClassifyExit(ctx, err, combined, "claude"))
+	}
+	// claude can exit 0 with is_error:true in the payload — without
+	// this guard the error text ("Failed to authenticate…") would be
+	// returned AS the review and saved as a review file.
+	if msg, ok := claudeResultError(stdout.Bytes()); ok {
+		return "", TokenUsage{}, fmt.Errorf("%s", msg)
 	}
 	text, usage := parseClaudeJSON(stdout.Bytes())
 	return text, usage, nil

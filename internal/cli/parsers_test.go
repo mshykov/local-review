@@ -533,3 +533,59 @@ func TestTokenUsage_Total(t *testing.T) {
 		t.Errorf("Total() = %d, want 300", got)
 	}
 }
+
+// TestClaudeResultError_Surfaces401WithHint pins the diagnostic fix from
+// the 2026-07 dogfood: claude exits 1 with its error JSON on stdout, and
+// the generic tail-of-output path buried the actual 401 under trailing
+// metadata. The structured path must surface the result text, the HTTP
+// status, and the re-login hint.
+func TestClaudeResultError_Surfaces401WithHint(t *testing.T) {
+	// Shape captured from a real `claude --print --output-format json`
+	// run against expired login credentials (fields abbreviated).
+	payload := []byte(`{"type":"result","subtype":"success","is_error":true,` +
+		`"api_error_status":401,"duration_ms":2799,"num_turns":1,` +
+		`"result":"Failed to authenticate. API Error: 401 Invalid authentication credentials",` +
+		`"total_cost_usd":0,"usage":{"input_tokens":0},"service_tier":"standard"}`)
+	msg, ok := claudeResultError(payload)
+	if !ok {
+		t.Fatal("expected the error payload to be recognized")
+	}
+	for _, want := range []string{
+		"Failed to authenticate",
+		"(HTTP 401)",
+		"run `claude login`",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message missing %q, got: %s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "service_tier") {
+		t.Errorf("message must not carry raw JSON metadata, got: %s", msg)
+	}
+}
+
+// TestClaudeResultError_IgnoresSuccessAndGarbage pins the fallthrough
+// contract: a normal success payload and non-JSON output both return
+// ok=false so the existing parse/classify paths keep handling them.
+func TestClaudeResultError_IgnoresSuccessAndGarbage(t *testing.T) {
+	for name, payload := range map[string][]byte{
+		"success":       []byte(`{"type":"result","is_error":false,"result":"looks good"}`),
+		"no_error_flag": []byte(`{"type":"result","result":"looks good"}`),
+		"garbage":       []byte("plain text, not json"),
+		"empty":         nil,
+	} {
+		if msg, ok := claudeResultError(payload); ok {
+			t.Errorf("%s: expected ok=false, got message %q", name, msg)
+		}
+	}
+}
+
+// TestClaudeResultError_ErrorWithoutStatusOrResult still produces a
+// readable message when the payload has is_error but nothing else —
+// never an empty string.
+func TestClaudeResultError_ErrorWithoutStatusOrResult(t *testing.T) {
+	msg, ok := claudeResultError([]byte(`{"is_error":true}`))
+	if !ok || strings.TrimSpace(msg) == "" {
+		t.Fatalf("expected a non-empty fallback message, got ok=%v msg=%q", ok, msg)
+	}
+}
