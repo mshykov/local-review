@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -240,6 +241,9 @@ func TestCopilotArgs_ToolsDisabledContract(t *testing.T) {
 // detector_test.go.
 func writeFakeClaude(t *testing.T, payload string, exitCode int) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub uses /bin/sh; skip on windows")
+	}
 	bin := filepath.Join(t.TempDir(), "claude")
 	script := "#!/bin/sh\ncat >/dev/null\nprintf '%s' '" + payload + "'\nexit " + fmt.Sprint(exitCode) + "\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {

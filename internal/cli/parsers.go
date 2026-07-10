@@ -8,38 +8,6 @@ import (
 	"strings"
 )
 
-// parseClaudeJSON unwraps the JSON object claude --output-format json
-// returns. Anthropic's documented shape (claude-code v1+):
-//
-//	{
-//	  "type": "result",
-//	  "subtype": "success",
-//	  "result": "<the assistant's reply>",
-//	  "usage": {
-//	    "input_tokens": N,                  // new (uncached) input
-//	    "output_tokens": M,
-//	    "cache_read_input_tokens": ...,     // re-used from prompt cache
-//	    "cache_creation_input_tokens": ...  // newly added to cache
-//	  },
-//	  ...
-//	}
-//
-// Falls back to the raw output as text + zero usage when valid JSON
-// has an unexpected shape (e.g., a future schema or an error
-// envelope). This is NOT a path to support older CLIs lacking
-// --output-format — those exit non-zero and never reach this parser;
-// see ClaudeInvoker.run for the version-baseline rationale.
-//
-// **Cache-read and cache-creation tokens are summed into InputTokens.**
-// Pre-v0.7.1 we excluded them on the theory that "they represent reuse,
-// not new spend" — but in practice that meant the displayed input was
-// only the *novel* portion of a cached prompt. On a re-review of the
-// same diff the displayed value collapsed to single digits ("9 in /
-// 5.2k out"), which read as broken. The user-visible "in" should
-// answer "how big was the prompt I sent?" — that's the sum of all
-// three input components. Cost accounting (where cache reads are
-// discounted ~10x) is not what this number is for; that lives in
-// the vendor's billing dashboard.
 // claudeResultError inspects claude's --output-format json payload for
 // the vendor's structured failure shape: {"is_error": true,
 // "api_error_status": 401, "result": "Failed to authenticate…"}. When
@@ -77,6 +45,38 @@ func claudeResultError(output []byte) (string, bool) {
 	return msg, true
 }
 
+// parseClaudeJSON unwraps the JSON object claude --output-format json
+// returns. Anthropic's documented shape (claude-code v1+):
+//
+//	{
+//	  "type": "result",
+//	  "subtype": "success",
+//	  "result": "<the assistant's reply>",
+//	  "usage": {
+//	    "input_tokens": N,                  // new (uncached) input
+//	    "output_tokens": M,
+//	    "cache_read_input_tokens": ...,     // re-used from prompt cache
+//	    "cache_creation_input_tokens": ...  // newly added to cache
+//	  },
+//	  ...
+//	}
+//
+// Falls back to the raw output as text + zero usage when valid JSON
+// has an unexpected shape (e.g., a future schema or an error
+// envelope). This is NOT a path to support older CLIs lacking
+// --output-format — those exit non-zero and never reach this parser;
+// see ClaudeInvoker.run for the version-baseline rationale.
+//
+// **Cache-read and cache-creation tokens are summed into InputTokens.**
+// Pre-v0.7.1 we excluded them on the theory that "they represent reuse,
+// not new spend" — but in practice that meant the displayed input was
+// only the *novel* portion of a cached prompt. On a re-review of the
+// same diff the displayed value collapsed to single digits ("9 in /
+// 5.2k out"), which read as broken. The user-visible "in" should
+// answer "how big was the prompt I sent?" — that's the sum of all
+// three input components. Cost accounting (where cache reads are
+// discounted ~10x) is not what this number is for; that lives in
+// the vendor's billing dashboard.
 func parseClaudeJSON(output []byte) (string, TokenUsage) {
 	var resp struct {
 		Type   string  `json:"type"`
