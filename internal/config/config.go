@@ -246,24 +246,14 @@ func Load(repoConfigPath string) (Config, error) {
 		}
 	}
 
-	// Repo config (.local-review.yml at/above the project root) — UNtrusted
-	// by default. It is attacker-controllable whenever you review code you
-	// didn't write (a CI runner checking out a hostile commit, a freshly
-	// cloned repo). The security-sensitive LLM fields it could carry —
-	// cli_path (→ arbitrary binary exec), base_url (→ a new outbound
-	// endpoint your diff/source is POSTed to), and api_key (a secret in a
-	// repo) — are therefore stripped from this layer with a warning, the
-	// same defence resolveRelativePaths already gives prompts.pack_dir.
-	// A team that genuinely wants to check in a trusted config (e.g. a LAN
-	// Ollama base_url) opts back in with LOCAL_REVIEW_TRUST_REPO_CONFIG=1.
-	//
-	// BUT: when the project lives under $HOME and has no project-local
-	// config, FindRepoConfig walks up and returns the SAME file as the home
-	// config loaded above. Re-processing the user's own ~/.local-review.yml
-	// as the untrusted repo layer would spuriously strip its base_url /
-	// api_key_env and print an alarming "untrusted config" warning about the
-	// user's own trusted file (a v0.16.0 regression). A file that IS the
-	// home config is trusted — skip the redundant untrusted pass.
+	// Which layers merge, and under what trust, is decided by
+	// DescribeSources above: home is trusted; the repo layer is
+	// UNTRUSTED by default (attacker-controllable when reviewing code
+	// you didn't write — sanitizeUntrustedLayer strips its
+	// security-sensitive fields, LOCAL_REVIEW_TRUST_REPO_CONFIG=1 opts
+	// back in), and a repo path that IS the home config file merges
+	// once as trusted (the v0.16.0 double-processing regression). See
+	// DescribeSources + sanitizeUntrustedLayer for the full rationale.
 
 	// Warn about deprecated api_key in YAML (security risk)
 	warnDeprecatedAPIKeys(&cfg)
@@ -305,8 +295,6 @@ func detectRemovedProviderBlock(b []byte) (bool, error) {
 	return present, nil
 }
 
-// FindRepoConfig walks up from start looking for a .local-review.yml. Returns
-// "" when none is found (not an error).
 // SourceRole labels a config cascade layer in Source.
 type SourceRole string
 
@@ -361,15 +349,20 @@ func DescribeSources(repoConfigPath string) []Source {
 }
 
 // fileExists reports whether path names an existing file. Empty path
-// is "not found" (a layer that couldn't be resolved).
+// is "not found" (a layer that couldn't be resolved). Only ErrNotExist
+// counts as absent: a permission-denied or otherwise unstat-able file
+// EXISTS — reporting it "(not found)" in the sources diagnostic would
+// mislead, and mergeFrom surfaces the actual read error loudly.
 func fileExists(path string) bool {
 	if path == "" {
 		return false
 	}
 	_, err := os.Stat(path)
-	return err == nil
+	return err == nil || !errors.Is(err, os.ErrNotExist)
 }
 
+// FindRepoConfig walks up from start looking for a .local-review.yml. Returns
+// "" when none is found (not an error).
 func FindRepoConfig(start string) string {
 	dir := start
 	for {
