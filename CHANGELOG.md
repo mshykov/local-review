@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Silent-truncation detection for provider agents.** llama.cpp-backed servers (Ollama) drop prompt overflow past the context window and still return HTTP 200 — a 15,147-token diff was processed as 2,050 tokens and reviewed as "No issues found", a clean-looking APPROVE on 14% of the change. The provider invoker now compares the endpoint's own reported `prompt_tokens` against the prompt it sent and warns loudly when the gap is an order of magnitude, naming the fixes (raise `OLLAMA_CONTEXT_LENGTH`, review a smaller change, or use a cloud agent). Requires a 2× gap before firing, so ordinary tokenizer variance stays silent.
+- **Merged-report validation.** The merge step asks an LLM to reformat findings into a fixed template with a stated total, one severity per finding, and no duplicates. A weak merge model can silently violate that: a real run claimed "Total findings: 5" while rendering two bullets — the *same* finding, under both "Major Issues" and "Info / Notes". `multi.ValidateReport` now checks the claimed count against the rendered bullets and flags any finding placed in multiple severity sections, warning after the report (never rewriting it) and pointing at `--merge-with claude`. Mechanical checks against our own template, so a bad merge from any model is caught.
+- **Large-prompt-to-local-endpoint notice.** A big diff sent to a local model now warns *before* the request goes out — a 17.7k-token diff against a local 7B took 20m42s, and an earlier attempt burned the full 600s timeout producing nothing.
+
+### Fixed
+
+- **Provider timeouts now explain themselves.** A deadline against a provider agent surfaced as a bare `context deadline exceeded`, while CLI agents got actionable guidance from `ClassifyExit`. Provider failures now carry the same class of hint (raise `timeout_seconds`, review a smaller change, and — for local endpoints specifically — that a cloud agent is the quicker path), plus a clean `cancelled` on Ctrl+C.
+
 ## [0.17.4] - 2026-07-10
 
 **Patch: the external-audit fixes.** A broken user-facing command, a widened security boundary, hung-subprocess protection, and better diagnostics — everything from the 2026-07 architecture + SecOps audit plus the dogfood findings that followed. This is also the first release shipped by the hardened pipeline: append-only tags, signed SLSA build provenance on every asset (`gh attestation verify <file> --repo mshykov/local-review`), and hermetic release builds.

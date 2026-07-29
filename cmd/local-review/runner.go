@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1017,6 +1018,15 @@ func mergeAndPrint(ctx context.Context, cfg config.Config, sf *sharedFlags, acti
 	fmt.Println(merged)
 	fmt.Println("─── End ───")
 
+	// Surface template violations AFTER the report: the findings may
+	// still be useful, but a self-contradicting report (count that
+	// doesn't match the bullets, one finding under two severities) means
+	// the merge model didn't follow the contract, and the reader needs
+	// to know before trusting the recommendation. Printed last so it's
+	// the final thing on screen rather than scrolled away above the
+	// report body.
+	warnReportProblems(os.Stderr, multi.ValidateReport(merged), mergeLLM.Name)
+
 	return savedPath, merged, mergeTokens
 }
 
@@ -1197,4 +1207,23 @@ func selectPromptPack(cfg config.Config, diffs []git.Diff) (string, error) {
 		return "", fmt.Errorf("load prompt pack %q: %w", packID, err)
 	}
 	return pack.Content, nil
+}
+
+// warnReportProblems renders ValidateReport's findings, naming the merge
+// agent so the user knows which model to swap when the report shape is
+// unreliable (a small local model formatting a report is the usual
+// cause — 2026-07 dogfood).
+func warnReportProblems(w io.Writer, problems []string, mergeAgent string) {
+	if len(problems) == 0 {
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nWARNING: the report assembled by %q does not follow the report template:\n", mergeAgent)
+	for _, p := range problems {
+		fmt.Fprintf(&b, "  - %s\n", p)
+	}
+	b.WriteString("  Findings above may still be valid, but the summary is not trustworthy. A stronger merge agent\n")
+	b.WriteString("  (`--merge-with claude`) usually fixes this; small local models often can't hold the template.\n")
+	// Composed then written once, matching the provider diagnostics.
+	fmt.Fprint(w, b.String())
 }

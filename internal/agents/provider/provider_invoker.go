@@ -24,7 +24,10 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/mshykov/local-review/internal/agents"
@@ -110,10 +113,14 @@ func (p *Invoker) RunPrompt(ctx context.Context, prompt string) (string, agents.
 // roster line (`qwen ✗ <reason>`) attributes correctly when multiple
 // providers run in parallel.
 func (p *Invoker) complete(ctx context.Context, msgs []llm.Message) (string, agents.TokenUsage, error) {
+	sent := estimateTokens(msgs)
+	warnIfSlowLocalRun(p.Name, sent, p.client.IsLocalEndpoint())
+
 	text, u, err := p.client.Complete(ctx, msgs, false)
 	if err != nil {
-		return "", agents.TokenUsage{}, fmt.Errorf("%s: %w", p.Name, err)
+		return "", agents.TokenUsage{}, fmt.Errorf("%s: %s", p.Name, describeProviderErr(ctx, err, p.Name, sent, p.client.IsLocalEndpoint()))
 	}
+	warnIfTruncated(p.Name, sent, u.PromptTokens)
 	usage := agents.TokenUsage{
 		InputTokens:  u.PromptTokens,
 		OutputTokens: u.CompletionTokens,
@@ -134,3 +141,115 @@ func (p *Invoker) complete(ctx context.Context, msgs []llm.Message) (string, age
 // abstract contract — a mismatch fails the build instead of a
 // runtime "interface not implemented" deep inside the runner.
 var _ agents.Invoker = (*Invoker)(nil)
+
+// warnOut is where provider diagnostics are written. A package var so
+// tests can capture them without touching the process's real stderr.
+var warnOut io.Writer = os.Stderr
+
+// Thresholds for the diagnostics below. All deliberately conservative:
+// a missed warning is a nuisance, a false alarm on every run trains
+// users to ignore the channel entirely.
+const (
+	// truncationFloorTokens is the smallest prompt worth checking for
+	// silent truncation. Below this, the ~4-chars-per-token estimate is
+	// too coarse to distinguish truncation from estimation error.
+	truncationFloorTokens = 2000
+
+	// slowLocalPromptTokens is where a local model's generation speed
+	// (~10 tok/s for a 7B on Apple silicon) starts to mean double-digit
+	// minutes. Cloud endpoints are exempt — they're fast enough that a
+	// large prompt is unremarkable.
+	slowLocalPromptTokens = 8000
+)
+
+// estimateTokens approximates a prompt's token count with the common
+// ~4-characters-per-token heuristic. Deliberately rough: it only needs
+// to be good enough to spot an ORDER-OF-MAGNITUDE gap between what we
+// sent and what the provider says it processed. Never used for billing
+// or budgeting, so the 20-40% error typical on code is irrelevant here.
+func estimateTokens(msgs []llm.Message) int {
+	n := 0
+	for _, m := range msgs {
+		n += len(m.Content)
+	}
+	return n / 4
+}
+
+// warnIfTruncated compares the provider's OWN reported prompt_tokens
+// against what we estimate we sent, and warns when the provider
+// processed dramatically less.
+//
+// Why this matters more than a normal error: llama.cpp-backed servers
+// (Ollama) silently DROP prompt overflow past the context window and
+// still return HTTP 200. A 2026-07 dogfood run sent a 15,147-token
+// diff to a 4096-context model, which processed 2,050 tokens and
+// returned "No issues found" — a clean-looking APPROVE on 14% of the
+// change. A reviewer that fails silent is worse than one that fails
+// loud, so this converts the silent case into a visible one.
+//
+// Requires a 2x gap before warning: the estimate is coarse, and
+// providers legitimately differ from it (tokenizer, chat-template
+// overhead). Real truncation shows up as 5-10x.
+func warnIfTruncated(name string, sent, reported int) {
+	if reported <= 0 || sent < truncationFloorTokens || reported >= sent/2 {
+		return
+	}
+	// ONE write: the orchestrator runs a goroutine per agent, so a
+	// multi-call Fprintf would interleave two agents' warnings into an
+	// unreadable braid.
+	emitWarning(fmt.Sprintf(
+		"WARNING: %s processed only ~%s of the ~%s prompt tokens sent — the input was very likely TRUNCATED to fit the model's context window.\n"+
+			"         This review saw a fraction of your diff; treat any \"no issues found\" as unverified. Raise the endpoint's context length\n"+
+			"         (e.g. OLLAMA_CONTEXT_LENGTH=32768 ollama serve), review a smaller change (`local-review commit <rev>`), or use a cloud agent.\n",
+		name, humanTokens(reported), humanTokens(sent)))
+}
+
+// warnIfSlowLocalRun flags a large prompt heading to a local endpoint
+// BEFORE the request goes out, so the user can cancel instead of
+// discovering the cost after a 20-minute wait (2026-07 dogfood: a
+// 17.7k-token diff against a local 7B took 20m42s, and an earlier
+// attempt burned the full 600s timeout producing nothing).
+func warnIfSlowLocalRun(name string, sent int, local bool) {
+	if !local || sent < slowLocalPromptTokens {
+		return
+	}
+	emitWarning(fmt.Sprintf(
+		"NOTE: sending ~%s prompt tokens to local endpoint %q — local models generate slowly (a 7B on Apple silicon is ~10 tok/s),\n"+
+			"      so this can take many minutes and may hit llms.%s.timeout_seconds. For a faster pass use a cloud agent (`--only claude`)\n"+
+			"      or review a smaller change (`local-review commit <rev>`).\n",
+		humanTokens(sent), name, name))
+}
+
+// emitWarning writes a fully-composed diagnostic in a single call.
+// Provider agents run concurrently (one goroutine per agent in
+// internal/multi), so composing first and writing once keeps each
+// warning contiguous instead of interleaved with another agent's.
+func emitWarning(msg string) {
+	fmt.Fprint(warnOut, msg)
+}
+
+// describeProviderErr turns a failed provider call into an actionable
+// message, mirroring what cli.ClassifyExit already does for CLI agents
+// (which had the hint and providers didn't — a deadline surfaced as a
+// bare "context deadline exceeded" with no guidance, 2026-07 dogfood).
+func describeProviderErr(ctx context.Context, err error, name string, sent int, local bool) string {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return "cancelled"
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		msg := fmt.Sprintf("timeout — raise llms.%s.timeout_seconds, or review a smaller change (`local-review commit <rev>`)", name)
+		if local {
+			msg += fmt.Sprintf("; a ~%s-token prompt against a local model is often slower than the timeout allows, so a cloud agent (`--only claude`) is the quicker path", humanTokens(sent))
+		}
+		return msg
+	}
+	return err.Error()
+}
+
+// humanTokens renders a token count as "17.4k" / "950" for messages.
+func humanTokens(n int) string {
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1000.0)
+	}
+	return fmt.Sprintf("%d", n)
+}
