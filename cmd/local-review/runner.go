@@ -1217,10 +1217,13 @@ func warnReportProblems(w io.Writer, problems []string, mergeAgent string) {
 	if len(problems) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "\nWARNING: the report assembled by %q does not follow the report template:\n", mergeAgent)
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nWARNING: the report assembled by %q does not follow the report template:\n", mergeAgent)
 	for _, p := range problems {
-		fmt.Fprintf(w, "  - %s\n", p)
+		fmt.Fprintf(&b, "  - %s\n", p)
 	}
-	fmt.Fprintf(w, "  Findings above may still be valid, but the summary is not trustworthy. A stronger merge agent\n")
-	fmt.Fprintf(w, "  (`--merge-with claude`) usually fixes this; small local models often can't hold the template.\n")
+	b.WriteString("  Findings above may still be valid, but the summary is not trustworthy. A stronger merge agent\n")
+	b.WriteString("  (`--merge-with claude`) usually fixes this; small local models often can't hold the template.\n")
+	// Composed then written once, matching the provider diagnostics.
+	fmt.Fprint(w, b.String())
 }

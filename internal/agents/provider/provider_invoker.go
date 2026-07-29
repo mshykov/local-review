@@ -24,14 +24,14 @@ package provider
 
 import (
 	"context"
-	"fmt"
-	"strings"
-
 	"errors"
-	"github.com/mshykov/local-review/internal/agents"
-	"github.com/mshykov/local-review/internal/llm"
+	"fmt"
 	"io"
 	"os"
+	"strings"
+
+	"github.com/mshykov/local-review/internal/agents"
+	"github.com/mshykov/local-review/internal/llm"
 )
 
 // Invoker is the HTTP-provider implementation of agents.Invoker.
@@ -194,10 +194,14 @@ func warnIfTruncated(name string, sent, reported int) {
 	if reported <= 0 || sent < truncationFloorTokens || reported >= sent/2 {
 		return
 	}
-	fmt.Fprintf(warnOut, "WARNING: %s processed only ~%s of the ~%s prompt tokens sent — the input was very likely TRUNCATED to fit the model's context window.\n",
-		name, humanTokens(reported), humanTokens(sent))
-	fmt.Fprintf(warnOut, "         This review saw a fraction of your diff; treat any \"no issues found\" as unverified. Raise the endpoint's context length\n")
-	fmt.Fprintf(warnOut, "         (e.g. OLLAMA_CONTEXT_LENGTH=32768 ollama serve), review a smaller change (`local-review commit <rev>`), or use a cloud agent.\n")
+	// ONE write: the orchestrator runs a goroutine per agent, so a
+	// multi-call Fprintf would interleave two agents' warnings into an
+	// unreadable braid.
+	emitWarning(fmt.Sprintf(
+		"WARNING: %s processed only ~%s of the ~%s prompt tokens sent — the input was very likely TRUNCATED to fit the model's context window.\n"+
+			"         This review saw a fraction of your diff; treat any \"no issues found\" as unverified. Raise the endpoint's context length\n"+
+			"         (e.g. OLLAMA_CONTEXT_LENGTH=32768 ollama serve), review a smaller change (`local-review commit <rev>`), or use a cloud agent.\n",
+		name, humanTokens(reported), humanTokens(sent)))
 }
 
 // warnIfSlowLocalRun flags a large prompt heading to a local endpoint
@@ -209,9 +213,19 @@ func warnIfSlowLocalRun(name string, sent int, local bool) {
 	if !local || sent < slowLocalPromptTokens {
 		return
 	}
-	fmt.Fprintf(warnOut, "NOTE: sending ~%s prompt tokens to local endpoint %q — local models generate slowly (a 7B on Apple silicon is ~10 tok/s),\n", humanTokens(sent), name)
-	fmt.Fprintf(warnOut, "      so this can take many minutes and may hit llms.%s.timeout_seconds. For a faster pass use a cloud agent (`--only claude`)\n", name)
-	fmt.Fprintf(warnOut, "      or review a smaller change (`local-review commit <rev>`).\n")
+	emitWarning(fmt.Sprintf(
+		"NOTE: sending ~%s prompt tokens to local endpoint %q — local models generate slowly (a 7B on Apple silicon is ~10 tok/s),\n"+
+			"      so this can take many minutes and may hit llms.%s.timeout_seconds. For a faster pass use a cloud agent (`--only claude`)\n"+
+			"      or review a smaller change (`local-review commit <rev>`).\n",
+		humanTokens(sent), name, name))
+}
+
+// emitWarning writes a fully-composed diagnostic in a single call.
+// Provider agents run concurrently (one goroutine per agent in
+// internal/multi), so composing first and writing once keeps each
+// warning contiguous instead of interleaved with another agent's.
+func emitWarning(msg string) {
+	fmt.Fprint(warnOut, msg)
 }
 
 // describeProviderErr turns a failed provider call into an actionable
