@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.5] - 2026-07-29
+
+**Patch: stop trusting quiet failures.** Every fix here comes from one dogfood session where a local-model review looked successful and wasn't. A provider that silently truncated a 15k-token diff still reported "No issues found"; a 20-minute run gave no warning it would be slow; a timeout explained nothing; and a merge model shipped a report whose own numbers contradicted it. The tool had the evidence for all four and said nothing — now it speaks up.
+
 ### Added
 
 - **Silent-truncation detection for provider agents.** llama.cpp-backed servers (Ollama) drop prompt overflow past the context window and still return HTTP 200 — a 15,147-token diff was processed as 2,050 tokens and reviewed as "No issues found", a clean-looking APPROVE on 14% of the change. The provider invoker now compares the endpoint's own reported `prompt_tokens` against the prompt it sent and warns loudly when the gap is an order of magnitude, naming the fixes (raise `OLLAMA_CONTEXT_LENGTH`, review a smaller change, or use a cloud agent). Requires a 2× gap before firing, so ordinary tokenizer variance stays silent.
