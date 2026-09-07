@@ -1,14 +1,19 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/mshykov/local-review/internal/llm"
 )
 
 // fakeServer returns a chat-completions mock that echoes a fixed
@@ -190,5 +195,122 @@ func TestInvoker_TrimsTrailingWhitespace(t *testing.T) {
 	}
 	if text != "hello world" {
 		t.Errorf("want trimmed 'hello world', got %q", text)
+	}
+}
+
+// captureWarn swaps the package's diagnostic sink for the duration of
+// fn and returns what was written. Restoration is via t.Cleanup so a
+// panicking body can't leave the sink pointed at a closed buffer.
+func captureWarn(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := warnOut
+	var buf bytes.Buffer
+	warnOut = &buf
+	t.Cleanup(func() { warnOut = orig })
+	fn()
+	warnOut = orig
+	return buf.String()
+}
+
+// TestWarnIfTruncated_FiresOnSilentTruncation reproduces the 2026-07
+// dogfood: a 15,147-token diff sent to a 4096-context Ollama model,
+// which processed 2,050 tokens, returned HTTP 200, and reported "no
+// issues found". The provider never errors in this case, so this
+// warning is the only signal the review was incomplete.
+func TestWarnIfTruncated_FiresOnSilentTruncation(t *testing.T) {
+	out := captureWarn(t, func() { warnIfTruncated("ollama", 15147, 2050) })
+	if !strings.Contains(out, "TRUNCATED") {
+		t.Errorf("expected a truncation warning, got: %q", out)
+	}
+	for _, want := range []string{"~2.0k", "~15.1k", "OLLAMA_CONTEXT_LENGTH", "local-review commit"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("truncation warning missing %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// TestWarnIfTruncated_QuietWhenProviderProcessedThePrompt is the
+// false-positive guard. The ~4-chars-per-token estimate is coarse, so
+// normal variance (different tokenizer, chat-template overhead) must
+// never warn — only an order-of-magnitude gap should.
+func TestWarnIfTruncated_QuietWhenProviderProcessedThePrompt(t *testing.T) {
+	cases := map[string]struct{ sent, reported int }{
+		"exact match":            {15000, 15000},
+		"reported a bit lower":   {15000, 12000},
+		"reported higher":        {15000, 17000},
+		"prompt below the floor": {500, 100},
+		"usage not reported":     {15000, 0},
+	}
+	for name, c := range cases {
+		out := captureWarn(t, func() { warnIfTruncated("ollama", c.sent, c.reported) })
+		if out != "" {
+			t.Errorf("%s: expected silence, got: %s", name, out)
+		}
+	}
+}
+
+// TestWarnIfSlowLocalRun_OnlyForBigPromptsToLocalEndpoints pins both
+// halves of the gate: a large prompt to a LOCAL endpoint warns (a
+// 17.7k-token diff took 20m42s on a local 7B), while the same prompt to
+// a cloud endpoint — and a small prompt anywhere — stays silent.
+func TestWarnIfSlowLocalRun_OnlyForBigPromptsToLocalEndpoints(t *testing.T) {
+	out := captureWarn(t, func() { warnIfSlowLocalRun("ollama", 17700, true) })
+	if !strings.Contains(out, "~17.7k") || !strings.Contains(out, "timeout_seconds") {
+		t.Errorf("expected a slow-local note naming the size and timeout knob, got: %q", out)
+	}
+
+	if out := captureWarn(t, func() { warnIfSlowLocalRun("openai", 17700, false) }); out != "" {
+		t.Errorf("cloud endpoint must not warn, got: %s", out)
+	}
+	if out := captureWarn(t, func() { warnIfSlowLocalRun("ollama", 500, true) }); out != "" {
+		t.Errorf("small prompt must not warn, got: %s", out)
+	}
+}
+
+// TestDescribeProviderErr_TimeoutGivesActionableHint covers the gap the
+// audit found: CLI agents got ClassifyExit's guidance on a deadline
+// while providers surfaced a bare "context deadline exceeded".
+func TestDescribeProviderErr_TimeoutGivesActionableHint(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	local := describeProviderErr(ctx, context.DeadlineExceeded, "ollama", 17700, true)
+	for _, want := range []string{"timeout", "llms.ollama.timeout_seconds", "local-review commit", "--only claude"} {
+		if !strings.Contains(local, want) {
+			t.Errorf("local timeout hint missing %q, got: %s", want, local)
+		}
+	}
+	// The cloud variant keeps the generic guidance but must NOT push the
+	// user toward a cloud agent they're already using.
+	cloud := describeProviderErr(ctx, context.DeadlineExceeded, "openai", 17700, false)
+	if strings.Contains(cloud, "--only claude") {
+		t.Errorf("cloud timeout must not suggest switching to a cloud agent: %s", cloud)
+	}
+
+	cctx, ccancel := context.WithCancel(context.Background())
+	ccancel()
+	if got := describeProviderErr(cctx, context.Canceled, "ollama", 100, true); got != "cancelled" {
+		t.Errorf("cancellation should read as cancelled, got: %s", got)
+	}
+
+	// A non-context failure must pass through verbatim.
+	plain := describeProviderErr(context.Background(), errors.New("connection refused"), "ollama", 100, true)
+	if plain != "connection refused" {
+		t.Errorf("ordinary errors must pass through unchanged, got: %s", plain)
+	}
+}
+
+// TestEstimateTokens_ApproximatesPromptSize keeps the heuristic honest —
+// it only needs order-of-magnitude accuracy for the truncation check.
+func TestEstimateTokens_ApproximatesPromptSize(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "system", Content: strings.Repeat("a", 4000)},
+		{Role: "user", Content: strings.Repeat("b", 4000)},
+	}
+	if got := estimateTokens(msgs); got != 2000 {
+		t.Errorf("estimateTokens = %d, want 2000 (8000 chars / 4)", got)
+	}
+	if got := estimateTokens(nil); got != 0 {
+		t.Errorf("estimateTokens(nil) = %d, want 0", got)
 	}
 }

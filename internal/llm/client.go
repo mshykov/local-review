@@ -65,6 +65,13 @@ func mustCIDR(s string) *net.IPNet {
 // they would have for any non-local URL.
 //
 // Any non-local URL (public IP, FQDN) still requires a key.
+// IsLocalEndpoint reports whether this client's base_url points at a
+// local / LAN / Tailscale host — the same classification isLocalURL
+// uses for the api-key bypass. Callers use it to tailor diagnostics
+// (a 20-minute run is expected of a local 7B model and alarming from
+// a cloud endpoint).
+func (c *Client) IsLocalEndpoint() bool { return isLocalURL(c.BaseURL) }
+
 func isLocalURL(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
