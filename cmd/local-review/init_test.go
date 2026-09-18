@@ -109,6 +109,12 @@ func TestInit_AnthropicPreset(t *testing.T) {
 	}
 	for _, want := range []string{
 		`base_url: "https://api.anthropic.com/v1"`,
+		// Pin the preset's default model the same way the OpenAI case
+		// does. Without it a regression to a retired id (the preset
+		// carried claude-sonnet-4-6 long after it was superseded) would
+		// pass this test while writing a config that 404s on first use —
+		// exactly what the preset's own note warns about.
+		`model: "claude-sonnet-5"`,
 		`api_key_env: "ANTHROPIC_API_KEY"`,
 	} {
 		if !strings.Contains(content, want) {
