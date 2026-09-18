@@ -188,7 +188,7 @@ local-review review
 local-review review --only claude,ollama
 
 # Pick a specific model for one CLI agent
-local-review review --claude-model claude-opus-4-7
+local-review review --claude-model claude-opus-5
 
 # Use a specific agent to do the merge
 local-review review --merge-with claude
@@ -270,13 +270,13 @@ llms:
   # CLI agents — names are well-known (claude / codex / copilot / gemini).
   # Just set the per-agent knobs you care about; auto-detection handles the rest.
   claude:
-    model: claude-opus-4-7
+    model: claude-opus-5
 
   codex:
     enabled: false           # opt-out (still runs if --only codex is passed)
 
   gemini:
-    model: gemini-2.0-flash
+    model: gemini-3.8-flash
     # llms.gemini.force_after_sunset: true   # uncomment to keep trying past 2026-06-18
 
   # Provider agents — ANY entry under `llms:` with a `base_url:` becomes an
@@ -382,8 +382,8 @@ Every provider entry lives under `llms.<your-name>:` with `base_url` / `model` /
 
 | Provider | `base_url` | Notes |
 |---|---|---|
-| OpenAI | `https://api.openai.com/v1` | Default. `gpt-4o-mini` is cheap; `gpt-4o` for harder reviews. |
-| Anthropic | `https://api.anthropic.com/v1` | Anthropic's [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk). Use exact model names (e.g. `claude-sonnet-4-6`, `claude-opus-4-7`). |
+| OpenAI | `https://api.openai.com/v1` | Default. `gpt-5.6-luna` is cost-optimised; `gpt-5.6-sol` for harder reviews, `gpt-6-astra` for reasoning-heavy ones. |
+| Anthropic | `https://api.anthropic.com/v1` | Anthropic's [OpenAI-compatible endpoint](https://docs.anthropic.com/en/api/openai-sdk). Use exact model names (e.g. `claude-sonnet-5`, `claude-opus-5`). |
 | Mistral | `https://api.mistral.ai/v1` | EU-hosted; Codestral is code-tuned. |
 | DeepSeek | `https://api.deepseek.com/v1` | Cheapest cloud option. |
 | Groq | `https://api.groq.com/openai/v1` | Fast inference; Llama, Qwen, etc. |

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Refreshed the model IDs the tool suggests.** `local-review init`'s provider presets wrote `gpt-4o-mini` (OpenAI) and `claude-sonnet-4-6` (Anthropic) into every generated config, and the README / `examples/.local-review.yml` / doc comments echoed the same retired names — so a fresh `init` produced a config pointing at models a year out of date, and the Anthropic preset's own note warned that "a wrong name returns 404". Presets now default to `gpt-5.6-luna` (cost-optimised) and `claude-sonnet-5`, with the docs pointing at `gpt-5.6-sol` / `gpt-6-astra` and `claude-opus-5` for harder reviews, and `gemini-3.8-flash` in the Gemini example. Verified against the vendors' current model lists rather than assumed. The context-window floor in `preflight.go` is deliberately unchanged — 128K is still the conservative floor and moving it would change behaviour, not just wording.
+- **Dependency refresh.** `golang.org/x/term` 0.44.0 → 0.46.0; the `govulncheck` tool directive 1.4.0 → 1.8.0 (pulling `x/tools`, `x/sys`, `x/telemetry` forward with it). Actions re-pinned to current releases: `checkout` v7.0.1, `setup-go` v7.0.0, `attest-build-provenance` v4.2.2, `sonarqube-scan-action` v8.2.2, `action-gh-release` v3.0.3 — all still SHA-pinned. `cobra`, `yaml.v3` and `gitleaks` were already current. `govulncheck` reports no vulnerabilities after the bump.
+
 ## [0.17.5] - 2026-07-29
 
 **Patch: stop trusting quiet failures.** Every fix here comes from one dogfood session where a local-model review looked successful and wasn't. A provider that silently truncated a 15k-token diff still reported "No issues found"; a 20-minute run gave no warning it would be slow; a timeout explained nothing; and a merge model shipped a report whose own numbers contradicted it. The tool had the evidence for all four and said nothing — now it speaks up.

@@ -21,7 +21,7 @@ llms:
     base_url: http://localhost:11434/v1
 
     # Model name passed in the chat-completions request.
-    # Examples: qwen2.5-coder:7b, llama3.1:8b, deepseek-coder-v2, gpt-4o-mini
+    # Examples: qwen2.5-coder:7b, llama3.1:8b, deepseek-coder-v2, gpt-5.6-luna
     model: qwen2.5-coder:7b
 
     # Optional: env var name for the API key. Local Ollama / LAN /
@@ -37,7 +37,7 @@ llms:
   #
   # cloud-openai:
   #   base_url: https://api.openai.com/v1
-  #   model: gpt-4o-mini
+  #   model: gpt-5.6-luna
   #   api_key_env: OPENAI_API_KEY
 
   # CLI agents are auto-detected — listing them is optional, but if you
@@ -45,7 +45,7 @@ llms:
   # the binary). Use this only to pin a specific model or disable one.
   #
   # claude:
-  #   model: claude-sonnet-4-6
+  #   model: claude-sonnet-5
   # codex:
   #   enabled: false
 

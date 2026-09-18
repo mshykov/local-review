@@ -89,7 +89,7 @@ func TestInit_OpenAIDefaultPath(t *testing.T) {
 	}
 	for _, want := range []string{
 		`base_url: "https://api.openai.com/v1"`,
-		`model: "gpt-4o-mini"`,
+		`model: "gpt-5.6-luna"`,
 		`api_key_env: "OPENAI_API_KEY"`,
 		`min_severity: "warning"`,
 		"max_findings: 20",
