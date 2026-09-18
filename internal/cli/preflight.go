@@ -70,9 +70,9 @@ func ContextWindow(agent string) int {
 		// while leaving slack for previews that may shift down.
 		return 1_000_000
 	case "codex":
-		// gpt-4o = 128K. gpt-5 family = 200K-400K. Conservative
-		// floor at 128K means we'll over-skip on gpt-5 but won't
-		// over-fit on a gpt-4o-default user.
+		// The gpt-5.6 / gpt-6 families run 200K-400K. Keeping the
+		// floor at 128K means we over-skip on those but never
+		// over-fit on whichever model a given codex build defaults to.
 		return 128_000
 	case "copilot":
 		// Copilot routes to GPT-family models (the dogfood default was

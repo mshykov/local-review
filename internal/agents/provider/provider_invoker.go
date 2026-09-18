@@ -51,7 +51,7 @@ type Invoker struct {
 	Name string
 
 	// Model is the provider's model id (e.g. "qwen2.5-coder:7b",
-	// "gpt-4o-mini"). Sent verbatim to the provider's
+	// "gpt-5.6-luna"). Sent verbatim to the provider's
 	// /v1/chat/completions; the provider rejects unknown ids.
 	Model string
 

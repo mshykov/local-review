@@ -21,8 +21,8 @@ type LLM struct {
 	// install, missing runtime) is reported Available=false so callers
 	// don't try to invoke an unusable tool.
 	Available bool
-	// Model is the agent-specific model id (e.g., "claude-opus-4-7",
-	// "gemini-2.0-flash", "gpt-5"). Threaded through from cfg.LLMs[*]
+	// Model is the agent-specific model id (e.g., "claude-opus-5",
+	// "gemini-3.8-flash", "gpt-5.6-sol"). Threaded through from cfg.LLMs[*]
 	// .Model so per-agent model overrides on the runner actually reach
 	// the invoker — pre-fix the field was set in config and printed in
 	// the roster but the invoker only got Path, so users got false
