@@ -194,7 +194,7 @@ func selectDefault(detected []cli.LLM, ready map[string]bool, cfg config.Config,
 // has a sunset; the predicate is no-op for everything else.
 //
 // The CLI/provider distinction matters: a sunset is a property of
-// a *vendor binary* (Google's Gemini CLI binary stops serving on
+// a *vendor binary* (Google's Gemini CLI binary stopped serving on
 // 2026-06-18), NOT of a name. A user-defined provider entry that
 // happens to be called `llms.gemini:` (e.g. a self-hosted Gemini-
 // compatible service) must NOT be auto-disabled. The

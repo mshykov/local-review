@@ -37,7 +37,7 @@ func doctorCmd() *cobra.Command {
 
 It detects:
   - Claude CLI (claude) — auth via 'claude login' or ANTHROPIC_API_KEY
-  - Gemini CLI (gemini) — auth via GEMINI_API_KEY (preferred) or 'gemini /auth' (Google OAuth). DEPRECATED: stops serving 2026-06-18; migrate to Antigravity.
+  - Gemini CLI (gemini) — auth via GEMINI_API_KEY (preferred) or 'gemini /auth' (Google OAuth). SUNSET: stopped serving 2026-06-18; migrate to Antigravity.
   - OpenAI Codex CLI (codex) — auth via 'codex login' (ChatGPT Plus) or OPENAI_API_KEY
   - Antigravity CLI (agy) — Google's Gemini-CLI successor; auth via Google OAuth ('agy' to log in)
 
@@ -440,10 +440,7 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 		}
 
 	case statusBrokenInstall:
-		fmt.Fprintf(out, "⚠ %-15s install broken\n", displayName)
-		fmt.Fprintf(out, "    found at:  %s\n", llm.Path)
-		fmt.Fprintln(out, "    note:      version probe failed; reinstall the CLI")
-		printInstallInstructions(out, llm.Name)
+		printBrokenInstallRow(out, llm, displayName, forceAfterSunset, now)
 
 	case statusExperimental:
 		// Detected and usable as an interactive agent, but excluded
@@ -460,11 +457,10 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 		fmt.Fprintln(out, "                   fan-out. Tracked for a future release.")
 
 	case statusNotInstalled:
-		fmt.Fprintf(out, "✗ %-15s not installed\n", displayName)
-		printInstallInstructions(out, llm.Name)
+		printNotInstalledRow(out, llm, displayName, forceAfterSunset, now)
 	}
 
-	// Gemini sunset notice. Google's Gemini CLI stops serving
+	// Gemini sunset notice. Google's Gemini CLI stopped serving
 	// Pro/Ultra/free-tier requests on 2026-06-18 (`cli.GeminiSunsetDate`);
 	// Antigravity (`agy`) is the replacement.
 	//
@@ -529,10 +525,55 @@ func geminiSunsetBanner(out io.Writer, now time.Time, force bool) {
 // never sunset-gated — a user-named `llms.gemini` pointing at an
 // OpenAI-compatible endpoint is not Google's CLI.
 func authFixHint(llm cli.LLM, auth authStatus, forceAfterSunset bool, now time.Time) string {
-	if llm.BaseURL == "" && cli.IsAgentSunset(llm.Name, now) && !forceAfterSunset {
+	if sunsetSuppressesSetup(llm, forceAfterSunset, now) {
 		return "none needed — this CLI is past its sunset and is excluded from the fan-out (see below)."
 	}
 	return auth.hint
+}
+
+// sunsetSuppressesSetup reports whether setup advice — credentials,
+// install steps, "reinstall the CLI" — should be withheld for this
+// agent because it is past its sunset.
+//
+// One predicate for every caller on purpose. The same check inlined at
+// each site is what let the auth row and the install rows disagree in
+// the first place, and `internal/pathsafe` is the standing lesson on
+// what duplicated checks do over time.
+//
+// force_after_sunset flips it off: that agent genuinely runs, so it
+// genuinely needs setting up. Provider entries (BaseURL set) are never
+// sunset-gated — a user-named `llms.gemini` pointing at an
+// OpenAI-compatible endpoint is not Google's CLI.
+func sunsetSuppressesSetup(llm cli.LLM, forceAfterSunset bool, now time.Time) bool {
+	return llm.BaseURL == "" && cli.IsAgentSunset(llm.Name, now) && !forceAfterSunset
+}
+
+// printBrokenInstallRow renders the "install broken" row. A sunset CLI
+// gets no reinstall advice: repairing it buys the user nothing, since
+// the fan-out excludes it either way.
+func printBrokenInstallRow(out io.Writer, llm cli.LLM, displayName string, forceAfterSunset bool, now time.Time) {
+	fmt.Fprintf(out, "⚠ %-15s install broken\n", displayName)
+	fmt.Fprintf(out, "    found at:  %s\n", llm.Path)
+	if sunsetSuppressesSetup(llm, forceAfterSunset, now) {
+		fmt.Fprintln(out, "    note:      version probe failed — but this CLI is past its sunset and is excluded from the fan-out (see below), so there is nothing to repair.")
+		return
+	}
+	fmt.Fprintln(out, "    note:      version probe failed; reinstall the CLI")
+	printInstallInstructions(out, llm.Name)
+}
+
+// printNotInstalledRow renders the "not installed" row. A sunset CLI
+// gets no install steps — pre-fix this printed "install: npm install -g
+// @google/gemini-cli" and "then: export GEMINI_API_KEY=... (free at
+// ...)" directly above "✗ sunset: ... auto-disabled", sending the user
+// to set up a CLI the next line declares dead.
+func printNotInstalledRow(out io.Writer, llm cli.LLM, displayName string, forceAfterSunset bool, now time.Time) {
+	fmt.Fprintf(out, "✗ %-15s not installed\n", displayName)
+	if sunsetSuppressesSetup(llm, forceAfterSunset, now) {
+		fmt.Fprintln(out, "    note:      nothing to install — this CLI is past its sunset and is excluded from the fan-out (see below).")
+		return
+	}
+	printInstallInstructions(out, llm.Name)
 }
 
 func getDisplayName(name string) string {
@@ -567,7 +608,7 @@ func printInstallInstructions(out io.Writer, name string) {
 		fmt.Fprintln(out, "    or:        export OPENAI_API_KEY=...   (pay-per-token; usually cheaper for occasional use)")
 	case "antigravity":
 		fmt.Fprintln(out, "    install:   curl -fsSL https://antigravity.google/cli/install.sh | bash")
-		fmt.Fprintln(out, "    then:      agy   (Google OAuth login — successor to the Gemini CLI, which stops serving 2026-06-18)")
+		fmt.Fprintln(out, "    then:      agy   (Google OAuth login — successor to the Gemini CLI, which stopped serving 2026-06-18)")
 	case "copilot":
 		fmt.Fprintln(out, "    install:   npm install -g @github/copilot")
 		fmt.Fprintln(out, "    then:      copilot login   (requires a GitHub Copilot subscription)")

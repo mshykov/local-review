@@ -44,8 +44,8 @@ func IsAgentSunset(name string, now time.Time) bool {
 		return false
 	}
 	// at-or-after: a sunset that lands on "today" counts as sunset
-	// today, not tomorrow. Matches the user-facing phrasing on the
-	// doctor banner ("stops serving 2026-06-18").
+	// today, not tomorrow. Matches how the doctor banner reads the
+	// same date ("sunset 2026-06-18 — auto-disabled").
 	return !now.Before(sunset)
 }
 

@@ -220,7 +220,7 @@ local-review audit --topic security --with ollama
 | **Copilot** | ⚠️ GitHub Copilot subscription (one Premium request per run) | `npm install -g @github/copilot` |
 | **Antigravity** *(detected — review integration experimental)* | Google OAuth (`agy` login) | `curl -fsSL --proto '=https' --proto-redir '=https' https://antigravity.google/cli/install.sh \| bash` (binary: `agy`) |
 
-> **Gemini sunset 2026-06-18.** Google's Gemini CLI stops serving Pro/Ultra/free-tier requests on this date. **v0.15+ handles this automatically**: pre-sunset `doctor` shows a live countdown banner ("N days until sunset"); on/after the cutoff, gemini is auto-disabled in the review fan-out with a clear note. Want to keep trying past the cutoff (in case Google extends, or your network sees a different rollout)? Set `llms.gemini.force_after_sunset: true` to opt back in. Antigravity (`agy`) is Google's announced successor and `local-review doctor` detects it as *experimental* — its headless `--print` mode runs an autonomous agent loop (explores the repo, rebuilds its own diff, emits step-narration) instead of returning a clean review, so it isn't yet in the fan-out. Until that lands, keep using Gemini (until the cutoff) or any of the other CLIs / providers.
+> **Gemini sunset — 2026-06-18, now past.** Google's Gemini CLI stopped serving Pro/Ultra/free-tier requests on that date. **v0.15+ handles this automatically**: gemini is auto-disabled in the review fan-out, and `doctor` says so on the gemini row instead of offering auth or install steps for a CLI that no longer serves. Want to keep trying anyway (in case your tier survived, or your network sees a different rollout)? Set `llms.gemini.force_after_sunset: true` to opt back in — that also restores the normal setup hints. Antigravity (`agy`) is Google's announced successor and `local-review doctor` detects it as *experimental* — its headless `--print` mode runs an autonomous agent loop (explores the repo, rebuilds its own diff, emits step-narration) instead of returning a clean review, so it isn't yet in the fan-out. Use any of the other CLIs / providers in the meantime.
 
 **How it works:**
 1. Detects installed LLM CLIs and which are authenticated (`local-review doctor`)
@@ -269,7 +269,7 @@ The probe gives you back the time the v0.10.0 build spent waiting on doomed LLMs
 | LLM | Default (preferred) | Alternative |
 |---|---|---|
 | **Claude** | `claude login` — Anthropic OAuth, works with the free tier on a claude.ai account | `export ANTHROPIC_API_KEY=...` (paid API access) |
-| **Gemini** *(deprecated — stops serving 2026-06-18)* | `export GEMINI_API_KEY=...` — free key from [Google AI Studio](https://aistudio.google.com/apikey) | `gemini /auth` for Google OAuth |
+| **Gemini** *(sunset — stopped serving 2026-06-18; excluded from the fan-out)* | Nothing to set up; it's auto-disabled | Only if you opt back in with `llms.gemini.force_after_sunset: true`: `export GEMINI_API_KEY=...` or `gemini /auth` |
 | **Codex** | `codex login` — uses your ChatGPT Plus subscription ($20/mo) | `export OPENAI_API_KEY=...` — pay-per-token; usually **cheaper** for occasional review use |
 | **Copilot** | `copilot login` — uses your GitHub Copilot subscription | `export COPILOT_GITHUB_TOKEN=...` (headless / CI). A bare `GH_TOKEN` / `GITHUB_TOKEN` works for the `copilot` CLI itself but **won't auto-enable** this paid reviewer — set the Copilot-specific token or log in. |
 

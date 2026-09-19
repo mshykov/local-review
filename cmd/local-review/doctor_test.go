@@ -856,3 +856,85 @@ func TestAuthFixHint_SuppressedPastSunsetUnlessForced(t *testing.T) {
 		t.Errorf("provider entry must not be sunset-gated, got: %q", got)
 	}
 }
+
+// TestPrintLLMRow_NoSetupAdviceForSunsetAgent locks the whole row, not
+// just the hint helper: every status that offers the user something to
+// *do* about an agent must go quiet once that agent is past its sunset.
+//
+// The regression this guards is a row that contradicts itself — "export
+// GEMINI_API_KEY=... (free at ...)" or "npm install -g @google/gemini-cli"
+// printed immediately above "✗ sunset: ... auto-disabled in the review
+// fan-out". Suppressing it in one status and not the others is how the
+// first fix shipped; the helper-level test passed while two rows still
+// sent users to set up a dead CLI.
+func TestPrintLLMRow_NoSetupAdviceForSunsetAgent(t *testing.T) {
+	past := cli.AgentSunsetDate("gemini").Add(24 * time.Hour)
+	before := cli.AgentSunsetDate("gemini").Add(-24 * time.Hour)
+	gem := cli.LLM{Name: "gemini", Version: "0.58.0", Path: "/usr/local/bin/gemini"}
+	auth := authStatus{hint: "export GEMINI_API_KEY=... (free at https://example.invalid)"}
+
+	// Strings that only make sense for a CLI that still serves.
+	setupAdvice := []string{"GEMINI_API_KEY", "npm install", "gemini /auth", "reinstall"}
+
+	statuses := []struct {
+		name   string
+		status llmStatus
+	}{
+		{"not authed", statusNotAuthed},
+		{"not installed", statusNotInstalled},
+		{"broken install", statusBrokenInstall},
+	}
+
+	for _, st := range statuses {
+		t.Run(st.name+"/past sunset is quiet", func(t *testing.T) {
+			var b bytes.Buffer
+			printLLMRow(&b, gem, st.status, auth, "", false, past)
+			got := b.String()
+			for _, advice := range setupAdvice {
+				if strings.Contains(got, advice) {
+					t.Errorf("row offers %q for a CLI past its sunset — the sunset notice on the next line says it's excluded:\n%s", advice, got)
+				}
+			}
+			if !strings.Contains(got, "sunset") {
+				t.Errorf("row dropped the sunset notice, leaving no explanation for the missing advice:\n%s", got)
+			}
+		})
+
+		t.Run(st.name+"/force_after_sunset restores it", func(t *testing.T) {
+			var b bytes.Buffer
+			printLLMRow(&b, gem, st.status, auth, "", true, past)
+			if got := b.String(); !containsAnyOf(got, setupAdvice) {
+				t.Errorf("force_after_sunset runs this agent for real, so it needs setup advice:\n%s", got)
+			}
+		})
+
+		t.Run(st.name+"/before sunset is unchanged", func(t *testing.T) {
+			var b bytes.Buffer
+			printLLMRow(&b, gem, st.status, auth, "", false, before)
+			if got := b.String(); !containsAnyOf(got, setupAdvice) {
+				t.Errorf("agent still serves before its sunset; advice must not be suppressed:\n%s", got)
+			}
+		})
+	}
+
+	// A provider entry named `gemini` is someone's OpenAI-compatible
+	// endpoint, not Google's CLI, so no sunset gating applies to it.
+	t.Run("provider entry is never sunset-gated", func(t *testing.T) {
+		prov := cli.LLM{Name: "gemini", BaseURL: "http://192.0.2.10:11434/v1"}
+		if got := authFixHint(prov, auth, false, past); got != auth.hint {
+			t.Errorf("provider entry got sunset-gated: %q", got)
+		}
+		if sunsetSuppressesSetup(prov, false, past) {
+			t.Error("sunsetSuppressesSetup gated a provider entry")
+		}
+	})
+}
+
+func containsAnyOf(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
