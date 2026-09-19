@@ -822,3 +822,37 @@ func TestGeminiSunsetBanner_AtSunsetMidnightIsPostSunset(t *testing.T) {
 		t.Errorf("banner at sunset midnight must not still show the countdown:\n%s", out)
 	}
 }
+
+// TestAuthFixHint_SuppressedPastSunsetUnlessForced pins the fix that a
+// past-sunset CLI must not be sent after credentials. Pre-fix, doctor
+// printed "fix: export GEMINI_API_KEY=... (free at ...)" directly above
+// its own "✗ sunset: ... auto-disabled" line — two contradictory
+// instructions, the first useless because the vendor stopped serving.
+func TestAuthFixHint_SuppressedPastSunsetUnlessForced(t *testing.T) {
+	past := cli.AgentSunsetDate("gemini").Add(24 * time.Hour)
+	before := cli.AgentSunsetDate("gemini").Add(-24 * time.Hour)
+	hint := authStatus{hint: "export GEMINI_API_KEY=... (free at https://example.invalid)"}
+	gem := cli.LLM{Name: "gemini"}
+
+	got := authFixHint(gem, hint, false, past)
+	if strings.Contains(got, "GEMINI_API_KEY") {
+		t.Errorf("past sunset must not hand out credential instructions, got: %q", got)
+	}
+	if !strings.Contains(got, "sunset") {
+		t.Errorf("past-sunset hint should explain why there's nothing to fix, got: %q", got)
+	}
+
+	// force_after_sunset: the agent really runs, so it really needs the key.
+	if got := authFixHint(gem, hint, true, past); got != hint.hint {
+		t.Errorf("force_after_sunset must restore the real hint, got: %q", got)
+	}
+	// Before the cutoff the agent is live — normal hint.
+	if got := authFixHint(gem, hint, false, before); got != hint.hint {
+		t.Errorf("pre-sunset must use the real hint, got: %q", got)
+	}
+	// A provider entry named gemini is not Google's CLI — never gated.
+	prov := cli.LLM{Name: "gemini", BaseURL: "http://localhost:11434/v1"}
+	if got := authFixHint(prov, hint, false, past); got != hint.hint {
+		t.Errorf("provider entry must not be sunset-gated, got: %q", got)
+	}
+}

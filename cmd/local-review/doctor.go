@@ -434,7 +434,7 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 	case statusNotAuthed:
 		fmt.Fprintf(out, "⚠ %-15s v%-10s not authenticated\n", displayName, llm.Version)
 		fmt.Fprintf(out, "    installed: %s\n", llm.Path)
-		fmt.Fprintf(out, "    fix:       %s\n", auth.hint)
+		fmt.Fprintf(out, "    fix:       %s\n", authFixHint(llm, auth, forceAfterSunset, now))
 		if configuredModel != "" {
 			fmt.Fprintf(out, "    model:     %s\n", configuredModel)
 		}
@@ -511,6 +511,28 @@ func geminiSunsetBanner(out io.Writer, now time.Time, force bool) {
 	}
 	fmt.Fprintf(out, "    ✗ sunset:      Gemini CLI sunset %s — auto-disabled in the review fan-out.\n", dateStr)
 	fmt.Fprintln(out, "                   Migrate to Antigravity (`agy`), or set llms.gemini.force_after_sunset: true to override.")
+}
+
+// authFixHint picks the "fix:" line for an agent that isn't
+// authenticated.
+//
+// A CLI past its sunset gets no credential instructions: pre-fix, an
+// expired Gemini printed "fix: export GEMINI_API_KEY=... (free at ...)"
+// directly above "✗ sunset: ... auto-disabled in the review fan-out" —
+// two contradictory instructions in a row, the first of which buys the
+// user nothing because the vendor stopped serving. The sunset block
+// already states the real options (migrate, or force_after_sunset), so
+// this suppresses the hint instead of duplicating advice.
+//
+// force_after_sunset flips it back: that agent genuinely runs, so it
+// genuinely needs the credential. Provider entries (BaseURL set) are
+// never sunset-gated — a user-named `llms.gemini` pointing at an
+// OpenAI-compatible endpoint is not Google's CLI.
+func authFixHint(llm cli.LLM, auth authStatus, forceAfterSunset bool, now time.Time) string {
+	if llm.BaseURL == "" && cli.IsAgentSunset(llm.Name, now) && !forceAfterSunset {
+		return "none needed — this CLI is past its sunset and is excluded from the fan-out (see below)."
+	}
+	return auth.hint
 }
 
 func getDisplayName(name string) string {
