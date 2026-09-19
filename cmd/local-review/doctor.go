@@ -43,6 +43,9 @@ It detects:
 
 For each CLI, doctor prints one of:
   ✓ ready                — installed, version detected, authenticated
+  ⊘ excluded             — authenticated, but past its manufacturer sunset, so
+                           it sits out the fan-out (run it anyway with --only,
+                           or llms.<name>.force_after_sunset: true)
   ◐ experimental         — detected but excluded from the review fan-out (e.g. agy)
   ⚠ install broken       — binary in PATH but version probe failed
   ⚠ not authenticated    — installed and working, but no credentials/key found
@@ -174,7 +177,7 @@ func printLLMRows(w io.Writer, llms []cli.LLM, cfg config.Config, customEnvVars,
 		if c, ok := cfg.LLMs[llm.Name]; ok && c.ForceAfterSunset != nil {
 			force = *c.ForceAfterSunset
 		}
-		sunsetGated := sunsetExcludes(llm, force, now)
+		sunsetGated := cli.AgentExcludedBySunset(llm, force, now)
 
 		if cli.IsReviewCapable(llm.Name) && !sunsetGated {
 			reviewCapable++
@@ -467,7 +470,11 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 //     2026-06-18; Antigravity (agy) is the announced replacement").
 //   - Post-sunset, force=false → "Gemini CLI sunset 2026-06-18:
 //     auto-disabled in the review fan-out. Migrate to Antigravity
-//     (agy), or set llms.gemini.force_after_sunset: true to override".
+//     (agy). To run gemini anyway: --only gemini, or set
+//     llms.gemini.force_after_sunset: true for every run". Both
+//     overrides are named because --only really does run a sunset
+//     agent on its own (agentselect.selectOnly), and this banner is
+//     the only sunset line a ready row gets.
 //   - Post-sunset, force=true → "Gemini CLI sunset 2026-06-18:
 //     force_after_sunset is set — running anyway. Expect 401 / model-
 //     unavailable failures if Google has removed your tier".
@@ -486,24 +493,8 @@ func geminiSunsetBanner(out io.Writer, now time.Time, force bool) {
 		return
 	}
 	fmt.Fprintf(out, "    ✗ sunset:      Gemini CLI sunset %s — auto-disabled in the review fan-out.\n", dateStr)
-	fmt.Fprintln(out, "                   Migrate to Antigravity (`agy`), or set llms.gemini.force_after_sunset: true to override.")
-}
-
-// sunsetExcludes reports whether a passed manufacturer sunset keeps
-// this agent out of the DEFAULT review fan-out.
-//
-// One predicate for every caller on purpose: the summary's ready count,
-// the review-capable count, and each row's advice all have to agree
-// with what `internal/agentselect` does at run time. Inlining the check
-// per site is what let those rows disagree in the first place, and
-// `internal/pathsafe` is the standing lesson on duplicated checks
-// drifting apart.
-//
-// Provider entries (BaseURL set) are never sunset-gated — a user-named
-// `llms.gemini` pointing at an OpenAI-compatible endpoint is not
-// Google's CLI.
-func sunsetExcludes(llm cli.LLM, forceAfterSunset bool, now time.Time) bool {
-	return llm.BaseURL == "" && cli.IsAgentSunset(llm.Name, now) && !forceAfterSunset
+	fmt.Fprintln(out, "                   Migrate to Antigravity (`agy`). To run gemini anyway: `--only gemini`,")
+	fmt.Fprintln(out, "                   or set llms.gemini.force_after_sunset: true for every run.")
 }
 
 // printSunsetCaveat scopes whatever advice the row prints next, and
@@ -519,14 +510,18 @@ func sunsetExcludes(llm cli.LLM, forceAfterSunset bool, now time.Time) bool {
 // agentselect.selectOnly), so a user on that path really does need the
 // credential and the install steps, and naming only force_after_sunset
 // would hide a supported path. The advice stays — demoted behind a line
-// that says when it applies.
+// that names both paths and says the advice applies only to them.
+//
+// Self-contained on purpose: the sunset banner below repeats the same
+// two overrides in full, but that banner is gemini-specific, so a
+// second sunset agent (AgentSunsetDate calls itself a one-line edit)
+// would get this caveat with no banner under it.
 func printSunsetCaveat(out io.Writer, llm cli.LLM, forceAfterSunset bool, now time.Time) bool {
-	if !sunsetExcludes(llm, forceAfterSunset, now) {
+	if !cli.AgentExcludedBySunset(llm, forceAfterSunset, now) {
 		return false
 	}
-	fmt.Fprintln(out, "    excluded:  past its sunset — not in the default review fan-out (see below).")
-	fmt.Fprintf(out, "               What follows applies only if you run it anyway: `--only %s`,\n", llm.Name)
-	fmt.Fprintf(out, "               or llms.%s.force_after_sunset: true.\n", llm.Name)
+	fmt.Fprintln(out, "    excluded:  past its sunset — not in the default fan-out (see below). What")
+	fmt.Fprintf(out, "               follows applies only under `--only %s` / force_after_sunset.\n", llm.Name)
 	return true
 }
 
@@ -537,7 +532,7 @@ func printSunsetCaveat(out io.Writer, llm cli.LLM, forceAfterSunset bool, now ti
 // which already excludes it. The model-pin line goes too — pinning a
 // model on an agent that will not run is advice with no payoff.
 func printReadyRow(out io.Writer, llm cli.LLM, displayName string, auth authStatus, configuredModel string, forceAfterSunset bool, now time.Time) {
-	if sunsetExcludes(llm, forceAfterSunset, now) {
+	if cli.AgentExcludedBySunset(llm, forceAfterSunset, now) {
 		fmt.Fprintf(out, "⊘ %-15s v%-10s authenticated, but excluded (past sunset)\n", displayName, llm.Version)
 		fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
 		fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)

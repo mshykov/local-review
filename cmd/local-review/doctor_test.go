@@ -609,11 +609,19 @@ func TestGeminiSunsetBanner_PostSunsetDefaultAutoDisabled(t *testing.T) {
 	postSunset := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC) // ~2 weeks after
 	geminiSunsetBanner(&buf, postSunset, false /* force */)
 	out := buf.String()
+	// Both escape hatches, not just the config one. `--only gemini`
+	// runs a sunset agent on its own (agentselect.selectOnly treats the
+	// allow-list as an implicit force), and this banner is the ONLY
+	// sunset line a ready row prints — no caveat precedes it there — so
+	// a banner naming just force_after_sunset strands those users.
+	// Asserted as the literal flag and config key rather than the word
+	// "override", which a rewording can satisfy while dropping the
+	// instructions themselves.
 	for _, must := range []string{
 		"auto-disabled",
 		"2026-06-18",
+		"--only gemini",
 		"force_after_sunset",
-		"override",
 	} {
 		if !strings.Contains(out, must) {
 			t.Errorf("post-sunset (default) banner missing %q\nfull output:\n%s", must, out)
@@ -937,8 +945,8 @@ func TestPrintLLMRow_SunsetRowsScopeTheirAdvice(t *testing.T) {
 	// endpoint, not Google's CLI, so no sunset gating applies.
 	t.Run("provider entry is never sunset-gated", func(t *testing.T) {
 		prov := cli.LLM{Name: "gemini", BaseURL: "http://192.0.2.10:11434/v1"}
-		if sunsetExcludes(prov, false, past) {
-			t.Error("sunsetExcludes gated a provider entry")
+		if cli.AgentExcludedBySunset(prov, false, past) {
+			t.Error("AgentExcludedBySunset gated a provider entry")
 		}
 	})
 }
@@ -948,7 +956,7 @@ func TestPrintLLMRow_SunsetRowsScopeTheirAdvice(t *testing.T) {
 // the row advice, the ready count and the review-capable count cannot
 // drift apart — inlined copies are what let the auth row and the
 // install rows disagree in the first place.
-func TestSunsetExcludes_MatchesRuntimeFanOut(t *testing.T) {
+func TestAgentExcludedBySunset_DrivesEveryDoctorSunsetDecision(t *testing.T) {
 	past := cli.AgentSunsetDate("gemini").Add(24 * time.Hour)
 	before := cli.AgentSunsetDate("gemini").Add(-24 * time.Hour)
 
@@ -967,8 +975,8 @@ func TestSunsetExcludes_MatchesRuntimeFanOut(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := sunsetExcludes(tc.llm, tc.force, tc.now); got != tc.want {
-				t.Errorf("sunsetExcludes = %v, want %v", got, tc.want)
+			if got := cli.AgentExcludedBySunset(tc.llm, tc.force, tc.now); got != tc.want {
+				t.Errorf("AgentExcludedBySunset = %v, want %v", got, tc.want)
 			}
 		})
 	}

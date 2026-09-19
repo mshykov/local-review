@@ -49,6 +49,29 @@ func IsAgentSunset(name string, now time.Time) bool {
 	return !now.Before(sunset)
 }
 
+// AgentExcludedBySunset reports whether a passed manufacturer sunset
+// keeps this agent out of the DEFAULT review fan-out.
+//
+// This is THE sunset policy. `internal/agentselect` applies it to build
+// the runtime agent set, and `doctor` applies it to decide what a row
+// claims and what the ready counts include — so a doctor row that says
+// "ready" for an agent the runner silently drops is a contradiction
+// this function exists to make impossible. Both had their own copy
+// until they disagreed; `internal/pathsafe` is the standing lesson on
+// what duplicated predicates do over time.
+//
+// `force` is resolved by the caller (llms.<name>.force_after_sunset)
+// because this package deliberately doesn't import config.
+//
+// The CLI/provider distinction matters: a sunset is a property of a
+// *vendor binary*, NOT of a name. A user-defined provider entry that
+// happens to be called `llms.gemini:` (a self-hosted OpenAI-compatible
+// service, say) must never be auto-disabled, so BaseURL short-circuits
+// out regardless of name.
+func AgentExcludedBySunset(llm LLM, force bool, now time.Time) bool {
+	return llm.BaseURL == "" && IsAgentSunset(llm.Name, now) && !force
+}
+
 // DaysUntilAgentSunset returns the integer number of days between
 // `now` and the agent's sunset date, using *ceiling* semantics for
 // positive durations: any remaining time before the sunset rounds
