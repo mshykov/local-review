@@ -87,6 +87,19 @@ go install github.com/mshykov/local-review/cmd/local-review@latest
 
 Or grab a binary from [Releases](https://github.com/mshykov/local-review/releases).
 
+<a id="verify-what-you-downloaded"></a>
+**Verify what you downloaded (optional).** Every release artifact ships with signed
+[SLSA build provenance](https://slsa.dev/) (v0.17.4+), so you can prove a binary was built by
+this repo's release pipeline and not swapped somewhere along the way:
+
+```sh
+gh attestation verify local-review_darwin_arm64.tar.gz --repo mshykov/local-review
+```
+
+`install.sh` separately checks the SHA-256 manifest, which catches corruption and truncation.
+The attestation is the stronger claim — it covers *origin*, not just integrity. `brew` users
+get the same artifacts; the formula pins their checksums.
+
 **2. Authenticate at least one LLM.** Claude is the easiest free option:
 
 ```sh
@@ -94,7 +107,7 @@ npm install -g @anthropic-ai/claude-code
 claude login
 ```
 
-Or use Codex (ChatGPT Plus / OpenAI API), Copilot (GitHub Copilot subscription), or Gemini (free key — *sunset 2026-06-18; v0.15+ auto-disables in the fan-out on/after the cutoff*). Any combination works — every authenticated CLI joins the review automatically. `local-review doctor` shows the state.
+Or use Codex (ChatGPT Plus / OpenAI API), Copilot (GitHub Copilot subscription), or Gemini (*sunset: stopped serving 2026-06-18; v0.15+ auto-disables it in the fan-out*). Any combination works — every authenticated CLI joins the review automatically. `local-review doctor` shows the state.
 
 **Want a local-only or hybrid setup?** Add a provider entry under `llms.<name>:` with a `base_url:` pointing at any OpenAI-compatible endpoint (Ollama / vLLM / OpenAI / Anthropic / Mistral / DeepSeek / Kimi / Qwen / Together / Groq / OpenRouter). It runs alongside the CLI agents in the same fan-out — no separate config path:
 
@@ -202,7 +215,7 @@ local-review audit --topic security --with ollama
 | LLM | Free Option | Installation |
 |-----|-------------|--------------|
 | **Claude** | ✅ Free tier via `claude login` (claude.ai account) | `npm install -g @anthropic-ai/claude-code` |
-| **Gemini** *(sunset 2026-06-18 — v0.15+ auto-disables)* | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` |
+| **Gemini** *(stopped serving 2026-06-18 — v0.15+ auto-disables)* | ✅ Free API key from [Google AI Studio](https://aistudio.google.com/apikey) | `npm install -g @google/gemini-cli` |
 | **Codex** | ⚠️ ChatGPT Plus ($20/mo) **or** OpenAI API key (pay-per-token) | `npm install -g @openai/codex` |
 | **Copilot** | ⚠️ GitHub Copilot subscription (one Premium request per run) | `npm install -g @github/copilot` |
 | **Antigravity** *(detected — review integration experimental)* | Google OAuth (`agy` login) | `curl -fsSL --proto '=https' --proto-redir '=https' https://antigravity.google/cli/install.sh \| bash` (binary: `agy`) |
@@ -221,14 +234,14 @@ local-review audit --topic security --with ollama
 
 ```
 Reviewing feature/foo (abc1234) with 3 LLMs...
-  • claude_claude-haiku-4-5 (CLI v2.1.149) | timeout: 600s
-  • gemini_gemini-2.5-pro (CLI v0.43.0) | timeout: 600s
-  • codex_gpt-5.3-codex (CLI v0.133.0) | timeout: 600s
+  • claude_claude-sonnet-5 (CLI v2.1.207) | timeout: 600s
+  • codex_gpt-5.6-sol (CLI v0.146.0) | timeout: 600s
+  • copilot (CLI v1.0.75) | timeout: 600s
 
 Pre-flight (probing auth + capacity):
   claude   ✓ (3.5s)
-  gemini   ✗ timeout after 10s — Error: You have exhausted your capacity on this model.
   codex    ✓ (2.5s)
+  copilot  ✗ timeout after 10s — Error: You have exhausted your capacity on this model.
 Probed 3 LLMs in 10s.
 
 claude ✓ (58s) · 80.8k in / 5.4k out
@@ -533,7 +546,7 @@ These are queued and will land in priority order; ping the issue tracker if you 
      config_url: https://your-internal-host/local-review.yml
    ```
 2. **Structured JSON multi-LLM output** — the merger will emit markdown plus a JSON envelope so CI integrations don't have to text-scrape. Demand-pull: open an issue if you need it.
-3. **Cosign release signing** — `install.sh` already verifies SHA-256 checksums (defense against accidental corruption + basic tampering). Cosign signatures will add stronger supply-chain provenance: every release tarball signed via keyless OIDC at build time, verified by the installer against the GitHub Actions identity. Useful for enterprise installs that need to prove an artifact came from this repo's release pipeline and wasn't swapped at the channel/CDN layer.
+3. **Cosign signature files** — release artifacts already carry [signed SLSA build provenance](#verify-what-you-downloaded) (shipped in v0.17.4), which is what proves an artifact came from this repo's pipeline. Cosign would add detached `.sig` files alongside the tarballs, verifiable with the `cosign` CLI alone — useful where tooling expects that format rather than GitHub's attestation API.
 
 ## For organizations
 
@@ -545,7 +558,7 @@ Distributing to a few hundred engineers? Two patterns work:
      config_url: https://your-internal-host/local-review.yml
    ```
    (Org-config fetching is the next planned feature — see "On the roadmap" above; today, just commit the YAML to each repo.)
-2. **One install command in onboarding.** `curl -fsSL <install.sh> | sh` plus an env var = done.
+2. **One install command in onboarding.** `curl -fsSL --proto '=https' --proto-redir '=https' <install.sh> | sh` plus an env var = done.
 
 ## Privacy
 
