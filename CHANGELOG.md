@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.8] - 2026-09-19
+
+**Patch: `doctor` stops contradicting itself about a sunset agent.** Every row that offered the user something to *do* about the retired Gemini CLI — get a free API key, npm-install it, reinstall it — printed that instruction immediately above its own "auto-disabled in the review fan-out" notice. The advice is now scoped rather than deleted, because one path (`--only gemini`) really does still run it. No change to which agents review; the fan-out behaves exactly as before.
+
 ### Fixed
 
 - **`doctor` no longer tells you to set up a CLI it declares dead two lines later.** For a past-sunset Gemini it printed `fix: export GEMINI_API_KEY=... (free at https://aistudio.google.com/apikey)` directly above `✗ sunset: Gemini CLI sunset 2026-06-18 — auto-disabled in the review fan-out` — an unqualified instruction to go get a free key for a CLI the next line says won't run. The not-installed and broken-install rows did the same with `npm install -g @google/gemini-cli`, and a ready-but-sunset row wore the `✓ ready` glyph while the summary count already excluded it. The advice is **not** deleted, because it is still reachable: `--only gemini` runs a sunset agent without `force_after_sunset` (an explicit allow-list overrides the auto-disable), so a user on that path genuinely needs it. Instead it is scoped by an `excluded:` line that precedes it and names both overrides, and the ready row renders `⊘ ... authenticated, but excluded (past sunset)`. Found by dogfooding `doctor` while checking an unrelated Homebrew upgrade; the follow-on defects came out of the tool's own review of the first fix.
