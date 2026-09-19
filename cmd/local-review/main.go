@@ -401,8 +401,8 @@ func runUnifiedReview(ctx context.Context, sf *sharedFlags, mode git.Mode, ref s
 				configDisabled, strings.Join(configDisabled, ","))
 		}
 		for _, name := range sunsetDropped {
-			fmt.Fprintf(os.Stderr, "  - %s past manufacturer sunset (%s) — set llms.%s.force_after_sunset: true to override.\n",
-				name, cli.AgentSunsetDate(name).Format("2006-01-02"), name)
+			fmt.Fprintf(os.Stderr, "  - %s past manufacturer sunset (%s) — pass --only %s to run anyway, or set llms.%s.force_after_sunset: true.\n",
+				name, cli.AgentSunsetDate(name).Format("2006-01-02"), name, name)
 		}
 		fmt.Fprintln(os.Stderr, "  - Authenticate a CLI agent (`claude login`, `codex login`, `copilot login`, or `gemini /auth`)")
 		fmt.Fprintln(os.Stderr, "  - OR add a provider endpoint to your config:")

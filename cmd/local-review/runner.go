@@ -561,8 +561,8 @@ func printAgentRoster(active []cli.LLM, configDisabled, sunsetDropped []string, 
 			strings.Join(configDisabled, ", "), strings.Join(configDisabled, ","))
 	}
 	for _, name := range sunsetDropped {
-		fmt.Printf("  (skipped: %s — past manufacturer sunset %s; set `llms.%s.force_after_sunset: true` to override)\n",
-			name, cli.AgentSunsetDate(name).Format("2006-01-02"), name)
+		fmt.Printf("  (skipped: %s — past manufacturer sunset %s; pass `--only %s` to run anyway, or set `llms.%s.force_after_sunset: true`)\n",
+			name, cli.AgentSunsetDate(name).Format("2006-01-02"), name, name)
 	}
 	fmt.Println()
 }
