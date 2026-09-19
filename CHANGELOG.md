@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.6] - 2026-09-19
+
+**Patch: currency refresh.** The model IDs the tool *suggests* had quietly aged out — `local-review init` was writing names that 404 on first use — and the dependency/action pins had drifted behind. No behaviour changes beyond what `init` writes into a new config.
+
 ### Changed
 
 - **Refreshed the model IDs the tool suggests.** `local-review init`'s provider presets wrote `gpt-4o-mini` (OpenAI) and `claude-sonnet-4-6` (Anthropic) into every generated config, and the README / `examples/.local-review.yml` / doc comments echoed the same retired names — so a fresh `init` produced a config pointing at models a year out of date, and the Anthropic preset's own note warned that "a wrong name returns 404". Presets now default to `gpt-5.6-luna` (cost-optimised) and `claude-sonnet-5`, with the docs pointing at `gpt-5.6-sol` / `gpt-6-astra` and `claude-opus-5` for harder reviews, and `gemini-3.8-flash` in the Gemini example. Verified against the vendors' current model lists rather than assumed. The context-window floor in `preflight.go` is deliberately unchanged — 128K is still the conservative floor and moving it would change behaviour, not just wording.
