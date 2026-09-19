@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.7] - 2026-09-19
+
+**Patch: infrastructure and docs currency.** Moves CI onto Ubuntu 26.04 ahead of GitHub's automatic `ubuntu-latest` migration, and fixes four places where the README and website had drifted from what the code actually does. No changes to the binary's behaviour.
+
 ### Documentation
 
 - **README/site consistency pass.** Four real drifts, found by reading both against the code rather than against each other: (1) both the README and the site still described the Gemini sunset in the future tense and the site listed Gemini under "Free Options", three months after it stopped serving on 2026-06-18; (2) the README's roadmap promised supply-chain provenance as future work, but signed SLSA build provenance actually shipped in v0.17.4 — so users had no idea they could verify a download. The roadmap entry now covers only what's genuinely outstanding (cosign `.sig` files) and a new "Verify what you downloaded" section documents `gh attestation verify`; (3) the README's `For organizations` snippet showed `curl -fsSL <install.sh> | sh` without protocol pinning, contradicting docs/security.md's own rule that every copy-pasteable curl must pin it; (4) the sample review output named retired models — refreshed, and the pre-flight block in the same sample corrected so the agent list matches itself.
