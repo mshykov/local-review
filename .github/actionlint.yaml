@@ -1,0 +1,16 @@
+# actionlint config.
+#
+# actionlint validates `runs-on:` against a list of labels baked into its
+# own binary, so a runner image newer than the installed actionlint is
+# reported as "unknown label" even when GitHub already serves it. That is
+# exactly the case for ubuntu-26.04: actionlint 1.7.12 rejects it, while a
+# real job on this repo ran on `Image: ubuntu-26.04` (runner-images release
+# ubuntu26/20260907.131) before these pins were committed.
+#
+# `self-hosted-runner.labels` is actionlint's only hook for teaching it a
+# label it doesn't know; the runners here are GitHub-hosted, not
+# self-hosted. Drop this entry once actionlint ships ubuntu-26.04 in its
+# own list.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

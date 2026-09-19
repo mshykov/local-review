@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CI runners pinned to `ubuntu-26.04`.** GitHub is migrating the `ubuntu-latest` label to Ubuntu 26.04 between 2026-10-19 and 2026-11-19, which would have swapped the image under every workflow — including the release build — without warning. Pinning now makes the move deliberate and verifiable instead: a real job was run on the new image first (`Image: ubuntu-26.04`, runner-images `ubuntu26/20260907.131`) and passed before the pins landed. Low-risk by construction — nothing here installs OS packages (no `apt-get`), Go comes from `setup-go`, and the tools come from `go.mod` `tool` directives; the only system utilities used are `tar`, `zip`, `sha256sum` and `curl`. Matches how the repo already pins actions by SHA and Go by version. Note `release.yml` can only be exercised by an actual release, so its first real run on the new image is the next release.
+- **`.github/actionlint.yaml` added.** actionlint validates `runs-on:` against a list compiled into its own binary, so 1.7.12 rejects `ubuntu-26.04` as unknown even though GitHub already serves it. The config teaches it the label so the lint stays clean regardless of which actionlint version a contributor has installed; remove it once actionlint ships the label itself.
+
 ## [0.17.6] - 2026-09-19
 
 **Patch: currency refresh.** The model IDs the tool *suggests* had quietly aged out — `local-review init` was writing names that 404 on first use — and the dependency/action pins had drifted behind. No user-facing CLI behaviour changes beyond what `init` writes into a new config; the dependency and Action bumps move the build/release toolchain forward, which is a behaviour change for CI and the release pipeline rather than for the binary's users.
