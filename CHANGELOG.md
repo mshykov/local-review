@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.17.6] - 2026-09-19
 
-**Patch: currency refresh.** The model IDs the tool *suggests* had quietly aged out — `local-review init` was writing names that 404 on first use — and the dependency/action pins had drifted behind. No behaviour changes beyond what `init` writes into a new config.
+**Patch: currency refresh.** The model IDs the tool *suggests* had quietly aged out — `local-review init` was writing names that 404 on first use — and the dependency/action pins had drifted behind. No user-facing CLI behaviour changes beyond what `init` writes into a new config; the dependency and Action bumps move the build/release toolchain forward, which is a behaviour change for CI and the release pipeline rather than for the binary's users.
 
 ### Changed
 
