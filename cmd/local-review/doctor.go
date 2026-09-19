@@ -174,10 +174,7 @@ func printLLMRows(w io.Writer, llms []cli.LLM, cfg config.Config, customEnvVars,
 		if c, ok := cfg.LLMs[llm.Name]; ok && c.ForceAfterSunset != nil {
 			force = *c.ForceAfterSunset
 		}
-		// Sunset gate applies to CLI agents only — a user-named
-		// provider entry (`llms.gemini: { base_url: ... }`) is
-		// NOT a Google CLI subprocess and must not be auto-dropped.
-		sunsetGated := llm.BaseURL == "" && cli.IsAgentSunset(llm.Name, now) && !force
+		sunsetGated := sunsetExcludes(llm, force, now)
 
 		if cli.IsReviewCapable(llm.Name) && !sunsetGated {
 			reviewCapable++
@@ -382,14 +379,14 @@ func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 	return statusReady, auth
 }
 
-// printLLMRow emits one CLI's full diagnostic block. configuredModel
-// is the cfg.LLMs[name].Model value (or empty); for ready rows we
-// always print a model line — either the pinned value or a "vendor's
-// default" notice with a pin instruction — so users can tell "I
-// didn't pin one" apart from "config didn't load" at a glance, AND
-// know how to take control. For not-authed rows we still elide when
-// no model is pinned, since the row's primary signal is the auth fix
-// and the model line would be noise.
+// printLLMRow emits one CLI's full diagnostic block, dispatching to a
+// per-status renderer. configuredModel is the cfg.LLMs[name].Model
+// value (or empty); a ready row always prints a model line — the
+// pinned value, or a "vendor's default" notice with a pin instruction
+// — so users can tell "I didn't pin one" apart from "config didn't
+// load" at a glance, AND know how to take control. A not-authed row
+// elides it when nothing is pinned, since that row's primary signal is
+// the auth fix. A sunset-excluded row elides it too: see printReadyRow.
 func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string, forceAfterSunset bool, now time.Time) {
 	displayName := getDisplayName(llm.Name)
 
@@ -417,27 +414,10 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 
 	switch status {
 	case statusReady:
-		fmt.Fprintf(out, "✓ %-15s v%-10s ready\n", displayName, llm.Version)
-		fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
-		fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
-		if configuredModel != "" {
-			fmt.Fprintf(out, "    model:         %s\n", configuredModel)
-		} else {
-			// No pinned model — invoker doesn't pass --model and the
-			// vendor CLI picks its own default. Surface this with a
-			// pin-instruction so users debugging "why did claude run
-			// model X" know how to take control. Pre-fix said "(CLI
-			// default)" which was reported as a non-answer.
-			fmt.Fprintf(out, "    model:         vendor's default — pin via `llms.%s.model:` to override\n", llm.Name)
-		}
+		printReadyRow(out, llm, displayName, auth, configuredModel, forceAfterSunset, now)
 
 	case statusNotAuthed:
-		fmt.Fprintf(out, "⚠ %-15s v%-10s not authenticated\n", displayName, llm.Version)
-		fmt.Fprintf(out, "    installed: %s\n", llm.Path)
-		fmt.Fprintf(out, "    fix:       %s\n", authFixHint(llm, auth, forceAfterSunset, now))
-		if configuredModel != "" {
-			fmt.Fprintf(out, "    model:     %s\n", configuredModel)
-		}
+		printNotAuthedRow(out, llm, displayName, auth, configuredModel, forceAfterSunset, now)
 
 	case statusBrokenInstall:
 		printBrokenInstallRow(out, llm, displayName, forceAfterSunset, now)
@@ -509,70 +489,98 @@ func geminiSunsetBanner(out io.Writer, now time.Time, force bool) {
 	fmt.Fprintln(out, "                   Migrate to Antigravity (`agy`), or set llms.gemini.force_after_sunset: true to override.")
 }
 
-// authFixHint picks the "fix:" line for an agent that isn't
-// authenticated.
+// sunsetExcludes reports whether a passed manufacturer sunset keeps
+// this agent out of the DEFAULT review fan-out.
 //
-// A CLI past its sunset gets no credential instructions: pre-fix, an
-// expired Gemini printed "fix: export GEMINI_API_KEY=... (free at ...)"
-// directly above "✗ sunset: ... auto-disabled in the review fan-out" —
-// two contradictory instructions in a row, the first of which buys the
-// user nothing because the vendor stopped serving. The sunset block
-// already states the real options (migrate, or force_after_sunset), so
-// this suppresses the hint instead of duplicating advice.
+// One predicate for every caller on purpose: the summary's ready count,
+// the review-capable count, and each row's advice all have to agree
+// with what `internal/agentselect` does at run time. Inlining the check
+// per site is what let those rows disagree in the first place, and
+// `internal/pathsafe` is the standing lesson on duplicated checks
+// drifting apart.
 //
-// force_after_sunset flips it back: that agent genuinely runs, so it
-// genuinely needs the credential. Provider entries (BaseURL set) are
-// never sunset-gated — a user-named `llms.gemini` pointing at an
-// OpenAI-compatible endpoint is not Google's CLI.
-func authFixHint(llm cli.LLM, auth authStatus, forceAfterSunset bool, now time.Time) string {
-	if sunsetSuppressesSetup(llm, forceAfterSunset, now) {
-		return "none needed — this CLI is past its sunset and is excluded from the fan-out (see below)."
-	}
-	return auth.hint
-}
-
-// sunsetSuppressesSetup reports whether setup advice — credentials,
-// install steps, "reinstall the CLI" — should be withheld for this
-// agent because it is past its sunset.
-//
-// One predicate for every caller on purpose. The same check inlined at
-// each site is what let the auth row and the install rows disagree in
-// the first place, and `internal/pathsafe` is the standing lesson on
-// what duplicated checks do over time.
-//
-// force_after_sunset flips it off: that agent genuinely runs, so it
-// genuinely needs setting up. Provider entries (BaseURL set) are never
-// sunset-gated — a user-named `llms.gemini` pointing at an
-// OpenAI-compatible endpoint is not Google's CLI.
-func sunsetSuppressesSetup(llm cli.LLM, forceAfterSunset bool, now time.Time) bool {
+// Provider entries (BaseURL set) are never sunset-gated — a user-named
+// `llms.gemini` pointing at an OpenAI-compatible endpoint is not
+// Google's CLI.
+func sunsetExcludes(llm cli.LLM, forceAfterSunset bool, now time.Time) bool {
 	return llm.BaseURL == "" && cli.IsAgentSunset(llm.Name, now) && !forceAfterSunset
 }
 
-// printBrokenInstallRow renders the "install broken" row. A sunset CLI
-// gets no reinstall advice: repairing it buys the user nothing, since
-// the fan-out excludes it either way.
+// printSunsetCaveat scopes whatever advice the row prints next, and
+// reports whether it fired.
+//
+// Pre-fix, an expired Gemini printed "fix: export GEMINI_API_KEY=...
+// (free at ...)" directly above "✗ sunset: ... auto-disabled in the
+// review fan-out" — two contradictory instructions in a row, the first
+// sending the user after a free key for a CLI the second declares dead.
+//
+// Deleting the advice is the wrong correction: it is still reachable.
+// `--only gemini` treats its allow-list as an implicit force (see
+// agentselect.selectOnly), so a user on that path really does need the
+// credential and the install steps, and naming only force_after_sunset
+// would hide a supported path. The advice stays — demoted behind a line
+// that says when it applies.
+func printSunsetCaveat(out io.Writer, llm cli.LLM, forceAfterSunset bool, now time.Time) bool {
+	if !sunsetExcludes(llm, forceAfterSunset, now) {
+		return false
+	}
+	fmt.Fprintln(out, "    excluded:  past its sunset — not in the default review fan-out (see below).")
+	fmt.Fprintf(out, "               What follows applies only if you run it anyway: `--only %s`,\n", llm.Name)
+	fmt.Fprintf(out, "               or llms.%s.force_after_sunset: true.\n", llm.Name)
+	return true
+}
+
+// printReadyRow renders the "ready" row. A sunset agent stays out of
+// the fan-out however well it is installed and authenticated, so it
+// does not get the ✓ glyph: "✓ ready" sitting above "✗ sunset:
+// auto-disabled" contradicted both the banner and the summary count,
+// which already excludes it. The model-pin line goes too — pinning a
+// model on an agent that will not run is advice with no payoff.
+func printReadyRow(out io.Writer, llm cli.LLM, displayName string, auth authStatus, configuredModel string, forceAfterSunset bool, now time.Time) {
+	if sunsetExcludes(llm, forceAfterSunset, now) {
+		fmt.Fprintf(out, "⊘ %-15s v%-10s authenticated, but excluded (past sunset)\n", displayName, llm.Version)
+		fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
+		fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
+		return
+	}
+	fmt.Fprintf(out, "✓ %-15s v%-10s ready\n", displayName, llm.Version)
+	fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
+	fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
+	if configuredModel != "" {
+		fmt.Fprintf(out, "    model:         %s\n", configuredModel)
+		return
+	}
+	// No pinned model — the invoker doesn't pass --model and the vendor
+	// CLI picks its own default. Surfaced with a pin-instruction so
+	// users debugging "why did claude run model X" know how to take
+	// control. Pre-fix said "(CLI default)", reported as a non-answer.
+	fmt.Fprintf(out, "    model:         vendor's default — pin via `llms.%s.model:` to override\n", llm.Name)
+}
+
+// printNotAuthedRow renders the "not authenticated" row.
+func printNotAuthedRow(out io.Writer, llm cli.LLM, displayName string, auth authStatus, configuredModel string, forceAfterSunset bool, now time.Time) {
+	fmt.Fprintf(out, "⚠ %-15s v%-10s not authenticated\n", displayName, llm.Version)
+	fmt.Fprintf(out, "    installed: %s\n", llm.Path)
+	printSunsetCaveat(out, llm, forceAfterSunset, now)
+	fmt.Fprintf(out, "    fix:       %s\n", auth.hint)
+	if configuredModel != "" {
+		fmt.Fprintf(out, "    model:     %s\n", configuredModel)
+	}
+}
+
+// printBrokenInstallRow renders the "install broken" row.
 func printBrokenInstallRow(out io.Writer, llm cli.LLM, displayName string, forceAfterSunset bool, now time.Time) {
 	fmt.Fprintf(out, "⚠ %-15s install broken\n", displayName)
 	fmt.Fprintf(out, "    found at:  %s\n", llm.Path)
-	if sunsetSuppressesSetup(llm, forceAfterSunset, now) {
-		fmt.Fprintln(out, "    note:      version probe failed — but this CLI is past its sunset and is excluded from the fan-out (see below), so there is nothing to repair.")
-		return
-	}
+	printSunsetCaveat(out, llm, forceAfterSunset, now)
 	fmt.Fprintln(out, "    note:      version probe failed; reinstall the CLI")
 	printInstallInstructions(out, llm.Name)
 }
 
-// printNotInstalledRow renders the "not installed" row. A sunset CLI
-// gets no install steps — pre-fix this printed "install: npm install -g
-// @google/gemini-cli" and "then: export GEMINI_API_KEY=... (free at
-// ...)" directly above "✗ sunset: ... auto-disabled", sending the user
-// to set up a CLI the next line declares dead.
+// printNotInstalledRow renders the "not installed" row.
 func printNotInstalledRow(out io.Writer, llm cli.LLM, displayName string, forceAfterSunset bool, now time.Time) {
 	fmt.Fprintf(out, "✗ %-15s not installed\n", displayName)
-	if sunsetSuppressesSetup(llm, forceAfterSunset, now) {
-		fmt.Fprintln(out, "    note:      nothing to install — this CLI is past its sunset and is excluded from the fan-out (see below).")
-		return
-	}
+	printSunsetCaveat(out, llm, forceAfterSunset, now)
 	printInstallInstructions(out, llm.Name)
 }
 

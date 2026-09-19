@@ -823,118 +823,153 @@ func TestGeminiSunsetBanner_AtSunsetMidnightIsPostSunset(t *testing.T) {
 	}
 }
 
-// TestAuthFixHint_SuppressedPastSunsetUnlessForced pins the fix that a
-// past-sunset CLI must not be sent after credentials. Pre-fix, doctor
-// printed "fix: export GEMINI_API_KEY=... (free at ...)" directly above
-// its own "✗ sunset: ... auto-disabled" line — two contradictory
-// instructions, the first useless because the vendor stopped serving.
-func TestAuthFixHint_SuppressedPastSunsetUnlessForced(t *testing.T) {
-	past := cli.AgentSunsetDate("gemini").Add(24 * time.Hour)
-	before := cli.AgentSunsetDate("gemini").Add(-24 * time.Hour)
-	hint := authStatus{hint: "export GEMINI_API_KEY=... (free at https://example.invalid)"}
-	gem := cli.LLM{Name: "gemini"}
-
-	got := authFixHint(gem, hint, false, past)
-	if strings.Contains(got, "GEMINI_API_KEY") {
-		t.Errorf("past sunset must not hand out credential instructions, got: %q", got)
-	}
-	if !strings.Contains(got, "sunset") {
-		t.Errorf("past-sunset hint should explain why there's nothing to fix, got: %q", got)
-	}
-
-	// force_after_sunset: the agent really runs, so it really needs the key.
-	if got := authFixHint(gem, hint, true, past); got != hint.hint {
-		t.Errorf("force_after_sunset must restore the real hint, got: %q", got)
-	}
-	// Before the cutoff the agent is live — normal hint.
-	if got := authFixHint(gem, hint, false, before); got != hint.hint {
-		t.Errorf("pre-sunset must use the real hint, got: %q", got)
-	}
-	// A provider entry named gemini is not Google's CLI — never gated.
-	prov := cli.LLM{Name: "gemini", BaseURL: "http://localhost:11434/v1"}
-	if got := authFixHint(prov, hint, false, past); got != hint.hint {
-		t.Errorf("provider entry must not be sunset-gated, got: %q", got)
-	}
-}
-
-// TestPrintLLMRow_NoSetupAdviceForSunsetAgent locks the whole row, not
-// just the hint helper: every status that offers the user something to
-// *do* about an agent must go quiet once that agent is past its sunset.
+// TestPrintLLMRow_SunsetRowsScopeTheirAdvice pins the shape of a
+// past-sunset row.
 //
-// The regression this guards is a row that contradicts itself — "export
-// GEMINI_API_KEY=... (free at ...)" or "npm install -g @google/gemini-cli"
-// printed immediately above "✗ sunset: ... auto-disabled in the review
-// fan-out". Suppressing it in one status and not the others is how the
-// first fix shipped; the helper-level test passed while two rows still
-// sent users to set up a dead CLI.
-func TestPrintLLMRow_NoSetupAdviceForSunsetAgent(t *testing.T) {
+// Two defects are encoded here, and they pull in opposite directions.
+//
+// The first: doctor printed "fix: export GEMINI_API_KEY=... (free at
+// ...)" directly above its own "✗ sunset: ... auto-disabled in the
+// review fan-out" — an unqualified imperative to go get a free key for
+// a CLI the next line declares dead. The install and broken-install
+// rows did the same with "npm install -g @google/gemini-cli".
+//
+// The second showed up in the fix for the first: deleting the advice
+// loses information a real user needs, because `--only gemini` runs a
+// sunset agent WITHOUT force_after_sunset (agentselect.selectOnly
+// treats the allow-list as an implicit force). "nothing to install" is
+// simply false for anyone on that path.
+//
+// So the invariant is neither "advice" nor "no advice": the advice must
+// survive, and it must be scoped by a caveat naming BOTH override
+// paths. A test asserting only its absence would pass on a row that
+// silently strands `--only` users.
+func TestPrintLLMRow_SunsetRowsScopeTheirAdvice(t *testing.T) {
 	past := cli.AgentSunsetDate("gemini").Add(24 * time.Hour)
 	before := cli.AgentSunsetDate("gemini").Add(-24 * time.Hour)
-	gem := cli.LLM{Name: "gemini", Version: "0.58.0", Path: "/usr/local/bin/gemini"}
-	auth := authStatus{hint: "export GEMINI_API_KEY=... (free at https://example.invalid)"}
+	gem := cli.LLM{Name: "gemini", Version: "0.58.0", Path: "/opt/homebrew/bin/gemini"}
+	auth := authStatus{detail: "GEMINI_API_KEY", hint: "export GEMINI_API_KEY=... (free at https://example.invalid)"}
 
-	// Strings that only make sense for a CLI that still serves.
-	setupAdvice := []string{"GEMINI_API_KEY", "npm install", "gemini /auth", "reinstall"}
+	row := func(status llmStatus, force bool, now time.Time) string {
+		var b bytes.Buffer
+		printLLMRow(&b, gem, status, auth, "", force, now)
+		return b.String()
+	}
 
-	statuses := []struct {
+	// Each status, and the advice it must keep offering.
+	advisory := []struct {
 		name   string
 		status llmStatus
+		advice string
 	}{
-		{"not authed", statusNotAuthed},
-		{"not installed", statusNotInstalled},
-		{"broken install", statusBrokenInstall},
+		{"not authed", statusNotAuthed, "GEMINI_API_KEY"},
+		{"not installed", statusNotInstalled, "npm install"},
+		{"broken install", statusBrokenInstall, "npm install"},
 	}
 
-	for _, st := range statuses {
-		t.Run(st.name+"/past sunset is quiet", func(t *testing.T) {
-			var b bytes.Buffer
-			printLLMRow(&b, gem, st.status, auth, "", false, past)
-			got := b.String()
-			for _, advice := range setupAdvice {
-				if strings.Contains(got, advice) {
-					t.Errorf("row offers %q for a CLI past its sunset — the sunset notice on the next line says it's excluded:\n%s", advice, got)
-				}
+	for _, tc := range advisory {
+		t.Run(tc.name+"/past sunset scopes but keeps the advice", func(t *testing.T) {
+			got := row(tc.status, false, past)
+			if !strings.Contains(got, tc.advice) {
+				t.Errorf("advice %q was dropped — `--only gemini` still needs it:\n%s", tc.advice, got)
 			}
-			if !strings.Contains(got, "sunset") {
-				t.Errorf("row dropped the sunset notice, leaving no explanation for the missing advice:\n%s", got)
+			// Both override paths, or the row strands one set of users.
+			if !strings.Contains(got, "--only gemini") {
+				t.Errorf("caveat omits the `--only` override, the path that needs no config:\n%s", got)
 			}
-		})
-
-		t.Run(st.name+"/force_after_sunset restores it", func(t *testing.T) {
-			var b bytes.Buffer
-			printLLMRow(&b, gem, st.status, auth, "", true, past)
-			if got := b.String(); !containsAnyOf(got, setupAdvice) {
-				t.Errorf("force_after_sunset runs this agent for real, so it needs setup advice:\n%s", got)
+			if !strings.Contains(got, "force_after_sunset") {
+				t.Errorf("caveat omits the force_after_sunset override:\n%s", got)
+			}
+			// The caveat has to come BEFORE the advice it qualifies;
+			// after it, the row still reads as an unconditional
+			// instruction until the user gets to the bottom.
+			if strings.Index(got, "excluded:") > strings.Index(got, tc.advice) {
+				t.Errorf("caveat must precede the advice it scopes:\n%s", got)
 			}
 		})
 
-		t.Run(st.name+"/before sunset is unchanged", func(t *testing.T) {
-			var b bytes.Buffer
-			printLLMRow(&b, gem, st.status, auth, "", false, before)
-			if got := b.String(); !containsAnyOf(got, setupAdvice) {
-				t.Errorf("agent still serves before its sunset; advice must not be suppressed:\n%s", got)
+		t.Run(tc.name+"/force_after_sunset drops the caveat", func(t *testing.T) {
+			got := row(tc.status, true, past)
+			if strings.Contains(got, "excluded:") {
+				t.Errorf("forced agent genuinely runs; advice must not be qualified:\n%s", got)
+			}
+			if !strings.Contains(got, tc.advice) {
+				t.Errorf("forced agent still needs %q:\n%s", tc.advice, got)
+			}
+		})
+
+		t.Run(tc.name+"/before sunset is untouched", func(t *testing.T) {
+			got := row(tc.status, false, before)
+			if strings.Contains(got, "excluded:") {
+				t.Errorf("agent still serves before its sunset:\n%s", got)
 			}
 		})
 	}
+
+	// A ready sunset agent is the one row that must NOT keep its
+	// advice: it is installed and authenticated, so there is nothing to
+	// set up — but it still will not review. "✓ ready" above "✗ sunset:
+	// auto-disabled" contradicted both the banner and the summary
+	// count, which already excludes it.
+	t.Run("ready/past sunset is not claimed ready", func(t *testing.T) {
+		got := row(statusReady, false, past)
+		if strings.Contains(got, "✓") {
+			t.Errorf("sunset agent still wears the ready glyph:\n%s", got)
+		}
+		if !strings.Contains(got, "excluded") {
+			t.Errorf("row gives no reason for the missing ready glyph:\n%s", got)
+		}
+		if strings.Contains(got, "pin via") {
+			t.Errorf("pinning a model on an agent that won't run is advice with no payoff:\n%s", got)
+		}
+		if !strings.Contains(got, "GEMINI_API_KEY") {
+			t.Errorf("row dropped the inventory fact that it IS authenticated:\n%s", got)
+		}
+	})
+
+	t.Run("ready/before sunset is unchanged", func(t *testing.T) {
+		if got := row(statusReady, false, before); !strings.Contains(got, "✓") || !strings.Contains(got, "pin via") {
+			t.Errorf("pre-sunset ready row regressed:\n%s", got)
+		}
+	})
 
 	// A provider entry named `gemini` is someone's OpenAI-compatible
-	// endpoint, not Google's CLI, so no sunset gating applies to it.
+	// endpoint, not Google's CLI, so no sunset gating applies.
 	t.Run("provider entry is never sunset-gated", func(t *testing.T) {
 		prov := cli.LLM{Name: "gemini", BaseURL: "http://192.0.2.10:11434/v1"}
-		if got := authFixHint(prov, auth, false, past); got != auth.hint {
-			t.Errorf("provider entry got sunset-gated: %q", got)
-		}
-		if sunsetSuppressesSetup(prov, false, past) {
-			t.Error("sunsetSuppressesSetup gated a provider entry")
+		if sunsetExcludes(prov, false, past) {
+			t.Error("sunsetExcludes gated a provider entry")
 		}
 	})
 }
 
-func containsAnyOf(s string, subs []string) bool {
-	for _, sub := range subs {
-		if strings.Contains(s, sub) {
-			return true
-		}
+// TestSunsetExcludes_MatchesRuntimeFanOut pins the predicate behind
+// every sunset decision doctor makes. It is one function precisely so
+// the row advice, the ready count and the review-capable count cannot
+// drift apart — inlined copies are what let the auth row and the
+// install rows disagree in the first place.
+func TestSunsetExcludes_MatchesRuntimeFanOut(t *testing.T) {
+	past := cli.AgentSunsetDate("gemini").Add(24 * time.Hour)
+	before := cli.AgentSunsetDate("gemini").Add(-24 * time.Hour)
+
+	cases := []struct {
+		name  string
+		llm   cli.LLM
+		force bool
+		now   time.Time
+		want  bool
+	}{
+		{"past sunset, unforced", cli.LLM{Name: "gemini"}, false, past, true},
+		{"past sunset, forced", cli.LLM{Name: "gemini"}, true, past, false},
+		{"before sunset", cli.LLM{Name: "gemini"}, false, before, false},
+		{"provider entry", cli.LLM{Name: "gemini", BaseURL: "http://192.0.2.10:11434/v1"}, false, past, false},
+		{"agent with no sunset", cli.LLM{Name: "claude"}, false, past, false},
 	}
-	return false
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sunsetExcludes(tc.llm, tc.force, tc.now); got != tc.want {
+				t.Errorf("sunsetExcludes = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
