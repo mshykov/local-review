@@ -561,8 +561,8 @@ func printAgentRoster(active []cli.LLM, configDisabled, sunsetDropped []string, 
 			strings.Join(configDisabled, ", "), strings.Join(configDisabled, ","))
 	}
 	for _, name := range sunsetDropped {
-		fmt.Printf("  (skipped: %s — past manufacturer sunset %s; set `llms.%s.force_after_sunset: true` to override)\n",
-			name, cli.AgentSunsetDate(name).Format("2006-01-02"), name)
+		fmt.Printf("  (skipped: %s — past manufacturer sunset %s; pass `--only %s` to run anyway, or set `llms.%s.force_after_sunset: true`)\n",
+			name, cli.AgentSunsetDate(name).Format("2006-01-02"), name, name)
 	}
 	fmt.Println()
 }
@@ -1117,9 +1117,9 @@ func sortByRoster(results []multi.ReviewResult, available []cli.LLM) []multi.Rev
 // Order rationale: claude and codex are the proven merge workhorses
 // (since v0.5). copilot ranks next — it produces clean mergeable
 // output (unlike antigravity) and is a current, supported agent.
-// gemini is LAST because it's deprecated (Google stops serving it
-// 2026-06-18); a default run shouldn't lean on a tool that's about to
-// go away, even though it's the nominally "free" option. (This is
+// gemini is LAST because Google stopped serving it on 2026-06-18;
+// it only reaches this list at all when force_after_sunset is set, so
+// a default run never leans on it despite its nominally "free" tier. (This is
 // only the auto fallback — `--merge-with`/`merge.preferred_llm`
 // override it, and it merely picks the merger, not the reviewer set.)
 //

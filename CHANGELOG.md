@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`doctor` no longer tells you to set up a CLI it declares dead two lines later.** For a past-sunset Gemini it printed `fix: export GEMINI_API_KEY=... (free at https://aistudio.google.com/apikey)` directly above `✗ sunset: Gemini CLI sunset 2026-06-18 — auto-disabled in the review fan-out` — an unqualified instruction to go get a free key for a CLI the next line says won't run. The not-installed and broken-install rows did the same with `npm install -g @google/gemini-cli`, and a ready-but-sunset row wore the `✓ ready` glyph while the summary count already excluded it. The advice is **not** deleted, because it is still reachable: `--only gemini` runs a sunset agent without `force_after_sunset` (an explicit allow-list overrides the auto-disable), so a user on that path genuinely needs it. Instead it is scoped by an `excluded:` line that precedes it and names both overrides, and the ready row renders `⊘ ... authenticated, but excluded (past sunset)`. Found by dogfooding `doctor` while checking an unrelated Homebrew upgrade; the follow-on defects came out of the tool's own review of the first fix.
+- **Both supported overrides are now named everywhere one is.** The sunset banner, the runtime "skipped" line, the "No active LLMs" hint, and the README mentioned only `llms.<name>.force_after_sunset`, so `--only <name>` — the override that needs no config at all — went unadvertised. The runtime lines sat directly below a config-disabled message that already used the `--only` idiom.
+- **One sunset policy instead of two.** `internal/agentselect` (which decides what actually runs) and `doctor` (which tells the user what will run) each had their own copy of the same three conditions — the exact setup that let doctor's rows contradict the fan-out. The rule now lives once as `cli.AgentExcludedBySunset`, beside the sunset dates it reads; `agentselect` keeps only the config lookup. `--only` overriding a passed sunset also gained direct selector coverage, which the design depends on and nothing had asserted.
+
+### Documentation
+
+- **Sunset wording caught up with the calendar.** Three months after the cutoff, `doctor --help`, the README's supported-LLM and auth tables, the site's Gemini card (a green border and a `✓ FREE` badge), and several code comments still described the Gemini sunset in the present or future tense — one README paragraph still ended by advising readers to "keep using Gemini (until the cutoff)". The card gets its own sunset state, and `doctor --help`'s status list — advertised as exhaustive — learned `⊘ excluded`. CHANGELOG entries and the README's "what's new in v0.11" block are deliberately untouched: those record what was true at the time.
+
 ## [0.17.7] - 2026-09-19
 
 **Patch: infrastructure and docs currency.** Moves CI onto Ubuntu 26.04 ahead of GitHub's automatic `ubuntu-latest` migration, and fixes four places where the README and website had drifted from what the code actually does. No changes to the binary's behaviour.

@@ -188,33 +188,18 @@ func selectDefault(detected []cli.LLM, ready map[string]bool, cfg config.Config,
 	return active, configDisabled, sunsetDropped
 }
 
-// isSunsetAndNotForced returns true when the agent's manufacturer
-// sunset date has passed AND the user has NOT explicitly opted
-// in via llms.<name>.force_after_sunset. Today only the Gemini CLI
-// has a sunset; the predicate is no-op for everything else.
-//
-// The CLI/provider distinction matters: a sunset is a property of
-// a *vendor binary* (Google's Gemini CLI binary stops serving on
-// 2026-06-18), NOT of a name. A user-defined provider entry that
-// happens to be called `llms.gemini:` (e.g. a self-hosted Gemini-
-// compatible service) must NOT be auto-disabled. The
-// `llm.BaseURL == ""` guard restricts the check to CLI subprocess
-// agents — provider agents short-circuit out regardless of name.
-// (v0.15 pre-release QA caught this with codex.)
+// isSunsetAndNotForced resolves llms.<name>.force_after_sunset out of
+// config and defers to cli.AgentExcludedBySunset for the policy itself.
+// Config resolution is all that belongs here: doctor answers the same
+// question about the same agents, and a second copy of the rule is how
+// its rows came to disagree with what this package actually selects.
+// (v0.15 pre-release QA caught the provider-name case here with codex.)
 func isSunsetAndNotForced(llm cli.LLM, cfg config.Config, now time.Time) bool {
-	if llm.BaseURL != "" {
-		// Provider agent (Ollama / vLLM / OpenAI-compat HTTP). The
-		// manufacturer-sunset concept doesn't apply — the user
-		// controls the endpoint.
-		return false
+	var force bool
+	if c, ok := cfg.LLMs[llm.Name]; ok && c.ForceAfterSunset != nil {
+		force = *c.ForceAfterSunset
 	}
-	if !cli.IsAgentSunset(llm.Name, now) {
-		return false
-	}
-	if c, ok := cfg.LLMs[llm.Name]; ok && c.ForceAfterSunset != nil && *c.ForceAfterSunset {
-		return false
-	}
-	return true
+	return cli.AgentExcludedBySunset(llm, force, now)
 }
 
 // ExperimentalOnlyNames returns the --only entries that name a

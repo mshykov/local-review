@@ -37,12 +37,15 @@ func doctorCmd() *cobra.Command {
 
 It detects:
   - Claude CLI (claude) — auth via 'claude login' or ANTHROPIC_API_KEY
-  - Gemini CLI (gemini) — auth via GEMINI_API_KEY (preferred) or 'gemini /auth' (Google OAuth). DEPRECATED: stops serving 2026-06-18; migrate to Antigravity.
+  - Gemini CLI (gemini) — auth via GEMINI_API_KEY (preferred) or 'gemini /auth' (Google OAuth). SUNSET: stopped serving 2026-06-18; migrate to Antigravity.
   - OpenAI Codex CLI (codex) — auth via 'codex login' (ChatGPT Plus) or OPENAI_API_KEY
   - Antigravity CLI (agy) — Google's Gemini-CLI successor; auth via Google OAuth ('agy' to log in)
 
 For each CLI, doctor prints one of:
   ✓ ready                — installed, version detected, authenticated
+  ⊘ excluded             — authenticated, but past its manufacturer sunset, so
+                           it sits out the fan-out (run it anyway with --only,
+                           or llms.<name>.force_after_sunset: true)
   ◐ experimental         — detected but excluded from the review fan-out (e.g. agy)
   ⚠ install broken       — binary in PATH but version probe failed
   ⚠ not authenticated    — installed and working, but no credentials/key found
@@ -174,10 +177,7 @@ func printLLMRows(w io.Writer, llms []cli.LLM, cfg config.Config, customEnvVars,
 		if c, ok := cfg.LLMs[llm.Name]; ok && c.ForceAfterSunset != nil {
 			force = *c.ForceAfterSunset
 		}
-		// Sunset gate applies to CLI agents only — a user-named
-		// provider entry (`llms.gemini: { base_url: ... }`) is
-		// NOT a Google CLI subprocess and must not be auto-dropped.
-		sunsetGated := llm.BaseURL == "" && cli.IsAgentSunset(llm.Name, now) && !force
+		sunsetGated := cli.AgentExcludedBySunset(llm, force, now)
 
 		if cli.IsReviewCapable(llm.Name) && !sunsetGated {
 			reviewCapable++
@@ -382,14 +382,14 @@ func classify(llm cli.LLM, customEnvVar string) (llmStatus, authStatus) {
 	return statusReady, auth
 }
 
-// printLLMRow emits one CLI's full diagnostic block. configuredModel
-// is the cfg.LLMs[name].Model value (or empty); for ready rows we
-// always print a model line — either the pinned value or a "vendor's
-// default" notice with a pin instruction — so users can tell "I
-// didn't pin one" apart from "config didn't load" at a glance, AND
-// know how to take control. For not-authed rows we still elide when
-// no model is pinned, since the row's primary signal is the auth fix
-// and the model line would be noise.
+// printLLMRow emits one CLI's full diagnostic block, dispatching to a
+// per-status renderer. configuredModel is the cfg.LLMs[name].Model
+// value (or empty); a ready row always prints a model line — the
+// pinned value, or a "vendor's default" notice with a pin instruction
+// — so users can tell "I didn't pin one" apart from "config didn't
+// load" at a glance, AND know how to take control. A not-authed row
+// elides it when nothing is pinned, since that row's primary signal is
+// the auth fix. A sunset-excluded row elides it too: see printReadyRow.
 func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, configuredModel string, forceAfterSunset bool, now time.Time) {
 	displayName := getDisplayName(llm.Name)
 
@@ -417,33 +417,13 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 
 	switch status {
 	case statusReady:
-		fmt.Fprintf(out, "✓ %-15s v%-10s ready\n", displayName, llm.Version)
-		fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
-		fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
-		if configuredModel != "" {
-			fmt.Fprintf(out, "    model:         %s\n", configuredModel)
-		} else {
-			// No pinned model — invoker doesn't pass --model and the
-			// vendor CLI picks its own default. Surface this with a
-			// pin-instruction so users debugging "why did claude run
-			// model X" know how to take control. Pre-fix said "(CLI
-			// default)" which was reported as a non-answer.
-			fmt.Fprintf(out, "    model:         vendor's default — pin via `llms.%s.model:` to override\n", llm.Name)
-		}
+		printReadyRow(out, llm, displayName, auth, configuredModel, forceAfterSunset, now)
 
 	case statusNotAuthed:
-		fmt.Fprintf(out, "⚠ %-15s v%-10s not authenticated\n", displayName, llm.Version)
-		fmt.Fprintf(out, "    installed: %s\n", llm.Path)
-		fmt.Fprintf(out, "    fix:       %s\n", auth.hint)
-		if configuredModel != "" {
-			fmt.Fprintf(out, "    model:     %s\n", configuredModel)
-		}
+		printNotAuthedRow(out, llm, displayName, auth, configuredModel, forceAfterSunset, now)
 
 	case statusBrokenInstall:
-		fmt.Fprintf(out, "⚠ %-15s install broken\n", displayName)
-		fmt.Fprintf(out, "    found at:  %s\n", llm.Path)
-		fmt.Fprintln(out, "    note:      version probe failed; reinstall the CLI")
-		printInstallInstructions(out, llm.Name)
+		printBrokenInstallRow(out, llm, displayName, forceAfterSunset, now)
 
 	case statusExperimental:
 		// Detected and usable as an interactive agent, but excluded
@@ -460,11 +440,10 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 		fmt.Fprintln(out, "                   fan-out. Tracked for a future release.")
 
 	case statusNotInstalled:
-		fmt.Fprintf(out, "✗ %-15s not installed\n", displayName)
-		printInstallInstructions(out, llm.Name)
+		printNotInstalledRow(out, llm, displayName, forceAfterSunset, now)
 	}
 
-	// Gemini sunset notice. Google's Gemini CLI stops serving
+	// Gemini sunset notice. Google's Gemini CLI stopped serving
 	// Pro/Ultra/free-tier requests on 2026-06-18 (`cli.GeminiSunsetDate`);
 	// Antigravity (`agy`) is the replacement.
 	//
@@ -491,7 +470,11 @@ func printLLMRow(out io.Writer, llm cli.LLM, status llmStatus, auth authStatus, 
 //     2026-06-18; Antigravity (agy) is the announced replacement").
 //   - Post-sunset, force=false → "Gemini CLI sunset 2026-06-18:
 //     auto-disabled in the review fan-out. Migrate to Antigravity
-//     (agy), or set llms.gemini.force_after_sunset: true to override".
+//     (agy). To run gemini anyway: --only gemini, or set
+//     llms.gemini.force_after_sunset: true for every run". Both
+//     overrides are named because --only really does run a sunset
+//     agent on its own (agentselect.selectOnly), and this banner is
+//     the only sunset line a ready row gets.
 //   - Post-sunset, force=true → "Gemini CLI sunset 2026-06-18:
 //     force_after_sunset is set — running anyway. Expect 401 / model-
 //     unavailable failures if Google has removed your tier".
@@ -510,7 +493,90 @@ func geminiSunsetBanner(out io.Writer, now time.Time, force bool) {
 		return
 	}
 	fmt.Fprintf(out, "    ✗ sunset:      Gemini CLI sunset %s — auto-disabled in the review fan-out.\n", dateStr)
-	fmt.Fprintln(out, "                   Migrate to Antigravity (`agy`), or set llms.gemini.force_after_sunset: true to override.")
+	fmt.Fprintln(out, "                   Migrate to Antigravity (`agy`). To run gemini anyway: `--only gemini`,")
+	fmt.Fprintln(out, "                   or set llms.gemini.force_after_sunset: true for every run.")
+}
+
+// printSunsetCaveat scopes whatever advice the row prints next, and
+// reports whether it fired.
+//
+// Pre-fix, an expired Gemini printed "fix: export GEMINI_API_KEY=...
+// (free at ...)" directly above "✗ sunset: ... auto-disabled in the
+// review fan-out" — two contradictory instructions in a row, the first
+// sending the user after a free key for a CLI the second declares dead.
+//
+// Deleting the advice is the wrong correction: it is still reachable.
+// `--only gemini` treats its allow-list as an implicit force (see
+// agentselect.selectOnly), so a user on that path really does need the
+// credential and the install steps, and naming only force_after_sunset
+// would hide a supported path. The advice stays — demoted behind a line
+// that names both paths and says the advice applies only to them.
+//
+// Self-contained on purpose: the sunset banner below repeats the same
+// two overrides in full, but that banner is gemini-specific, so a
+// second sunset agent (AgentSunsetDate calls itself a one-line edit)
+// would get this caveat with no banner under it.
+func printSunsetCaveat(out io.Writer, llm cli.LLM, forceAfterSunset bool, now time.Time) bool {
+	if !cli.AgentExcludedBySunset(llm, forceAfterSunset, now) {
+		return false
+	}
+	fmt.Fprintln(out, "    excluded:  past its sunset — not in the default fan-out (see below). What")
+	fmt.Fprintf(out, "               follows applies only under `--only %s` / force_after_sunset.\n", llm.Name)
+	return true
+}
+
+// printReadyRow renders the "ready" row. A sunset agent stays out of
+// the fan-out however well it is installed and authenticated, so it
+// does not get the ✓ glyph: "✓ ready" sitting above "✗ sunset:
+// auto-disabled" contradicted both the banner and the summary count,
+// which already excludes it. The model-pin line goes too — pinning a
+// model on an agent that will not run is advice with no payoff.
+func printReadyRow(out io.Writer, llm cli.LLM, displayName string, auth authStatus, configuredModel string, forceAfterSunset bool, now time.Time) {
+	if cli.AgentExcludedBySunset(llm, forceAfterSunset, now) {
+		fmt.Fprintf(out, "⊘ %-15s v%-10s authenticated, but excluded (past sunset)\n", displayName, llm.Version)
+		fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
+		fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
+		return
+	}
+	fmt.Fprintf(out, "✓ %-15s v%-10s ready\n", displayName, llm.Version)
+	fmt.Fprintf(out, "    installed:     %s\n", llm.Path)
+	fmt.Fprintf(out, "    authenticated: %s\n", auth.detail)
+	if configuredModel != "" {
+		fmt.Fprintf(out, "    model:         %s\n", configuredModel)
+		return
+	}
+	// No pinned model — the invoker doesn't pass --model and the vendor
+	// CLI picks its own default. Surfaced with a pin-instruction so
+	// users debugging "why did claude run model X" know how to take
+	// control. Pre-fix said "(CLI default)", reported as a non-answer.
+	fmt.Fprintf(out, "    model:         vendor's default — pin via `llms.%s.model:` to override\n", llm.Name)
+}
+
+// printNotAuthedRow renders the "not authenticated" row.
+func printNotAuthedRow(out io.Writer, llm cli.LLM, displayName string, auth authStatus, configuredModel string, forceAfterSunset bool, now time.Time) {
+	fmt.Fprintf(out, "⚠ %-15s v%-10s not authenticated\n", displayName, llm.Version)
+	fmt.Fprintf(out, "    installed: %s\n", llm.Path)
+	printSunsetCaveat(out, llm, forceAfterSunset, now)
+	fmt.Fprintf(out, "    fix:       %s\n", auth.hint)
+	if configuredModel != "" {
+		fmt.Fprintf(out, "    model:     %s\n", configuredModel)
+	}
+}
+
+// printBrokenInstallRow renders the "install broken" row.
+func printBrokenInstallRow(out io.Writer, llm cli.LLM, displayName string, forceAfterSunset bool, now time.Time) {
+	fmt.Fprintf(out, "⚠ %-15s install broken\n", displayName)
+	fmt.Fprintf(out, "    found at:  %s\n", llm.Path)
+	printSunsetCaveat(out, llm, forceAfterSunset, now)
+	fmt.Fprintln(out, "    note:      version probe failed; reinstall the CLI")
+	printInstallInstructions(out, llm.Name)
+}
+
+// printNotInstalledRow renders the "not installed" row.
+func printNotInstalledRow(out io.Writer, llm cli.LLM, displayName string, forceAfterSunset bool, now time.Time) {
+	fmt.Fprintf(out, "✗ %-15s not installed\n", displayName)
+	printSunsetCaveat(out, llm, forceAfterSunset, now)
+	printInstallInstructions(out, llm.Name)
 }
 
 func getDisplayName(name string) string {
@@ -545,7 +611,7 @@ func printInstallInstructions(out io.Writer, name string) {
 		fmt.Fprintln(out, "    or:        export OPENAI_API_KEY=...   (pay-per-token; usually cheaper for occasional use)")
 	case "antigravity":
 		fmt.Fprintln(out, "    install:   curl -fsSL https://antigravity.google/cli/install.sh | bash")
-		fmt.Fprintln(out, "    then:      agy   (Google OAuth login — successor to the Gemini CLI, which stops serving 2026-06-18)")
+		fmt.Fprintln(out, "    then:      agy   (Google OAuth login — successor to the Gemini CLI, which stopped serving 2026-06-18)")
 	case "copilot":
 		fmt.Fprintln(out, "    install:   npm install -g @github/copilot")
 		fmt.Fprintln(out, "    then:      copilot login   (requires a GitHub Copilot subscription)")

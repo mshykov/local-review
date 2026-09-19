@@ -364,3 +364,33 @@ func TestSelect_PostSunsetForceFalseAlsoAutoDisables(t *testing.T) {
 		t.Errorf("sunsetDropped: got %v, want %v", got, want)
 	}
 }
+
+// TestSelect_OnlyRunsGeminiPastSunsetWithoutForce pins the escape hatch
+// that the rest of the sunset UX is built on.
+//
+// `--only` is an explicit allow-list, so it overrides the sunset
+// auto-disable on its own — no force_after_sunset needed. Nothing
+// asserted that directly: the existing post-sunset tests all go through
+// the default path, where the agent IS dropped.
+//
+// It matters beyond this package. doctor keeps printing install and
+// auth steps for a sunset agent precisely because this path reaches
+// them; if `--only` ever started honouring the sunset, that advice
+// would become unreachable and doctor's `excluded:` caveat would be
+// naming an override that no longer exists.
+func TestSelect_OnlyRunsGeminiPastSunsetWithoutForce(t *testing.T) {
+	past := cli.AgentSunsetDate("gemini").AddDate(0, 0, 1)
+	detected := []cli.LLM{{Name: "gemini"}, {Name: "claude"}}
+	ready := map[string]bool{"gemini": true, "claude": true}
+
+	// No llms.gemini entry at all — so force_after_sunset is unset,
+	// not merely false.
+	active, _, sunsetDropped := Select(detected, ready, config.Config{}, "gemini", past)
+
+	if len(active) != 1 || active[0].Name != "gemini" {
+		t.Fatalf("--only gemini must run the agent despite the passed sunset, got %+v", active)
+	}
+	if len(sunsetDropped) != 0 {
+		t.Errorf("--only is the override, so nothing should be reported dropped: %v", sunsetDropped)
+	}
+}
