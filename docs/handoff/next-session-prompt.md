@@ -13,17 +13,14 @@ We're working on local-review (this repo). Before doing anything, read:
     this is a PUBLIC repo and a real Tailscale IP was committed once already)
   - docs/handoff/session-context.md (what the last sessions did and what's open)
 
-Current state: v0.17.5 is released and verified. No open work-in-progress —
-0 Dependabot/code-scanning/secret-scanning alerts, working tree clean.
+Current state: v0.17.8 is released and verified. No open work-in-progress —
+0 open PRs, 0 Dependabot/code-scanning/secret-scanning alerts, working tree clean.
 
-Open items are listed at the end of session-context.md. The two smallest and
-most worthwhile:
-
-  1. docs/release.md still documents TAP_GITHUB_TOKEN as needing "repo" scope.
-     That's stale — it's now a fine-grained PAT scoped to mshykov/homebrew-tap
-     with Contents: read/write. Fix the doc so nobody recreates the
-     over-privileged token.
-  2. Two routine Dependabot PRs are open (#185, #190).
+Open items are listed at the end of session-context.md. Nothing there is urgent;
+the one with real value is the parked gitleaks hint (CONTRIBUTING.md tells
+contributors to `go install` a version that's already a go.mod `tool` directive,
+so the two can drift). Deleting the old classic PAT is the maintainer's own
+action, not something an agent can do.
 
 Working conventions: branch before editing; one concern per PR; full verify
 (gofmt -s, go vet, golangci-lint, go test -race ./..., e2e) before push; open a

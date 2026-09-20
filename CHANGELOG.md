@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **`docs/release.md` no longer tells you to mint an account-wide token.** It documented `TAP_GITHUB_TOKEN` as "a Personal Access Token with `repo` scope" long after the real secret was rotated to a fine-grained PAT limited to `mshykov/homebrew-tap` with Contents: read/write. A classic `repo` token does work, which is exactly the hazard — it grants read/write across every repository the owner can reach, so anyone following the doc would hand the release pipeline a key to the whole account in order to bump one Homebrew formula. The entry now states the real scope, points at the job's actual footprint (check the tap out, push the formula), and says not to recreate the classic one.
+- **Handoff notes stopped reporting closed work as open.** `docs/handoff/` still listed the token-scope fix and two since-merged Dependabot PRs among its open items, and pointed the next session at v0.17.5. Re-verified against the repo (0 open PRs, 0 alerts across Dependabot / code-scanning / secret-scanning) and trimmed to what's genuinely outstanding.
+
 ## [0.17.8] - 2026-09-19
 
 **Patch: `doctor` stops contradicting itself about a sunset agent.** Every row that offered the user something to *do* about the retired Gemini CLI — get a free API key, npm-install it, reinstall it — printed that instruction immediately above its own "auto-disabled in the review fan-out" notice. The advice is now scoped rather than deleted, because one path (`--only gemini`) really does still run it. No change to which agents review; the fan-out behaves exactly as before.

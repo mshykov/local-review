@@ -52,7 +52,9 @@ Why one combined workflow: GitHub doesn't let `GITHUB_TOKEN`-pushed events trigg
 
 ### Required secrets
 
-- `TAP_GITHUB_TOKEN` — Personal Access Token with `repo` scope, used by the `update-homebrew` job to push to `mshykov/homebrew-tap`. Without this, the formula doesn't update — the rest of the release still works.
+- `TAP_GITHUB_TOKEN` — a **fine-grained** PAT whose repository access is limited to `mshykov/homebrew-tap`, with **Contents: read and write** and no other permission. That is exactly the job's footprint: `update-homebrew` checks the tap out and pushes the updated formula, nothing more. Without the secret the formula doesn't update; the rest of the release still works.
+
+  This doc used to specify a classic `repo`-scope token. One does work, and that is the problem — classic `repo` grants read/write across **every** repository the owner can reach, so the release pipeline would hold a key to the whole account in order to bump one formula. Don't recreate one.
 
 ## Shipping a release
 

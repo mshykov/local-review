@@ -138,14 +138,21 @@ Absence from YAML never excludes an agent.
 
 ## Open items
 
+Verified 2026-09-20, at v0.17.8.
+
 1. **Delete the old classic `repo`-scope PAT** at <https://github.com/settings/tokens>
-   — superseded by the fine-grained one, now dead weight and standing risk.
-2. **`docs/release.md` still says `TAP_GITHUB_TOKEN` needs "`repo` scope"** — stale
-   and would lead a future reader to recreate the over-privileged token. One-line fix.
-3. **2 open Dependabot PRs** (#185 `x/term`, #190 actions group) — routine.
-4. **`zero-to-moat`: 7 open Dependabot PRs**, including majors (`next` 15→16,
+   — superseded by the fine-grained one, now dead weight and standing risk. Maintainer
+   action: PATs aren't visible or deletable through the API an agent can reach.
+2. **`zero-to-moat`: 8 open Dependabot PRs**, including majors (`next` 15→16,
    `typescript` 5→6) that need real testing, not rubber-stamping.
-5. **Parked suggestion:** point contributor gitleaks install hints at `go tool`.
+3. **Parked suggestion:** `CONTRIBUTING.md` tells contributors to
+   `go install github.com/zricethezav/gitleaks/v8@v8.30.1` (or `brew install`), but
+   gitleaks is already a `go.mod` `tool` directive — `go tool gitleaks` needs no
+   install and can't drift from the pinned version the way a hand-typed one can.
+
+Closed since the last handoff: the `TAP_GITHUB_TOKEN` scope doc (fixed here), and
+the two local Dependabot PRs (#185, #190 — merged; 0 open PRs, 0 alerts across
+Dependabot / code-scanning / secret-scanning).
 
 ---
 
