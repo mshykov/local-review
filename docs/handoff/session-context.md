@@ -140,9 +140,15 @@ Absence from YAML never excludes an agent.
 
 Verified 2026-09-20, at v0.17.8.
 
-1. **Delete the old classic `repo`-scope PAT** at <https://github.com/settings/tokens>
-   — superseded by the fine-grained one, now dead weight and standing risk. Maintainer
-   action: PATs aren't visible or deletable through the API an agent can reach.
+1. ⏳ **`TAP_GITHUB_TOKEN` expires Sun 2026-10-11.** The fine-grained PAT behind it
+   is `local-review-tap-publish` (scoped to `mshykov/homebrew-tap`, Contents:
+   read/write). Rotate it before that date, or the first release afterwards ships
+   **half-done**: `publish` runs first, so the GitHub Release and its binaries go
+   out, then `update-homebrew` fails on checkout and the formula stays on the
+   previous version — `brew upgrade` keeps serving the old build. The run goes red
+   (no `continue-on-error`), so it is visible, but only to someone looking. Recovery
+   is to rotate the secret and re-run the failed job. Maintainer action: token
+   creation can't be done through the API.
 2. **`zero-to-moat`: 8 open Dependabot PRs**, including majors (`next` 15→16,
    `typescript` 5→6) that need real testing, not rubber-stamping.
 3. **Parked suggestion:** `CONTRIBUTING.md` tells contributors to
@@ -150,9 +156,11 @@ Verified 2026-09-20, at v0.17.8.
    gitleaks is already a `go.mod` `tool` directive — `go tool gitleaks` needs no
    install and can't drift from the pinned version the way a hand-typed one can.
 
-Closed since the last handoff: the `TAP_GITHUB_TOKEN` scope doc (fixed here), and
-the two local Dependabot PRs (#185, #190 — merged; 0 open PRs, 0 alerts across
-Dependabot / code-scanning / secret-scanning).
+Closed since the last handoff: the old classic `repo`-scope PAT is **deleted** —
+the classic-token list is now empty, so the fine-grained one above is the only PAT
+on the account. Also closed: the `TAP_GITHUB_TOKEN` scope doc, and the two local
+Dependabot PRs (#185, #190 — merged; 0 open PRs, 0 alerts across Dependabot /
+code-scanning / secret-scanning).
 
 ---
 
