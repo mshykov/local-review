@@ -140,15 +140,14 @@ Absence from YAML never excludes an agent.
 
 Verified 2026-09-20, at v0.17.8.
 
-1. ⏳ **`TAP_GITHUB_TOKEN` expires Sun 2026-10-11.** The fine-grained PAT behind it
-   is `local-review-tap-publish` (scoped to `mshykov/homebrew-tap`, Contents:
-   read/write). Rotate it before that date, or the first release afterwards ships
-   **half-done**: `publish` runs first, so the GitHub Release and its binaries go
-   out, then `update-homebrew` fails on checkout and the formula stays on the
-   previous version — `brew upgrade` keeps serving the old build. The run goes red
-   (no `continue-on-error`), so it is visible, but only to someone looking. Recovery
-   is to rotate the secret and re-run the failed job. Maintainer action: token
-   creation can't be done through the API.
+1. 🗓 **`TAP_GITHUB_TOKEN` expires 2027-09-21** — a year out, so nothing to do now;
+   noted because of *where* it fails rather than when. `publish` runs before
+   `update-homebrew`, so a release cut on an expired token still tags, publishes and
+   attaches binaries, and only then fails on checking the tap out — leaving the
+   formula on the previous version while `brew upgrade` keeps serving the old build
+   off a release that looks shipped. The run goes red (no `continue-on-error`), so
+   it is visible, but only to someone looking. Recovery: rotate the secret, re-run
+   the job. Token creation is maintainer-only; it isn't reachable through the API.
 2. **`zero-to-moat`: 8 open Dependabot PRs**, including majors (`next` 15→16,
    `typescript` 5→6) that need real testing, not rubber-stamping.
 3. **Parked suggestion:** `CONTRIBUTING.md` tells contributors to
