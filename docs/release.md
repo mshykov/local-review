@@ -98,5 +98,25 @@ go test -race ./...
 
 - **No release fired after merge**: check the PR had the `release` label. Doc-only / `paths-ignore` matches (`docs/**`, `**.md`, `examples/**`) skip the workflow entirely; that's intentional.
 - **Tag created but no binaries**: check the `build` matrix in the workflow run. Most likely a Go compile error on one of the targets.
-- **Homebrew formula didn't update**: check `TAP_GITHUB_TOKEN` is set in repo secrets and the token isn't expired.
+- **Homebrew formula didn't update**: check `TAP_GITHUB_TOKEN` is set in repo secrets and the token isn't expired. You can test the secret **without cutting a release** — re-run `update-homebrew` against the last release:
+
+  ```sh
+  # Walk back to the most recent run where update-homebrew actually EXECUTED.
+  # Every push to main starts release.yml too, and on a non-release push the
+  # job is still listed — with conclusion "skipped", because should_release is
+  # false. Re-running that one skips again and reports success without ever
+  # touching the token.
+  for r in $(gh run list --workflow=release.yml --limit 20 --json databaseId -q '.[].databaseId'); do
+    job=$(gh run view "$r" --json jobs \
+      -q '.jobs[] | select(.name == "update-homebrew" and .conclusion != "skipped") | .databaseId')
+    if [ -n "$job" ]; then run="$r"; break; fi
+  done
+  gh run rerun "$run" --job "$job"
+  ```
+
+  It is safe to repeat: the commit step is guarded by `git diff --cached --quiet`, so when the formula already matches it prints `No changes to commit (formula already up to date)` and pushes nothing. A dead token fails earlier, at `Checkout homebrew-tap`, with `Bad credentials`.
+
+  Two things the ids will trip you up on. The job id changes on every re-run, so resolve it from the run each time rather than reusing one. And it is the `databaseId` — the number in a job's browser URL is a different id and returns 404 from the API.
+
+  **Rotating the token invalidates the old value immediately**, so update the secret in the same sitting: `gh secret set TAP_GITHUB_TOKEN --repo mshykov/local-review`, pasting at the prompt (`--body` would put the token in your shell history). Until that runs, the secret holds a dead value and the next release ships half-done — this is not hypothetical, it happened on 2026-09-20 and was caught by the re-run above.
 - **Wrong version bumped**: see the post-mortem note in the [v0.3.0 changelog entry](../CHANGELOG.md). Don't try to revert public tags; it's destructive and the version waste is purely cosmetic in 0.x.

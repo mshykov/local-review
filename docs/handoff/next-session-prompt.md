@@ -16,12 +16,11 @@ We're working on local-review (this repo). Before doing anything, read:
 Current state: v0.17.8 is released and verified. No open work-in-progress —
 0 open PRs, 0 Dependabot/code-scanning/secret-scanning alerts, working tree clean.
 
-Open items are listed at the end of session-context.md. The one that is actually
-time-boxed: TAP_GITHUB_TOKEN expires 2026-10-11, and a release cut after that
-publishes the GitHub Release but leaves the Homebrew formula on the old version.
-Rotating it is the maintainer's own action — tokens can't be created through the
-API. If you're reading this after that date, check the last release's
-update-homebrew job before trusting `brew upgrade`.
+Open items are listed at the end of session-context.md. Nothing there is urgent —
+the tap token was rotated on 2026-09-21 and runs to 2027-09-21. The item with real
+value is the parked gitleaks hint (CONTRIBUTING.md tells contributors to
+`go install` a version that's already a go.mod `tool` directive, so the two can
+drift).
 
 Working conventions: branch before editing; one concern per PR; full verify
 (gofmt -s, go vet, golangci-lint, go test -race ./..., e2e) before push; open a
