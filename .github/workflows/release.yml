@@ -55,6 +55,7 @@ permissions:
 jobs:
   prepare:
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: read       # checkout
       pull-requests: read  # `gh pr view --json labels` in the gate step
@@ -198,6 +199,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: read  # checkout only; artifacts are uploaded via actions/upload-artifact
     strategy:
@@ -261,6 +263,7 @@ jobs:
   publish:
     needs: [prepare, build]
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: write     # push tag + softprops/action-gh-release attaches assets
       id-token: write     # OIDC identity for build-provenance attestation
@@ -343,6 +346,7 @@ jobs:
     needs: [prepare, publish]
     if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions: {}  # writes to mshykov/homebrew-tap via TAP_GITHUB_TOKEN, not GITHUB_TOKEN
     steps:
       - name: Checkout homebrew-tap

@@ -10,9 +10,10 @@ name: govulncheck
 # dependency long after the PR that introduced it, and only a time-based
 # run will catch that.
 
+# PRs + the weekly schedule. With strict status checks on main a merged commit
+# is the tree a PR run already scanned; new advisories against unchanged code
+# are what the Monday run is for, so the push-to-main scan repeated work.
 on:
-  push:
-    branches: [main]
   pull_request:
   schedule:
     # Mondays 06:00 UTC — catch vulns disclosed since the last push.
@@ -22,9 +23,16 @@ on:
 permissions:
   contents: read
 
+# One run per ref: a new push to a PR cancels the superseded run; runs on
+# main are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   govulncheck:
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

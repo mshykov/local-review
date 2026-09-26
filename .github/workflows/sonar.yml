@@ -42,6 +42,12 @@ on:
 permissions:
   contents: read
 
+# One run per ref: a new push to a PR cancels the superseded run; runs on
+# main are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   scan:
     # Skip PRs where SONAR_TOKEN won't be exposed, otherwise the scan can't
@@ -52,6 +58,7 @@ jobs:
       (github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]')
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     permissions:
       contents: read  # checkout + read-only Sonar upload
     steps:
