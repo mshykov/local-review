@@ -1,8 +1,9 @@
 name: CI
 
+# PRs only: main requires this check with strict status checks, so a merged
+# commit is the tree the PR run already passed — re-running it on the push to
+# main only spent Actions minutes.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 # Pin GITHUB_TOKEN to least-privilege. The CI job only checks out
@@ -15,9 +16,16 @@ on:
 permissions:
   contents: read
 
+# One run per ref: a new push to a PR cancels the superseded run; runs on
+# main are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
