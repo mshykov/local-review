@@ -42,8 +42,9 @@ on:
 permissions:
   contents: read
 
-# One run per ref: a new push to a PR cancels the superseded run; runs on
-# main are never cancelled.
+# One run per ref. On a PR a new push cancels the superseded run. On main a
+# running job is never cancelled, but a newer push replaces one still *queued*
+# in the group — the newer run covers the skipped commit.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
