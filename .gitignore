@@ -50,14 +50,14 @@ AGENTS.md
 .local-review/reviews/
 
 # Local scratch / working notes that must never be committed.
-# `_do_not_commit/` is the single local junk drawer — planning + business
+# `_do-not-commit/` is the single local junk drawer — planning + business
 # docs, secrets (e.g. sonar.token), ad-hoc audit/report output (the old
 # `local-review-doc/` now lives under it), and per-session handoff notes.
-# Never `git add` anything under it. The `_do-not-commit/` (hyphen) and
+# Never `git add` anything under it. The old `_do_not_commit/` (underscore) and
 # `local-review-doc/` spellings stay ignored too as a belt-and-suspenders
-# guard against an old path or a stray `git add -A`.
-_do_not_commit/
+# guard against an old path or a stray `git add -A` — never create them.
 _do-not-commit/
+_do_not_commit/
 local-review-doc/
 
 # Claude Code per-repo harness scratch — scheduled task locks, local
