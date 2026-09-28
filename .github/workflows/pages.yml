@@ -1,0 +1,60 @@
+name: Pages
+
+# Publishes local-review.shykov.dev from docs/. Replaces the legacy
+# branch build: that one ran Jekyll over the whole folder, so the internal
+# Markdown docs (developer.md, handoff/…) went out as pages too, and it kept
+# the custom domain in a CNAME file that GitHub commits to main — which the
+# branch protection on main rightly refuses, so the TLS certificate could not
+# be re-issued (expired 2026-09-20, site down behind a 526).
+#
+# docs/ is the website here, so unlike the deploy workflows in other repos
+# this one runs *because* docs/ changed rather than skipping docs-only merges.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a deployment half-way; a newer push waits its turn.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Production deploys only from main, even on a manual run from a branch.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Site files only. The Markdown docs are for contributors and stay on
+      # GitHub, where the landing page already links to them.
+      - name: Assemble the site
+        run: |
+          mkdir _site
+          rsync -a --exclude='*.md' --exclude='handoff/' docs/ _site/
+          test -f _site/index.html
+          find _site -type f | sort
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
