@@ -23,18 +23,20 @@ for the full picture, no external references required.
 
 - **Uptime (5 min):** UptimeRobot HTTP(s) monitor 804122837 on `https://local-review.shykov.dev`
   (the website: `docs/` published by `.github/workflows/pages.yml`). Email alert to the owner. Catches the site being
-  down or answering 5xx/52x; it can't see content (Keyword monitors can't be created
-  on the free plan).
+  down or answering 5xx/52x; an HTTP(s) monitor doesn't check page content — the
+  daily check below does.
 - **Content + TLS (daily):** `mshykov/shykov.dev` → `.github/workflows/site-monitor.yml`
   runs `scripts/site-check.sh` at 06:17 UTC — HTTP 200, keyword `local-review` in the HTML,
-  every certificate on the redirect path valid > 14 days. A failure opens (or comments
+  the TLS certificate of the requested host (and of the final host, if it
+  redirects) valid > 14 days. A failure opens (or comments
   on) a "Site check failing" issue in that repo.
 - **Cert:** GitHub Pages issues its own Let's Encrypt cert, so the Cloudflare record
   `local-review` (zone `shykov.dev`) must stay **DNS-only (grey cloud)**. It was once
   switched to proxied: Pages could no longer renew (`bad_authz`), the cert expired,
   and Cloudflare answered 526 from 2026-09-20 to 09-28 with nobody noticing. The daily
   check now warns 14 days before this cert expires.
-- **If the domain or the page `<title>` changes,** update `SITES` in shykov.dev's `scripts/site-check.sh` (and the
+- **If the URL changes, or the keyword `local-review` disappears from the page** (it comes
+  from the `<title>`), update `SITES` in shykov.dev's `scripts/site-check.sh` (and the
   UptimeRobot monitor if the URL changes) at the same time, or the daily check goes red.
 
 ---
